@@ -196,7 +196,7 @@ for p in PRODUCTS:
                         f"✅ HOLD 2 {r[0]} — STRENGTHENING — Score {r[2]} — Price ${r[1]}"
                     )
         state = None
-              if prev and sequence:
+        if prev and sequence:
             prev_score = prev[0]
             
 

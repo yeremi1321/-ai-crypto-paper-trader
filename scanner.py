@@ -117,7 +117,7 @@ for p in PRODUCTS:
                 and score_accel >= SCORE_ACCEL_MIN
                 and volume_accel >= VOLUME_ACCEL_MIN
             )
-had_early = c.execute(
+        had_early = c.execute(
             """SELECT 1 FROM early_events
                WHERE product=?
                ORDER BY id DESC

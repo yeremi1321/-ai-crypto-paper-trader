@@ -40,7 +40,15 @@ def db():
         previous_score REAL,
         price REAL
     )""")
-    c.commit(); return c
+        c.execute("""CREATE TABLE IF NOT EXISTS momentum_sequences(
+        product TEXT PRIMARY KEY,
+        started_at TEXT,
+        state TEXT,
+        hold_count INTEGER,
+        early_score REAL,
+        last_score REAL
+    )""")
+        c.commit(); return c
 
 def candles(product,g,limit=220):
     u=f"https://api.exchange.coinbase.com/products/{product}/candles"
@@ -135,24 +143,62 @@ for p in PRODUCTS:
                 "INSERT INTO early_events(scan_id, seen_at, product, price, score, score_accel, rel_volume, volume_accel) VALUES(?,?,?,?,?,?,?,?)",
                 (sid, now.isoformat(), r[0], r[1], r[2], score_accel, r[5], volume_accel)
             )
-
+            c.execute(
+                "INSERT OR REPLACE INTO momentum_sequences(product, started_at, state, hold_count, early_score, last_score) VALUES(?,?,?,?,?,?)",
+                (r[0], now.isoformat(), "EARLY", 0, r[2], r[2])
+            )
         last_state = c.execute(
             "SELECT state FROM momentum_tracking WHERE product=? ORDER BY id DESC LIMIT 1",
             (p,)
         ).fetchone()
-        if prev and had_early:
+        sequence = c.execute(
+            "SELECT state, hold_count, early_score, last_score FROM momentum_sequences WHERE product=?",
+            (p,)
+        ).fetchone()
+        if sequence and had_early:
+            seq_state, hold_count, early_score, last_score = sequence
+
+            if seq_state == "EARLY" and r[2] > FAIL_SCORE and last_score - r[2] < WEAKEN_SCORE_DROP:
+                hold_count += 1
+
+                c.execute(
+                    "UPDATE momentum_sequences SET hold_count=?, last_score=? WHERE product=?",
+                    (hold_count, r[2], r[0])
+                )
+
+                if hold_count == 1:
+                    alerts.append(
+                        f"⏳ HOLD 1 {r[0]} — Score {r[2]} — Price ${r[1]}"
+                    )
+
+                elif hold_count >= 2:
+                    c.execute(
+                        "UPDATE momentum_sequences SET state=? WHERE product=?",
+                        ("STRENGTHENING", r[0])
+                    )
+
+                    alerts.append(
+                        f"✅ HOLD 2 {r[0]} — STRENGTHENING — Score {r[2]} — Price ${r[1]}"
+                    )
+        state = None
+              if prev and sequence:
             prev_score = prev[0]
-            state = None
+            
 
             if r[3] in ("WATCH", "SIGNAL"):
                 state = "CONFIRMED"
             elif r[2] <= FAIL_SCORE:
                 state = "FAILED"
-            elif r[2] - prev_score >= STRENGTHEN_SCORE_GAIN:
+            elif hold_count >= 2 and r[2] - prev_score >= STRENGTHEN_SCORE_GAIN:
                 state = "STRENGTHENING"
             elif prev_score - r[2] >= WEAKEN_SCORE_DROP:
                 state = "WEAKENING"
-
+            if state == "FAILED":
+                c.execute(
+                    "DELETE FROM momentum_sequences WHERE product=?",
+                    (r[0],)
+                )
+                sequence = None
             if state and (not last_state or last_state[0] != state):
              c.execute(
                 "INSERT INTO momentum_tracking(seen_at, product, state, score, previous_score, price) VALUES(?,?,?,?,?,?)",

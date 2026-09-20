@@ -1,33 +1,25 @@
-# AI Crypto Paper Trader V1
+# AI Crypto Paper Trader V4
 
-A phone-friendly Streamlit prototype for testing the strategy discussed in ChatGPT.
+V4 separates scanning from the Streamlit dashboard.
 
-## Safety
-- Paper trading only.
-- No API keys.
-- No real orders.
-- Starting balance: $500.
-- Planned risk: $5 per trade.
-- Daily realized-loss cutoff: $15.
-- No leverage or averaging down.
+## What changes
+- GitHub Actions runs `scanner.py` roughly every 15 minutes.
+- Each run uses completed Coinbase 15m/1h candles.
+- Results are stored in `paper_trader_v4.db` and committed back to the repository.
+- Streamlit displays the accumulated history.
+- Forward research tracks 1h, 4h, and 24h returns after recorded scores.
+- Real-money trading is not included.
 
-## Run
-1. Install Python 3.11+.
-2. In this folder:
-   `pip install -r requirements.txt`
-3. Start:
-   `streamlit run app.py`
-4. Open the local URL shown by Streamlit.
+## Install
+Upload/replace these items in the SAME GitHub repository:
+- `app.py`
+- `scanner.py`
+- `requirements.txt`
+- `.github/workflows/scanner.yml`
 
-For phone access, deploy this folder to a Streamlit-compatible host or another Python web host.
+Then open GitHub → Actions → Automatic crypto research scan → Run workflow once.
+After that first successful run, Streamlit will redeploy when the database commit lands.
 
-## V1 scoring
-Uses 15-minute and 1-hour public candles. It scores momentum, relative volume,
-market structure and a basic liquidity/volatility proxy. AI/news sentiment is intentionally
-not included in the score until we can test whether it adds predictive value.
-
-## Important limitation
-The current version checks exits when the scanner is run. A later hosted version should run
-a scheduled background scanner and use a proper real-time market-data feed. Fees/slippage,
-more robust liquidity/order-book checks, backtesting, alerts, and the Perplexity research
-layer should be added before any live-trading consideration.
+## Important
+GitHub scheduled workflows can be delayed and can be disabled after long inactivity on public repositories.
+This is a research collector, not an execution engine or guaranteed real-time alerting service.

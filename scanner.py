@@ -117,20 +117,25 @@ for p in PRODUCTS:
                 and score_accel >= SCORE_ACCEL_MIN
                 and volume_accel >= VOLUME_ACCEL_MIN
             )
-                had_early = c.execute(
+
+        had_early = c.execute(
             "SELECT 1 FROM early_events WHERE product=? AND julianday(seen_at) >= julianday('now','-2 hours') ORDER BY id DESC LIMIT 1",
             (p,)
         ).fetchone()
-       if early and not had_early:
+
+        if early and not had_early:
             print("EARLY", r[0], r[2])
+
             alerts.append(
                 f"🚨 EARLY {r[0]} — Score {r[2]} — "
                 f"Jump +{score_accel:.1f} — Volume {volume_accel:.2f}x"
             )
-                    c.execute(
-            "INSERT INTO early_events(scan_id, seen_at, product, price, score, score_accel, rel_volume, volume_accel) VALUES(?,?,?,?,?,?,?,?)",
-            (sid, now.isoformat(), r[0], r[1], r[2], score_accel, r[5], volume_accel)
-        )
+
+            c.execute(
+                "INSERT INTO early_events(scan_id, seen_at, product, price, score, score_accel, rel_volume, volume_accel) VALUES(?,?,?,?,?,?,?,?)",
+                (sid, now.isoformat(), r[0], r[1], r[2], score_accel, r[5], volume_accel)
+            )
+
         last_state = c.execute(
             "SELECT state FROM momentum_tracking WHERE product=? ORDER BY id DESC LIMIT 1",
             (p,)

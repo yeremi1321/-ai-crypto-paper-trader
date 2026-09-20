@@ -15,7 +15,7 @@ def db():
     c.execute("""CREATE TABLE IF NOT EXISTS scans(
       id INTEGER PRIMARY KEY AUTOINCREMENT, scan_id TEXT, seen_at TEXT, product TEXT,
       price REAL, score REAL, status TEXT, rsi REAL, rel_volume REAL, reason TEXT)""")
-        c.execute("""CREATE TABLE IF NOT EXISTS early_events(
+    c.execute("""CREATE TABLE IF NOT EXISTS early_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         scan_id TEXT,
         seen_at TEXT,
@@ -26,7 +26,7 @@ def db():
         rel_volume REAL,
         volume_accel REAL
     )""")
-          c.commit(); return c
+    c.commit(); return c
 
 def candles(product,g,limit=220):
     u=f"https://api.exchange.coinbase.com/products/{product}/candles"

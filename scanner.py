@@ -106,7 +106,10 @@ for p in PRODUCTS:
 
         if early:
             print("EARLY", r[0], r[2])
-
+            alerts.append(
+                f"🚨 EARLY {r[0]} — Score {r[2]} — "
+                f"Jump +{score_accel:.1f} — Volume {volume_accel:.2f}x"
+            )
             c.execute(
                 """INSERT INTO early_events(
                     scan_id, seen_at, product, price, score,

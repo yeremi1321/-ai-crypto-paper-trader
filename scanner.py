@@ -139,7 +139,7 @@ for p in PRODUCTS:
                  score_accel, r[5], volume_accel)
             )
        
-       if prev and had_early:
+        if prev and had_early:
             prev_score = prev[0]
             state = None
 

@@ -79,5 +79,17 @@ if len(m):
         median_1h_return_pct=("return_1h_pct","median")).reset_index()
     st.caption("Score-bucket research — descriptive results, not a recommendation")
     st.dataframe(summary,use_container_width=True,hide_index=True)
+st.subheader("Performance by Signal Type")
 
+signal_summary = fp.dropna(subset=["return_1h_pct"]).groupby("status").agg(
+    observations=("status", "size"),
+    avg_1h_return_pct=("return_1h_pct", "mean"),
+    median_1h_return_pct=("return_1h_pct", "median"),
+    avg_4h_return_pct=("return_4h_pct", "mean"),
+    median_4h_return_pct=("return_4h_pct", "median"),
+    avg_24h_return_pct=("return_24h_pct", "mean"),
+    median_24h_return_pct=("return_24h_pct", "median"),
+).reset_index()
+
+st.dataframe(signal_summary, use_container_width=True, hide_index=True)
 st.info("V4's scanner is scheduled by GitHub Actions. GitHub may delay scheduled jobs during high load, so scans are not guaranteed to occur at the exact minute.")

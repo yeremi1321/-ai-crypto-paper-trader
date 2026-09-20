@@ -68,3 +68,23 @@ for p in PRODUCTS:
     except Exception as e:
         print("ERROR",p,e)
 c.commit(); c.close()
+# Send phone alert when a WATCH or SIGNAL is found
+alerts = []
+
+for p in PRODUCTS:
+    try:
+        r = scan_one(p)
+        if r[3] in ("WATCH", "SIGNAL"):
+            alerts.append(
+                f"{r[0]} — {r[3]} — Score {r[2]} — Price ${r[1]}"
+            )
+    except Exception as e:
+        print("ALERT ERROR", p, e)
+
+if alerts:
+    requests.post(
+        "https://ntfy.sh/gonzaleztradealerts",
+        data=("\n".join(alerts)).encode("utf-8"),
+        headers={"Title": "Crypto Scanner Alert"},
+        timeout=10
+    )

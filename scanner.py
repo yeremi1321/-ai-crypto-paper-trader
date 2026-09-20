@@ -152,21 +152,21 @@ for p in PRODUCTS:
             elif prev_score - r[2] >= WEAKEN_SCORE_DROP:
                 state = "WEAKENING"
 
-            if state:
+        if state:
             c.execute(
-                    """INSERT INTO momentum_tracking(
-                        seen_at, product, state, score,
-                        previous_score, price
-                    ) VALUES(?,?,?,?,?,?)""",
-                    (
-                        now.isoformat(),
-                        r[0],
-                        state,
-                        r[2],
-                        prev_score,
-                        r[1]
-                    )
+                """INSERT INTO momentum_tracking(
+                    seen_at, product, state, score,
+                    previous_score, price
+                ) VALUES(?,?,?,?,?,?)""",
+                (
+                    now.isoformat(),
+                    r[0],
+                    state,
+                    r[2],
+                    prev_score,
+                    r[1]
                 )
+            )
         c.execute(
             """INSERT INTO scans(
                 scan_id, seen_at, product, price, score,

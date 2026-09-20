@@ -16,10 +16,21 @@ FAIL_SCORE = 35
 
 
 def db():
-    c=sqlite3.connect(DB)
+    c = sqlite3.connect(DB)
+
     c.execute("""CREATE TABLE IF NOT EXISTS scans(
-      id INTEGER PRIMARY KEY AUTOINCREMENT, scan_id TEXT, seen_at TEXT, product TEXT,
-      price REAL, score REAL, status TEXT, rsi REAL, rel_volume REAL, reason TEXT)""")
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scan_id TEXT,
+        seen_at TEXT,
+        product TEXT,
+        price REAL,
+        score REAL,
+        status TEXT,
+        rsi REAL,
+        rel_volume REAL,
+        reason TEXT
+    )""")
+
     c.execute("""CREATE TABLE IF NOT EXISTS early_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         scan_id TEXT,
@@ -31,16 +42,18 @@ def db():
         rel_volume REAL,
         volume_accel REAL
     )""")
+
     c.execute("""CREATE TABLE IF NOT EXISTS momentum_tracking(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         seen_at TEXT,
         product TEXT,
-         state TEXT,
+        state TEXT,
         score REAL,
         previous_score REAL,
         price REAL
     )""")
-        c.execute("""CREATE TABLE IF NOT EXISTS momentum_sequences(
+
+    c.execute("""CREATE TABLE IF NOT EXISTS momentum_sequences(
         product TEXT PRIMARY KEY,
         started_at TEXT,
         state TEXT,
@@ -48,7 +61,9 @@ def db():
         early_score REAL,
         last_score REAL
     )""")
-        c.commit(); return c
+
+    c.commit()
+    return c
 
 def candles(product,g,limit=220):
     u=f"https://api.exchange.coinbase.com/products/{product}/candles"

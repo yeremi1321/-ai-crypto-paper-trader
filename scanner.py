@@ -10,6 +10,11 @@ EARLY_MIN_SCORE = 45
 EARLY_MAX_SCORE = 69.9
 SCORE_ACCEL_MIN = 8
 VOLUME_ACCEL_MIN = 1.25
+STRENGTHEN_SCORE_GAIN = 5
+WEAKEN_SCORE_DROP = 8
+FAIL_SCORE = 35
+
+
 def db():
     c=sqlite3.connect(DB)
     c.execute("""CREATE TABLE IF NOT EXISTS scans(
@@ -25,6 +30,15 @@ def db():
         score_accel REAL,
         rel_volume REAL,
         volume_accel REAL
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS momentum_tracking(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        seen_at TEXT,
+        product TEXT,
+        state TEXT,
+        score REAL,
+        previous_score REAL,
+        price REAL
     )""")
     c.commit(); return c
 
@@ -118,7 +132,41 @@ for p in PRODUCTS:
                 (sid, now.isoformat(), r[0], r[1], r[2],
                  score_accel, r[5], volume_accel)
             )
+                had_early = c.execute(
+            """SELECT 1 FROM early_events
+               WHERE product=?
+               ORDER BY id DESC
+               LIMIT 1""",
+            (p,)
+        ).fetchone()
+                if prev and had_early:
+            prev_score = prev[0]
+            state = None
 
+            if r[3] in ("WATCH", "SIGNAL"):
+                state = "CONFIRMED"
+            elif r[2] <= FAIL_SCORE:
+                state = "FAILED"
+            elif r[2] - prev_score >= STRENGTHEN_SCORE_GAIN:
+                state = "STRENGTHENING"
+            elif prev_score - r[2] >= WEAKEN_SCORE_DROP:
+                state = "WEAKENING"
+
+            if state:
+            c.execute(
+                    """INSERT INTO momentum_tracking(
+                        seen_at, product, state, score,
+                        previous_score, price
+                    ) VALUES(?,?,?,?,?,?)""",
+                    (
+                        now.isoformat(),
+                        r[0],
+                        state,
+                        r[2],
+                        prev_score,
+                        r[1]
+                    )
+                )
         c.execute(
             """INSERT INTO scans(
                 scan_id, seen_at, product, price, score,

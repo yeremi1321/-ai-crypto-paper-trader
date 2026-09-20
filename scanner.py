@@ -56,30 +56,35 @@ def scan_one(p):
     status="SIGNAL" if s>=80 else ("WATCH" if s>=70 else "IGNORE")
     return (p,float(a.close),s,status,round(float(a.rsi),1),round(rv,2),", ".join(why))
 
-c=db()
-now=datetime.now(timezone.utc)
-sid=now.strftime("%Y%m%dT%H%M%SZ")
-for p in PRODUCTS:
-    try:
-        r=scan_one(p)
-        c.execute("""INSERT INTO scans(scan_id,seen_at,product,price,score,status,rsi,rel_volume,reason)
-                     VALUES(?,?,?,?,?,?,?,?,?)""",(sid,now.isoformat(),*r))
-        print(r[0],r[2],r[3])
-    except Exception as e:
-        print("ERROR",p,e)
-c.commit(); c.close()
-# Send phone alert when a WATCH or SIGNAL is found
+c = db()
+now = datetime.now(timezone.utc)
+sid = now.strftime("%Y%m%dT%H%M%SZ")
 alerts = []
 
 for p in PRODUCTS:
     try:
         r = scan_one(p)
+
+        c.execute(
+            """INSERT INTO scans(
+                scan_id, seen_at, product, price, score,
+                status, rsi, rel_volume, reason
+            ) VALUES(?,?,?,?,?,?,?,?,?)""",
+            (sid, now.isoformat(), *r)
+        )
+
+        print(r[0], r[2], r[3])
+
         if r[3] in ("WATCH", "SIGNAL"):
             alerts.append(
-                f"{r[0]} — {r[3]} — Score {r[2]} — Price ${r[1]}"
+                f"{r[0]} → {r[3]} — Score {r[2]} — Price ${r[1]}"
             )
+
     except Exception as e:
-        print("ALERT ERROR", p, e)
+        print("ERROR", p, e)
+
+c.commit()
+c.close()
 
 if alerts:
     requests.post(

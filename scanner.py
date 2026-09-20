@@ -119,12 +119,13 @@ for p in PRODUCTS:
             )
         had_early = c.execute(
             """SELECT 1 FROM early_events
-               WHERE product=?
-               ORDER BY id DESC
-               LIMIT 1""",
+            WHERE product=?
+            AND julianday(seen_at) >= julianday('now','-2 hours')
+            ORDER BY id DESC
+            LIMIT 1
             (p,)
         ).fetchone()
-        if early:
+       if early and not had_early:
             print("EARLY", r[0], r[2])
             alerts.append(
                 f"🚨 EARLY {r[0]} — Score {r[2]} — "
@@ -138,7 +139,13 @@ for p in PRODUCTS:
                 (sid, now.isoformat(), r[0], r[1], r[2],
                  score_accel, r[5], volume_accel)
             )
-       
+               last_state = c.execute(
+            """SELECT state FROM momentum_tracking
+               WHERE product=?
+               ORDER BY id DESC
+               LIMIT 1""",
+            (p,)
+        ).fetchone()
         if prev and had_early:
             prev_score = prev[0]
             state = None
@@ -152,7 +159,7 @@ for p in PRODUCTS:
             elif prev_score - r[2] >= WEAKEN_SCORE_DROP:
                 state = "WEAKENING"
 
-        if state:
+        if state and (not last_state or last_state[0] != state):
             c.execute(
                 """INSERT INTO momentum_tracking(
                     seen_at, product, state, score,
@@ -167,6 +174,10 @@ for p in PRODUCTS:
                     r[1]
                 )
             )
+                alerts.append(
+                    f"📊 {r[0]} — {state} — Score {r[2]} — Price ${r[1]}"
+            )
+            
         c.execute(
             """INSERT INTO scans(
                 scan_id, seen_at, product, price, score,

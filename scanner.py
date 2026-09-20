@@ -6,13 +6,27 @@ from datetime import datetime, timezone
 DB="paper_trader_v4.db"
 PRODUCTS=["BTC-USD","ETH-USD","SOL-USD","DOGE-USD","SHIB-USD","AVAX-USD",
           "LINK-USD","ADA-USD","XRP-USD","LTC-USD","BCH-USD"]
-
+EARLY_MIN_SCORE = 45
+EARLY_MAX_SCORE = 69.9
+SCORE_ACCEL_MIN = 8
+VOLUME_ACCEL_MIN = 1.25
 def db():
     c=sqlite3.connect(DB)
     c.execute("""CREATE TABLE IF NOT EXISTS scans(
       id INTEGER PRIMARY KEY AUTOINCREMENT, scan_id TEXT, seen_at TEXT, product TEXT,
       price REAL, score REAL, status TEXT, rsi REAL, rel_volume REAL, reason TEXT)""")
-    c.commit(); return c
+        c.execute("""CREATE TABLE IF NOT EXISTS early_events(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scan_id TEXT,
+        seen_at TEXT,
+        product TEXT,
+        price REAL,
+        score REAL,
+        score_accel REAL,
+        rel_volume REAL,
+        volume_accel REAL
+    )""")
+          c.commit(); return c
 
 def candles(product,g,limit=220):
     u=f"https://api.exchange.coinbase.com/products/{product}/candles"
@@ -64,6 +78,43 @@ alerts = []
 for p in PRODUCTS:
     try:
         r = scan_one(p)
+        prev = c.execute(
+            """SELECT score, rel_volume
+               FROM scans
+               WHERE product=?
+               ORDER BY id DESC
+               LIMIT 1""",
+            (p,)
+        ).fetchone()
+
+        early = False
+        score_accel = 0
+        volume_accel = 0
+
+        if prev:
+            prev_score, prev_rv = prev
+            score_accel = r[2] - prev_score
+
+            if prev_rv and prev_rv > 0:
+                volume_accel = r[5] / prev_rv
+
+            early = (
+                EARLY_MIN_SCORE <= r[2] <= EARLY_MAX_SCORE
+                and score_accel >= SCORE_ACCEL_MIN
+                and volume_accel >= VOLUME_ACCEL_MIN
+            )
+
+        if early:
+            print("EARLY", r[0], r[2])
+
+            c.execute(
+                """INSERT INTO early_events(
+                    scan_id, seen_at, product, price, score,
+                    score_accel, rel_volume, volume_accel
+                ) VALUES(?,?,?,?,?,?,?,?)""",
+                (sid, now.isoformat(), r[0], r[1], r[2],
+                 score_accel, r[5], volume_accel)
+            )
 
         c.execute(
             """INSERT INTO scans(

@@ -164,7 +164,7 @@ for p in PRODUCTS:
                 """INSERT INTO momentum_tracking(
                     seen_at, product, state, score,
                     previous_score, price
-                ) VALUES(?,?,?,?,?,?)""",
+) VALUES(?,?,?,?,?,?)""",
                 (
                     now.isoformat(),
                     r[0],
@@ -182,7 +182,7 @@ for p in PRODUCTS:
             """INSERT INTO scans(
                 scan_id, seen_at, product, price, score,
                 status, rsi, rel_volume, reason
-            ) VALUES(?,?,?,?,?,?,?,?,?)""",
+) VALUES(?,?,?,?,?,?,?,?,?)""",
             (sid, now.isoformat(), *r)
         )
 

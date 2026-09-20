@@ -160,29 +160,16 @@ for p in PRODUCTS:
                 state = "WEAKENING"
 
         if state and (not last_state or last_state[0] != state):
-            c.execute(
-                """INSERT INTO momentum_tracking(
-                    seen_at, product, state, score,
-                    previous_score, price
-) VALUES(?,?,?,?,?,?)""",
-                (
-                    now.isoformat(),
-                    r[0],
-                    state,
-                    r[2],
-                    prev_score,
-                    r[1]
-                )
+                        c.execute(
+                "INSERT INTO momentum_tracking(seen_at, product, state, score, previous_score, price) VALUES(?,?,?,?,?,?)",
+                (now.isoformat(), r[0], state, r[2], prev_score, r[1])
             )
                 alerts.append(
                     f"📊 {r[0]} — {state} — Score {r[2]} — Price ${r[1]}"
             )
             
         c.execute(
-            """INSERT INTO scans(
-                scan_id, seen_at, product, price, score,
-                status, rsi, rel_volume, reason
-) VALUES(?,?,?,?,?,?,?,?,?)""",
+            "INSERT INTO scans(scan_id, seen_at, product, price, score, status, rsi, rel_volume, reason) VALUES(?,?,?,?,?,?,?,?,?)",
             (sid, now.isoformat(), *r)
         )
 

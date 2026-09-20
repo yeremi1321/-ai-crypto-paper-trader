@@ -117,7 +117,13 @@ for p in PRODUCTS:
                 and score_accel >= SCORE_ACCEL_MIN
                 and volume_accel >= VOLUME_ACCEL_MIN
             )
-
+had_early = c.execute(
+            """SELECT 1 FROM early_events
+               WHERE product=?
+               ORDER BY id DESC
+               LIMIT 1""",
+            (p,)
+        ).fetchone()
         if early:
             print("EARLY", r[0], r[2])
             alerts.append(
@@ -132,14 +138,8 @@ for p in PRODUCTS:
                 (sid, now.isoformat(), r[0], r[1], r[2],
                  score_accel, r[5], volume_accel)
             )
-                had_early = c.execute(
-            """SELECT 1 FROM early_events
-               WHERE product=?
-               ORDER BY id DESC
-               LIMIT 1""",
-            (p,)
-        ).fetchone()
-                if prev and had_early:
+       
+       if prev and had_early:
             prev_score = prev[0]
             state = None
 

@@ -139,11 +139,8 @@ for p in PRODUCTS:
                 (sid, now.isoformat(), r[0], r[1], r[2],
                  score_accel, r[5], volume_accel)
             )
-               last_state = c.execute(
-            """SELECT state FROM momentum_tracking
-               WHERE product=?
-               ORDER BY id DESC
-               LIMIT 1""",
+        last_state = c.execute(
+            "SELECT state FROM momentum_tracking WHERE product=? ORDER BY id DESC LIMIT 1",
             (p,)
         ).fetchone()
         if prev and had_early:

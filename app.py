@@ -53,7 +53,7 @@ st.dataframe(chg.sort_values("seen_at",ascending=False).head(100) if len(chg) el
              use_container_width=True,hide_index=True)
 
 st.subheader("Score History")
-product=st.selectbox("Asset",sorted(d.product.unique()))
+product=st.selectbox("Asset", sorted(d["product"].dropna().unique().tolist()))
 h=d[d.product==product].set_index("seen_at")
 st.line_chart(h["score"])
 

@@ -134,6 +134,7 @@ st.subheader("Automatic Paper Trading")
 st.caption(
     "Research simulation only: $100 per CONFIRMED entry • 3% stop • 6% target • "
     "3% trailing stop after a 3% gain • 24-hour maximum hold • "
+    "maximum 5 open trades / $500 exposure • "
     "0.6% estimated fee and 0.1% slippage per side"
 )
 if paper_trades.empty:
@@ -160,7 +161,7 @@ else:
         realized_drawdown = (equity - running_peak).min()
 
     p1, p2, p3, p4, p5, p6 = st.columns(6)
-    p1.metric("Open paper trades", open_count)
+    p1.metric("Open paper trades (max 5)", open_count)
     p2.metric("Closed paper trades", closed_count)
     p3.metric("Win rate", f"{win_rate:.1f}%")
     p4.metric("Net paper P/L", f"${total_net_pnl:+.2f}")

@@ -95,6 +95,12 @@ if table_exists(conn, "paper_trades"):
     paper_trades = pd.read_sql_query("SELECT * FROM paper_trades ORDER BY id", conn)
 else:
     paper_trades = pd.DataFrame()
+if table_exists(conn, "paper_entry_skips"):
+    paper_entry_skips = pd.read_sql_query(
+        "SELECT * FROM paper_entry_skips ORDER BY id", conn
+    )
+else:
+    paper_entry_skips = pd.DataFrame()
 conn.close()
 
 if scans.empty:
@@ -135,6 +141,8 @@ st.caption(
     "Research simulation only: $100 per CONFIRMED entry • 3% stop • 6% target • "
     "3% trailing stop after a 3% gain • 24-hour maximum hold • "
     "maximum 5 open trades / $500 exposure • "
+    "2 qualifying scans to enter • 2 weakening scans to exit • "
+    "2-hour re-entry cooldown • "
     "0.6% estimated fee and 0.1% slippage per side"
 )
 if paper_trades.empty:
@@ -208,6 +216,20 @@ else:
         )
         st.markdown("**Results by exit rule**")
         st.dataframe(exit_summary, use_container_width=True, hide_index=True)
+
+if not paper_entry_skips.empty:
+    st.markdown("**Filtered paper entries**")
+    skip_summary = (
+        paper_entry_skips.groupby("reason", dropna=False)
+        .size()
+        .reset_index(name="events")
+    )
+    st.dataframe(skip_summary, use_container_width=True, hide_index=True)
+    st.dataframe(
+        paper_entry_skips.sort_values("id", ascending=False).head(100),
+        use_container_width=True,
+        hide_index=True,
+    )
 
 st.subheader("Momentum State Tracking")
 if state_events.empty:

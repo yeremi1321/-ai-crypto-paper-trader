@@ -218,6 +218,7 @@ for product in PRODUCTS:
             (product,),
         ).fetchone()
 
+        started_early_now = False
         if is_early and not recent_early and not sequence:
             conn.execute(
                 """INSERT INTO early_events(
@@ -243,6 +244,7 @@ for product in PRODUCTS:
                 f"Jump +{score_acceleration:.1f} — Volume {volume_acceleration:.2f}x"
             )
             sequence = ("EARLY", 0, result[2], result[2])
+            started_early_now = True
 
         # Recover a recent sequence if an older run stored EARLY but stopped early.
         if not sequence and recent_early:
@@ -265,7 +267,7 @@ for product in PRODUCTS:
 
         next_state = None
         hold_alert = False
-        if sequence:
+        if sequence and not started_early_now:
             sequence_state, hold_count, early_score, last_score = sequence
 
             if result[2] <= FAIL_SCORE:

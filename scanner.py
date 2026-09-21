@@ -2,6 +2,7 @@ import os
 import sqlite3
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -28,6 +29,10 @@ PAPER_PROFIT_TARGET_PCT = 6.0
 PAPER_TRAILING_ACTIVATION_PCT = 3.0
 PAPER_TRAILING_STOP_PCT = 3.0
 PAPER_MAX_HOLD_HOURS = 24
+MAX_OPEN_PAPER_TRADES = 5
+MAX_PAPER_EXPOSURE_USD = 500.0
+REPORT_TIMEZONE = ZoneInfo("America/New_York")
+DAILY_REPORT_HOUR = 20
 
 
 def db():
@@ -100,6 +105,10 @@ def db():
     )""")
     conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS one_open_paper_trade_per_product
                     ON paper_trades(product) WHERE status='OPEN'""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS paper_daily_reports(
+        report_date TEXT PRIMARY KEY,
+        sent_at TEXT
+    )""")
     conn.commit()
     return conn
 
@@ -217,6 +226,19 @@ def open_paper_trade(conn, seen_at, product, score, market_price):
     ).fetchone()
     if existing:
         return None
+
+    open_count, open_exposure = conn.execute(
+        """SELECT COUNT(*), COALESCE(SUM(notional_usd), 0)
+           FROM paper_trades WHERE status='OPEN'"""
+    ).fetchone()
+    if (
+        open_count >= MAX_OPEN_PAPER_TRADES
+        or open_exposure + PAPER_NOTIONAL_USD > MAX_PAPER_EXPOSURE_USD
+    ):
+        return (
+            f"🛑 PAPER SKIP {product} — exposure limit reached "
+            f"({open_count} open / ${open_exposure:.0f})"
+        )
 
     entry_price = market_price * (1 + PAPER_SLIPPAGE_RATE)
     entry_fee = PAPER_NOTIONAL_USD * PAPER_FEE_RATE
@@ -344,6 +366,65 @@ def manage_paper_trade(conn, now, product, score, market_price, momentum_state):
     return None
 
 
+def open_positions_summary(conn):
+    """Return a compact mark-to-market summary for meaningful alert batches."""
+    rows = conn.execute(
+        """SELECT product, current_pnl_usd, current_return_pct
+           FROM paper_trades WHERE status='OPEN'
+           ORDER BY opened_at"""
+    ).fetchall()
+    if not rows:
+        return None
+    total_pnl = sum(row[1] or 0 for row in rows)
+    positions = ", ".join(
+        f"{product} ${pnl:+.2f} ({return_pct:+.2f}%)"
+        for product, pnl, return_pct in rows
+    )
+    return f"📂 OPEN {len(rows)}/5 — {positions} — Total ${total_pnl:+.2f}"
+
+
+def maybe_daily_report(conn, now):
+    """Create one 8 PM Eastern paper-performance report per local date."""
+    local_now = now.astimezone(REPORT_TIMEZONE)
+    report_date = local_now.date().isoformat()
+    if local_now.hour < DAILY_REPORT_HOUR:
+        return None
+    already_sent = conn.execute(
+        "SELECT 1 FROM paper_daily_reports WHERE report_date=?", (report_date,)
+    ).fetchone()
+    if already_sent:
+        return None
+
+    closed_rows = conn.execute(
+        """SELECT closed_at, net_pnl_usd
+           FROM paper_trades WHERE status='CLOSED' AND closed_at IS NOT NULL"""
+    ).fetchall()
+    todays_results = []
+    for closed_at, net_pnl in closed_rows:
+        closed_local = datetime.fromisoformat(closed_at).astimezone(REPORT_TIMEZONE)
+        if closed_local.date().isoformat() == report_date:
+            todays_results.append(net_pnl or 0)
+
+    open_count, open_pnl, open_exposure = conn.execute(
+        """SELECT COUNT(*), COALESCE(SUM(current_pnl_usd), 0),
+                  COALESCE(SUM(notional_usd), 0)
+           FROM paper_trades WHERE status='OPEN'"""
+    ).fetchone()
+    wins = sum(value > 0 for value in todays_results)
+    losses = sum(value <= 0 for value in todays_results)
+    realized = sum(todays_results)
+    conn.execute(
+        "INSERT INTO paper_daily_reports(report_date, sent_at) VALUES(?,?)",
+        (report_date, now.isoformat()),
+    )
+    return (
+        f"📅 DAILY PAPER REPORT {report_date} — Closed {len(todays_results)} "
+        f"({wins}W/{losses}L) — Realized ${realized:+.2f} — "
+        f"Open {open_count}/5 (${open_exposure:.0f} exposure) — "
+        f"Open P/L ${open_pnl:+.2f}"
+    )
+
+
 conn = db()
 now = datetime.now(timezone.utc)
 seen_at = now.isoformat()
@@ -354,7 +435,7 @@ for product in PRODUCTS:
     try:
         result = scan_one(product)
         previous = conn.execute(
-            """SELECT score, rel_volume
+            """SELECT score, rel_volume, status
                FROM scans
                WHERE product=?
                ORDER BY id DESC
@@ -540,13 +621,23 @@ for product in PRODUCTS:
         )
         print(result[0], result[2], result[3])
 
-        if result[3] in ("WATCH", "SIGNAL"):
+        status_changed = not previous or previous[2] != result[3]
+        if result[3] in ("WATCH", "SIGNAL") and status_changed and not next_state:
             alerts.append(
                 f"{result[0]} → {result[3]} — Score {result[2]} — Price ${result[1]}"
             )
 
     except Exception as exc:
         print("ERROR", product, exc)
+
+if alerts:
+    positions_alert = open_positions_summary(conn)
+    if positions_alert:
+        alerts.append(positions_alert)
+
+daily_report = maybe_daily_report(conn, now)
+if daily_report:
+    alerts.append(daily_report)
 
 conn.commit()
 conn.close()

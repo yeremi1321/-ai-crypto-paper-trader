@@ -217,6 +217,14 @@ for product in PRODUCTS:
                FROM momentum_sequences WHERE product=?""",
             (product,),
         ).fetchone()
+        latest_momentum_state = conn.execute(
+            """SELECT state
+               FROM momentum_tracking
+               WHERE product=?
+               ORDER BY id DESC
+               LIMIT 1""",
+            (product,),
+        ).fetchone()
 
         started_early_now = False
         if is_early and not recent_early and not sequence:
@@ -247,7 +255,14 @@ for product in PRODUCTS:
             started_early_now = True
 
         # Recover a recent sequence if an older run stored EARLY but stopped early.
-        if not sequence and recent_early:
+        if (
+            not sequence
+            and recent_early
+            and (
+                not latest_momentum_state
+                or latest_momentum_state[0] != "FAILED"
+            )
+        ):
             conn.execute(
                 """INSERT OR REPLACE INTO momentum_sequences(
                        product, started_at, state, hold_count, early_score, last_score

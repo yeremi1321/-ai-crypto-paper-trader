@@ -1,11 +1,18 @@
-import pandas as pd
-import numpy as np
-import requests, sqlite3, time, os
+import os
+import sqlite3
+import time
 from datetime import datetime, timezone
 
-DB="paper_trader_v4.db"
-PRODUCTS=["BTC-USD","ETH-USD","SOL-USD","DOGE-USD","SHIB-USD","AVAX-USD",
-          "LINK-USD","ADA-USD","XRP-USD","LTC-USD","BCH-USD"]
+import numpy as np
+import pandas as pd
+import requests
+
+
+DB = "paper_trader_v4.db"
+PRODUCTS = [
+    "BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD", "SHIB-USD", "AVAX-USD",
+    "LINK-USD", "ADA-USD", "XRP-USD", "LTC-USD", "BCH-USD",
+]
 EARLY_MIN_SCORE = 45
 EARLY_MAX_SCORE = 69.9
 SCORE_ACCEL_MIN = 8
@@ -16,9 +23,8 @@ FAIL_SCORE = 35
 
 
 def db():
-    c = sqlite3.connect(DB)
-
-    c.execute("""CREATE TABLE IF NOT EXISTS scans(
+    conn = sqlite3.connect(DB)
+    conn.execute("""CREATE TABLE IF NOT EXISTS scans(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         scan_id TEXT,
         seen_at TEXT,
@@ -30,8 +36,7 @@ def db():
         rel_volume REAL,
         reason TEXT
     )""")
-
-    c.execute("""CREATE TABLE IF NOT EXISTS early_events(
+    conn.execute("""CREATE TABLE IF NOT EXISTS early_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         scan_id TEXT,
         seen_at TEXT,
@@ -42,8 +47,7 @@ def db():
         rel_volume REAL,
         volume_accel REAL
     )""")
-
-    c.execute("""CREATE TABLE IF NOT EXISTS momentum_tracking(
+    conn.execute("""CREATE TABLE IF NOT EXISTS momentum_tracking(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         seen_at TEXT,
         product TEXT,
@@ -52,8 +56,7 @@ def db():
         previous_score REAL,
         price REAL
     )""")
-
-    c.execute("""CREATE TABLE IF NOT EXISTS momentum_sequences(
+    conn.execute("""CREATE TABLE IF NOT EXISTS momentum_sequences(
         product TEXT PRIMARY KEY,
         started_at TEXT,
         state TEXT,
@@ -61,190 +64,296 @@ def db():
         early_score REAL,
         last_score REAL
     )""")
+    conn.commit()
+    return conn
 
-    c.commit()
-    return c
 
-def candles(product,g,limit=220):
-    u=f"https://api.exchange.coinbase.com/products/{product}/candles"
-    r=requests.get(u,params={"granularity":g},headers={"User-Agent":"paper-v4"},timeout=15)
-    r.raise_for_status()
-    x=pd.DataFrame(r.json()[:limit],columns=["time","low","high","open","close","volume"])
-    x=x.sort_values("time").reset_index(drop=True)
-    for z in ["low","high","open","close","volume"]: x[z]=pd.to_numeric(x[z])
-    return x[x.time+g<=time.time()].copy()
+def candles(product, granularity, limit=220):
+    url = f"https://api.exchange.coinbase.com/products/{product}/candles"
+    response = requests.get(
+        url,
+        params={"granularity": granularity},
+        headers={"User-Agent": "paper-v4"},
+        timeout=15,
+    )
+    response.raise_for_status()
+    frame = pd.DataFrame(
+        response.json()[:limit],
+        columns=["time", "low", "high", "open", "close", "volume"],
+    )
+    frame = frame.sort_values("time").reset_index(drop=True)
+    for column in ["low", "high", "open", "close", "volume"]:
+        frame[column] = pd.to_numeric(frame[column])
+    return frame[frame.time + granularity <= time.time()].copy()
 
-def indicators(x):
-    x=x.copy()
-    x["ema20"]=x.close.ewm(span=20,adjust=False).mean()
-    x["ema50"]=x.close.ewm(span=50,adjust=False).mean()
-    d=x.close.diff()
-    gain=d.clip(lower=0).ewm(alpha=1/14,adjust=False).mean()
-    loss=(-d.clip(upper=0)).ewm(alpha=1/14,adjust=False).mean()
-    x["rsi"]=100-(100/(1+(gain/loss.replace(0,np.nan))))
-    x["rv"]=x.volume/x.volume.rolling(20).mean()
-    tr=pd.concat([(x.high-x.low),(x.high-x.close.shift()).abs(),
-                  (x.low-x.close.shift()).abs()],axis=1).max(axis=1)
-    x["atr"]=tr.rolling(14).mean()
-    return x
 
-def scan_one(p):
-    q=indicators(candles(p,900)); h=indicators(candles(p,3600))
-    a,b=q.iloc[-1],h.iloc[-1]
-    s=0.; why=[]
-    if a.close>a.ema20: s+=10; why.append("15m>EMA20")
-    if a.ema20>a.ema50: s+=8; why.append("15m trend")
-    if 52<=a.rsi<=72: s+=7; why.append("RSI momentum")
-    rv=float(a.rv) if pd.notna(a.rv) else 0
-    s+=min(25,max(0,(rv-.8)*18))
-    if rv>=1.5: why.append("volume surge")
-    if a.close>q.high.iloc[-21:-1].max(): s+=12; why.append("20-bar breakout")
-    if b.close>b.ema20: s+=8; why.append("1h trend")
-    atrp=(a.atr/a.close)*100
-    if .15<=atrp<=4: s+=10; why.append("tradable ATR")
-    if a.volume>0: s+=5
-    s=round(min(s,85),1)
-    status="SIGNAL" if s>=80 else ("WATCH" if s>=70 else "IGNORE")
-    return (p,float(a.close),s,status,round(float(a.rsi),1),round(rv,2),", ".join(why))
+def indicators(frame):
+    frame = frame.copy()
+    frame["ema20"] = frame.close.ewm(span=20, adjust=False).mean()
+    frame["ema50"] = frame.close.ewm(span=50, adjust=False).mean()
+    change = frame.close.diff()
+    gain = change.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
+    loss = (-change.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
+    frame["rsi"] = 100 - (100 / (1 + (gain / loss.replace(0, np.nan))))
+    frame["rv"] = frame.volume / frame.volume.rolling(20).mean()
+    true_range = pd.concat(
+        [
+            frame.high - frame.low,
+            (frame.high - frame.close.shift()).abs(),
+            (frame.low - frame.close.shift()).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    frame["atr"] = true_range.rolling(14).mean()
+    return frame
 
-c = db()
+
+def scan_one(product):
+    quarter_hour = indicators(candles(product, 900))
+    hourly = indicators(candles(product, 3600))
+    current, hour = quarter_hour.iloc[-1], hourly.iloc[-1]
+    score = 0.0
+    reasons = []
+
+    if current.close > current.ema20:
+        score += 10
+        reasons.append("15m>EMA20")
+    if current.ema20 > current.ema50:
+        score += 8
+        reasons.append("15m trend")
+    if 52 <= current.rsi <= 72:
+        score += 7
+        reasons.append("RSI momentum")
+
+    relative_volume = float(current.rv) if pd.notna(current.rv) else 0
+    score += min(25, max(0, (relative_volume - 0.8) * 18))
+    if relative_volume >= 1.5:
+        reasons.append("volume surge")
+    if current.close > quarter_hour.high.iloc[-21:-1].max():
+        score += 12
+        reasons.append("20-bar breakout")
+    if hour.close > hour.ema20:
+        score += 8
+        reasons.append("1h trend")
+
+    atr_percent = (current.atr / current.close) * 100
+    if 0.15 <= atr_percent <= 4:
+        score += 10
+        reasons.append("tradable ATR")
+    if current.volume > 0:
+        score += 5
+
+    score = round(min(score, 85), 1)
+    status = "SIGNAL" if score >= 80 else ("WATCH" if score >= 70 else "IGNORE")
+    return (
+        product,
+        float(current.close),
+        score,
+        status,
+        round(float(current.rsi), 1),
+        round(relative_volume, 2),
+        ", ".join(reasons),
+    )
+
+
+def record_state(conn, seen_at, product, state, score, previous_score, price):
+    """Record a state transition once and return True when a row was added."""
+    latest = conn.execute(
+        "SELECT state FROM momentum_tracking WHERE product=? ORDER BY id DESC LIMIT 1",
+        (product,),
+    ).fetchone()
+    if latest and latest[0] == state:
+        return False
+    conn.execute(
+        """INSERT INTO momentum_tracking(
+               seen_at, product, state, score, previous_score, price
+           ) VALUES(?,?,?,?,?,?)""",
+        (seen_at, product, state, score, previous_score, price),
+    )
+    return True
+
+
+conn = db()
 now = datetime.now(timezone.utc)
-sid = now.strftime("%Y%m%dT%H%M%SZ")
+seen_at = now.isoformat()
+scan_id = now.strftime("%Y%m%dT%H%M%SZ")
 alerts = []
 
-for p in PRODUCTS:
+for product in PRODUCTS:
     try:
-        r = scan_one(p)
-        prev = c.execute(
+        result = scan_one(product)
+        previous = conn.execute(
             """SELECT score, rel_volume
                FROM scans
                WHERE product=?
                ORDER BY id DESC
                LIMIT 1""",
-            (p,)
+            (product,),
         ).fetchone()
 
-        early = False
-        score_accel = 0
-        volume_accel = 0
+        previous_score = previous[0] if previous else result[2]
+        score_acceleration = result[2] - previous_score if previous else 0
+        volume_acceleration = 0
+        if previous and previous[1] and previous[1] > 0:
+            volume_acceleration = result[5] / previous[1]
 
-        if prev:
-            prev_score, prev_rv = prev
-            score_accel = r[2] - prev_score
-
-            if prev_rv and prev_rv > 0:
-                volume_accel = r[5] / prev_rv
-
-            early = (
-                EARLY_MIN_SCORE <= r[2] <= EARLY_MAX_SCORE
-                and score_accel >= SCORE_ACCEL_MIN
-                and volume_accel >= VOLUME_ACCEL_MIN
-            )
-
-        had_early = c.execute(
-            "SELECT 1 FROM early_events WHERE product=? AND julianday(seen_at) >= julianday('now','-2 hours') ORDER BY id DESC LIMIT 1",
-            (p,)
-        ).fetchone()
-
-        if early and not had_early:
-            print("EARLY", r[0], r[2])
-
-            alerts.append(
-                f"🚨 EARLY {r[0]} — Score {r[2]} — "
-                f"Jump +{score_accel:.1f} — Volume {volume_accel:.2f}x"
-            )
-
-            c.execute(
-                "INSERT INTO early_events(scan_id, seen_at, product, price, score, score_accel, rel_volume, volume_accel) VALUES(?,?,?,?,?,?,?,?)",
-                (sid, now.isoformat(), r[0], r[1], r[2], score_accel, r[5], volume_accel)
-            )
-            c.execute(
-                "INSERT OR REPLACE INTO momentum_sequences(product, started_at, state, hold_count, early_score, last_score) VALUES(?,?,?,?,?,?)",
-                (r[0], now.isoformat(), "EARLY", 0, r[2], r[2])
-            )
-        last_state = c.execute(
-            "SELECT state FROM momentum_tracking WHERE product=? ORDER BY id DESC LIMIT 1",
-            (p,)
-        ).fetchone()
-        sequence = c.execute(
-            "SELECT state, hold_count, early_score, last_score FROM momentum_sequences WHERE product=?",
-            (p,)
-        ).fetchone()
-        if sequence and had_early:
-            seq_state, hold_count, early_score, last_score = sequence
-
-            if seq_state == "EARLY" and r[2] > FAIL_SCORE and last_score - r[2] < WEAKEN_SCORE_DROP:
-                hold_count += 1
-
-                c.execute(
-                    "UPDATE momentum_sequences SET hold_count=?, last_score=? WHERE product=?",
-                    (hold_count, r[2], r[0])
-                )
-
-                if hold_count == 1:
-                    alerts.append(
-                        f"⏳ HOLD 1 {r[0]} — Score {r[2]} — Price ${r[1]}"
-                    )
-
-                elif hold_count >= 2:
-                    c.execute(
-                        "UPDATE momentum_sequences SET state=? WHERE product=?",
-                        ("STRENGTHENING", r[0])
-                    )
-
-                    alerts.append(
-                        f"✅ HOLD 2 {r[0]} — STRENGTHENING — Score {r[2]} — Price ${r[1]}"
-                    )
-        state = None
-        if prev and sequence:
-            prev_score = prev[0]
-            
-
-            if r[3] in ("WATCH", "SIGNAL"):
-                state = "CONFIRMED"
-            elif r[2] <= FAIL_SCORE:
-                state = "FAILED"
-            elif hold_count >= 2 and r[2] - prev_score >= STRENGTHEN_SCORE_GAIN:
-                state = "STRENGTHENING"
-            elif prev_score - r[2] >= WEAKEN_SCORE_DROP:
-                state = "WEAKENING"
-            if state == "FAILED":
-                c.execute(
-                    "DELETE FROM momentum_sequences WHERE product=?",
-                    (r[0],)
-                )
-                sequence = None
-            if state and (not last_state or last_state[0] != state):
-             c.execute(
-                "INSERT INTO momentum_tracking(seen_at, product, state, score, previous_score, price) VALUES(?,?,?,?,?,?)",
-                (now.isoformat(), r[0], state, r[2], prev_score, r[1])
-            )
-
-             alerts.append(
-                f"📊 {r[0]} — {state} — Score {r[2]} — Price ${r[1]}"
-            )
-        c.execute(
-            "INSERT INTO scans(scan_id, seen_at, product, price, score, status, rsi, rel_volume, reason) VALUES(?,?,?,?,?,?,?,?,?)",
-            (sid, now.isoformat(), *r)
+        is_early = bool(
+            previous
+            and EARLY_MIN_SCORE <= result[2] <= EARLY_MAX_SCORE
+            and score_acceleration >= SCORE_ACCEL_MIN
+            and volume_acceleration >= VOLUME_ACCEL_MIN
         )
+        recent_early = conn.execute(
+            """SELECT seen_at, price, score
+               FROM early_events
+               WHERE product=?
+                 AND julianday(seen_at) >= julianday('now','-2 hours')
+               ORDER BY id DESC
+               LIMIT 1""",
+            (product,),
+        ).fetchone()
+        sequence = conn.execute(
+            """SELECT state, hold_count, early_score, last_score
+               FROM momentum_sequences WHERE product=?""",
+            (product,),
+        ).fetchone()
 
-        print(r[0], r[2], r[3])
-
-        if r[3] in ("WATCH", "SIGNAL"):
+        if is_early and not recent_early and not sequence:
+            conn.execute(
+                """INSERT INTO early_events(
+                       scan_id, seen_at, product, price, score,
+                       score_accel, rel_volume, volume_accel
+                   ) VALUES(?,?,?,?,?,?,?,?)""",
+                (
+                    scan_id, seen_at, result[0], result[1], result[2],
+                    score_acceleration, result[5], volume_acceleration,
+                ),
+            )
+            conn.execute(
+                """INSERT OR REPLACE INTO momentum_sequences(
+                       product, started_at, state, hold_count, early_score, last_score
+                   ) VALUES(?,?,?,?,?,?)""",
+                (result[0], seen_at, "EARLY", 0, result[2], result[2]),
+            )
+            record_state(
+                conn, seen_at, result[0], "EARLY", result[2], previous_score, result[1]
+            )
             alerts.append(
-                f"{r[0]} → {r[3]} — Score {r[2]} — Price ${r[1]}"
+                f"🚨 EARLY {result[0]} — Score {result[2]} — "
+                f"Jump +{score_acceleration:.1f} — Volume {volume_acceleration:.2f}x"
+            )
+            sequence = ("EARLY", 0, result[2], result[2])
+
+        # Recover a recent sequence if an older run stored EARLY but stopped early.
+        if not sequence and recent_early:
+            conn.execute(
+                """INSERT OR REPLACE INTO momentum_sequences(
+                       product, started_at, state, hold_count, early_score, last_score
+                   ) VALUES(?,?,?,?,?,?)""",
+                (product, recent_early[0], "EARLY", 0, recent_early[2], result[2]),
+            )
+            record_state(
+                conn,
+                recent_early[0],
+                product,
+                "EARLY",
+                recent_early[2],
+                recent_early[2],
+                recent_early[1],
+            )
+            sequence = ("EARLY", 0, recent_early[2], result[2])
+
+        next_state = None
+        hold_alert = False
+        if sequence:
+            sequence_state, hold_count, early_score, last_score = sequence
+
+            if result[2] <= FAIL_SCORE:
+                next_state = "FAILED"
+            elif result[3] in ("WATCH", "SIGNAL") and sequence_state not in (
+                "CONFIRMED", "WATCH"
+            ):
+                next_state = "CONFIRMED"
+            elif result[3] == "WATCH" and sequence_state == "CONFIRMED":
+                next_state = "WATCH"
+            elif previous_score - result[2] >= WEAKEN_SCORE_DROP:
+                next_state = "WEAKENING"
+            elif sequence_state == "EARLY":
+                hold_count += 1
+                if hold_count >= 2:
+                    next_state = "STRENGTHENING"
+                elif hold_count == 1:
+                    hold_alert = True
+            elif (
+                sequence_state == "WEAKENING"
+                and result[2] - previous_score >= STRENGTHEN_SCORE_GAIN
+            ):
+                next_state = "STRENGTHENING"
+
+            if hold_alert:
+                alerts.append(
+                    f"⏳ HOLD 1 {result[0]} — Score {result[2]} — Price ${result[1]}"
+                )
+
+            if next_state:
+                added = record_state(
+                    conn,
+                    seen_at,
+                    result[0],
+                    next_state,
+                    result[2],
+                    previous_score,
+                    result[1],
+                )
+                if added:
+                    alerts.append(
+                        f"📊 {result[0]} — {next_state} — "
+                        f"Score {result[2]} — Price ${result[1]}"
+                    )
+
+                if next_state == "FAILED":
+                    conn.execute(
+                        "DELETE FROM momentum_sequences WHERE product=?", (result[0],)
+                    )
+                else:
+                    conn.execute(
+                        """UPDATE momentum_sequences
+                           SET state=?, hold_count=?, last_score=?
+                           WHERE product=?""",
+                        (next_state, hold_count, result[2], result[0]),
+                    )
+            else:
+                conn.execute(
+                    """UPDATE momentum_sequences
+                       SET hold_count=?, last_score=?
+                       WHERE product=?""",
+                    (hold_count, result[2], result[0]),
+                )
+
+        conn.execute(
+            """INSERT INTO scans(
+                   scan_id, seen_at, product, price, score,
+                   status, rsi, rel_volume, reason
+               ) VALUES(?,?,?,?,?,?,?,?,?)""",
+            (scan_id, seen_at, *result),
+        )
+        print(result[0], result[2], result[3])
+
+        if result[3] in ("WATCH", "SIGNAL"):
+            alerts.append(
+                f"{result[0]} → {result[3]} — Score {result[2]} — Price ${result[1]}"
             )
 
-    except Exception as e:
-        print("ERROR", p, e)
+    except Exception as exc:
+        print("ERROR", product, exc)
 
-c.commit()
-c.close()
+conn.commit()
+conn.close()
 
 if alerts:
     requests.post(
         "https://ntfy.sh/gonzaleztradealerts",
         data=("\n".join(alerts)).encode("utf-8"),
         headers={"Title": "Crypto Scanner Alert"},
-        timeout=10
+        timeout=10,
     )

@@ -29,6 +29,9 @@ PAPER_PROFIT_TARGET_PCT = 6.0
 PAPER_TRAILING_ACTIVATION_PCT = 3.0
 PAPER_TRAILING_STOP_PCT = 3.0
 PAPER_MAX_HOLD_HOURS = 24
+PAPER_CONFIRMATION_SCANS = 2
+PAPER_WEAKENING_EXIT_SCANS = 2
+PAPER_REENTRY_COOLDOWN_HOURS = 2
 MAX_OPEN_PAPER_TRADES = 5
 MAX_PAPER_EXPOSURE_USD = 500.0
 REPORT_TIMEZONE = ZoneInfo("America/New_York")
@@ -108,6 +111,21 @@ def db():
     conn.execute("""CREATE TABLE IF NOT EXISTS paper_daily_reports(
         report_date TEXT PRIMARY KEY,
         sent_at TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS paper_trade_controls(
+        product TEXT PRIMARY KEY,
+        confirmation_count INTEGER NOT NULL DEFAULT 0,
+        weakening_count INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS paper_entry_skips(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        seen_at TEXT,
+        product TEXT,
+        score REAL,
+        price REAL,
+        reason TEXT,
+        detail TEXT
     )""")
     conn.commit()
     return conn
@@ -218,8 +236,48 @@ def record_state(conn, seen_at, product, state, score, previous_score, price):
     return True
 
 
+def paper_control(conn, product):
+    conn.execute(
+        """INSERT OR IGNORE INTO paper_trade_controls(
+               product, confirmation_count, weakening_count, updated_at
+           ) VALUES(?,0,0,NULL)""",
+        (product,),
+    )
+    return conn.execute(
+        """SELECT confirmation_count, weakening_count
+           FROM paper_trade_controls WHERE product=?""",
+        (product,),
+    ).fetchone()
+
+
+def update_paper_control(
+    conn, product, seen_at, confirmation_count=None, weakening_count=None
+):
+    current_confirmation, current_weakening = paper_control(conn, product)
+    conn.execute(
+        """UPDATE paper_trade_controls
+           SET confirmation_count=?, weakening_count=?, updated_at=?
+           WHERE product=?""",
+        (
+            current_confirmation if confirmation_count is None else confirmation_count,
+            current_weakening if weakening_count is None else weakening_count,
+            seen_at,
+            product,
+        ),
+    )
+
+
+def record_entry_skip(conn, seen_at, product, score, price, reason, detail):
+    conn.execute(
+        """INSERT INTO paper_entry_skips(
+               seen_at, product, score, price, reason, detail
+           ) VALUES(?,?,?,?,?,?)""",
+        (seen_at, product, score, price, reason, detail),
+    )
+
+
 def open_paper_trade(conn, seen_at, product, score, market_price):
-    """Open one simulated $100 position when a sequence becomes CONFIRMED."""
+    """Open one simulated $100 position after the entry filters pass."""
     existing = conn.execute(
         "SELECT id FROM paper_trades WHERE product=? AND status='OPEN' LIMIT 1",
         (product,),
@@ -272,7 +330,86 @@ def open_paper_trade(conn, seen_at, product, score, market_price):
     )
 
 
-def manage_paper_trade(conn, now, product, score, market_price, momentum_state):
+def consider_paper_entry(conn, now, product, score, market_price, qualifies):
+    """Require persistent confirmation and enforce a per-product cooldown."""
+    existing = conn.execute(
+        "SELECT 1 FROM paper_trades WHERE product=? AND status='OPEN' LIMIT 1",
+        (product,),
+    ).fetchone()
+    confirmation_count, _ = paper_control(conn, product)
+    if existing:
+        if confirmation_count:
+            update_paper_control(
+                conn, product, now.isoformat(), confirmation_count=0
+            )
+        return None
+
+    if not qualifies:
+        if confirmation_count:
+            update_paper_control(
+                conn, product, now.isoformat(), confirmation_count=0
+            )
+        return None
+
+    confirmation_count += 1
+    update_paper_control(
+        conn, product, now.isoformat(), confirmation_count=confirmation_count
+    )
+    if confirmation_count < PAPER_CONFIRMATION_SCANS:
+        record_entry_skip(
+            conn,
+            now.isoformat(),
+            product,
+            score,
+            market_price,
+            "AWAITING_CONFIRMATION",
+            f"{confirmation_count}/{PAPER_CONFIRMATION_SCANS} qualifying scans",
+        )
+        return (
+            f"⏸️ PAPER WAIT {product} — confirmation "
+            f"{confirmation_count}/{PAPER_CONFIRMATION_SCANS}"
+        )
+
+    update_paper_control(conn, product, now.isoformat(), confirmation_count=0)
+    last_close = conn.execute(
+        """SELECT closed_at FROM paper_trades
+           WHERE product=? AND status='CLOSED' AND closed_at IS NOT NULL
+           ORDER BY id DESC LIMIT 1""",
+        (product,),
+    ).fetchone()
+    if last_close:
+        closed_at = datetime.fromisoformat(last_close[0])
+        cooldown_age = (now - closed_at).total_seconds() / 3600
+        if cooldown_age < PAPER_REENTRY_COOLDOWN_HOURS:
+            remaining = PAPER_REENTRY_COOLDOWN_HOURS - cooldown_age
+            record_entry_skip(
+                conn,
+                now.isoformat(),
+                product,
+                score,
+                market_price,
+                "COOLDOWN",
+                f"{remaining:.2f} hours remaining",
+            )
+            return f"🧊 PAPER COOLDOWN {product} — {remaining:.1f}h remaining"
+
+    alert = open_paper_trade(conn, now.isoformat(), product, score, market_price)
+    if alert and "PAPER SKIP" in alert:
+        record_entry_skip(
+            conn,
+            now.isoformat(),
+            product,
+            score,
+            market_price,
+            "EXPOSURE_LIMIT",
+            alert,
+        )
+    return alert
+
+
+def manage_paper_trade(
+    conn, now, product, score, market_price, momentum_state, weakening_scan
+):
     """Mark an open paper position to market and close it when a rule fires."""
     trade = conn.execute(
         """SELECT id, opened_at, entry_market_price, entry_price,
@@ -308,11 +445,18 @@ def manage_paper_trade(conn, now, product, score, market_price, momentum_state):
     opened = datetime.fromisoformat(opened_at)
     age_hours = (now - opened).total_seconds() / 3600
 
+    _, weakening_count = paper_control(conn, product)
+    weakening_count = weakening_count + 1 if weakening_scan else 0
+    update_paper_control(
+        conn,
+        product,
+        now.isoformat(),
+        weakening_count=weakening_count,
+    )
+
     exit_reason = None
     if momentum_state == "FAILED":
         exit_reason = "STATE_FAILED"
-    elif momentum_state == "WEAKENING":
-        exit_reason = "STATE_WEAKENING"
     elif market_return_pct <= -PAPER_STOP_LOSS_PCT:
         exit_reason = "STOP_LOSS"
     elif market_return_pct >= PAPER_PROFIT_TARGET_PCT:
@@ -324,6 +468,8 @@ def manage_paper_trade(conn, now, product, score, market_price, momentum_state):
         exit_reason = "TRAILING_STOP"
     elif age_hours >= PAPER_MAX_HOLD_HOURS:
         exit_reason = "TIME_EXIT_24H"
+    elif weakening_count >= PAPER_WEAKENING_EXIT_SCANS:
+        exit_reason = "STATE_WEAKENING_2X"
 
     if exit_reason:
         conn.execute(
@@ -339,7 +485,7 @@ def manage_paper_trade(conn, now, product, score, market_price, momentum_state):
                 net_pnl,
                 net_return_pct,
                 now.isoformat(),
-                momentum_state,
+                "WEAKENING" if exit_reason == "STATE_WEAKENING_2X" else momentum_state,
                 market_price,
                 simulated_exit_price,
                 estimated_exit_fee,
@@ -349,6 +495,13 @@ def manage_paper_trade(conn, now, product, score, market_price, momentum_state):
                 exit_reason,
                 trade_id,
             ),
+        )
+        update_paper_control(
+            conn,
+            product,
+            now.isoformat(),
+            confirmation_count=0,
+            weakening_count=0,
         )
         result_word = "WIN" if net_pnl > 0 else "LOSS"
         return (
@@ -532,6 +685,7 @@ for product in PRODUCTS:
             )
             sequence = ("EARLY", 0, recent_early[2], result[2])
 
+        sequence_state_before = sequence[0] if sequence else None
         next_state = None
         hold_alert = False
         if sequence and not started_early_now:
@@ -599,15 +753,37 @@ for product in PRODUCTS:
                     (hold_count, result[2], result[0]),
                 )
 
-        if next_state == "CONFIRMED":
-            paper_open_alert = open_paper_trade(
-                conn, seen_at, result[0], result[2], result[1]
+        entry_qualifies = bool(
+            next_state == "CONFIRMED"
+            or (
+                sequence_state_before in ("CONFIRMED", "WATCH")
+                and result[3] in ("WATCH", "SIGNAL")
+                and next_state not in ("FAILED", "WEAKENING")
             )
-            if paper_open_alert:
-                alerts.append(paper_open_alert)
+        )
+        paper_entry_alert = consider_paper_entry(
+            conn, now, result[0], result[2], result[1], entry_qualifies
+        )
+        if paper_entry_alert:
+            alerts.append(paper_entry_alert)
+
+        weakening_scan = bool(
+            next_state == "WEAKENING"
+            or (
+                sequence_state_before == "WEAKENING"
+                and next_state not in ("STRENGTHENING", "CONFIRMED", "WATCH")
+                and result[3] == "IGNORE"
+            )
+        )
 
         paper_close_alert = manage_paper_trade(
-            conn, now, result[0], result[2], result[1], next_state
+            conn,
+            now,
+            result[0],
+            result[2],
+            result[1],
+            next_state,
+            weakening_scan,
         )
         if paper_close_alert:
             alerts.append(paper_close_alert)

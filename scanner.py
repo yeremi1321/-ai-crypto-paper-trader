@@ -1049,40 +1049,52 @@ for product in PRODUCTS:
             sequence = ("EARLY", 0, recent_early[2], result[2])
 
 
-        sequence_state_before = sequence[0] if sequence else None
-        next_state = None
-        hold_alert = False
-        if sequence and not started_early_now:
-            sequence_state, hold_count, early_score, last_score = sequence
+sequence_state_before = sequence[0] if sequence else None
+next_state = None
+hold_alert = False
 
+if sequence and not started_early_now:
+    sequence_state, hold_count, early_score, last_score = sequence
 
-            if result[2] <= FAIL_SCORE:
-                next_state = "FAILED"
-            elif result[3] in ("WATCH", "SIGNAL") and sequence_state not in (
-                "CONFIRMED", "WATCH"
-            ):
-                next_state = "CONFIRMED"
-            elif result[3] == "WATCH" and sequence_state == "CONFIRMED":
-                next_state = "WATCH"
-            elif previous_score - result[2] >= WEAKEN_SCORE_DROP:
-                next_state = "WEAKENING"
-            elif sequence_state == "EARLY":
-                hold_count += 1
-                if hold_count >= 2:
-                    next_state = "STRENGTHENING"
-                elif hold_count == 1:
-                    hold_alert = True
-            elif (
-                sequence_state == "WEAKENING"
-                and result[2] - previous_score >= STRENGTHEN_SCORE_GAIN
-            ):
-                next_state = "STRENGTHENING"
+    if result[2] <= FAIL_SCORE:
+        next_state = "FAILED"
 
+    elif sequence_state == "EARLY":
+        score_holding = result[2] >= (last_score - 2)
+        volume_holding = result[5] >= 1.25
 
-            if hold_alert:
-                alerts.append(
-                    f"⏳ HOLD 1 {result[0]} — Score {result[2]} — Price ${result[1]}"
-                )
+        if score_holding and volume_holding:
+            hold_count += 1
+        else:
+            hold_count = 0
+
+        if hold_count >= 2:
+            next_state = "STRENGTHENING"
+        elif hold_count == 1:
+            hold_alert = True
+
+    elif previous_score - result[2] >= WEAKEN_SCORE_DROP:
+        next_state = "WEAKENING"
+
+    elif (
+        result[3] in ("WATCH", "SIGNAL")
+        and sequence_state not in ("CONFIRMED", "WATCH")
+    ):
+        next_state = "CONFIRMED"
+
+    elif result[3] == "WATCH" and sequence_state == "CONFIRMED":
+        next_state = "WATCH"
+
+    elif (
+        sequence_state == "WEAKENING"
+        and result[2] - previous_score >= STRENGTHEN_SCORE_GAIN
+    ):
+        next_state = "STRENGTHENING"
+
+    if hold_alert:
+        alerts.append(
+            f"⌛ HOLD 1 {result[0]} — Score {result[2]} — Price ${result[1]}"
+        )
 
 
             if next_state:

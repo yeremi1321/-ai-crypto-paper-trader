@@ -1,12 +1,16 @@
 import os
 import sqlite3
 
+
 import pandas as pd
 import streamlit as st
 
 
+
+
 DB = "paper_trader_v4.db"
 HORIZONS = [("15m", 15), ("1h", 60), ("4h", 240), ("24h", 1440)]
+
 
 st.set_page_config(
     page_title="AI Crypto Paper Trader V4", page_icon="📡", layout="wide"
@@ -17,12 +21,15 @@ st.caption(
     "Paper research only • No real-money execution"
 )
 
+
 if not os.path.exists(DB):
     st.warning(
         "No automated scan database yet. After the GitHub Actions workflow runs, "
         "data will appear here."
     )
     st.stop()
+
+
 
 
 def table_exists(conn, table_name):
@@ -32,14 +39,18 @@ def table_exists(conn, table_name):
     return row is not None
 
 
+
+
 def add_forward_returns(events, scans):
     """Use the first recorded market price at or after each research horizon."""
     if events.empty:
         return events.copy()
 
+
     output = events.copy()
     for label, _ in HORIZONS:
         output[f"return_{label}_pct"] = pd.NA
+
 
     scan_groups = {
         product: group.sort_values("seen_at").reset_index(drop=True)
@@ -58,11 +69,14 @@ def add_forward_returns(events, scans):
                     (outcome_price / event["price"]) - 1
                 ) * 100
 
+
     for label, _ in HORIZONS:
         output[f"return_{label}_pct"] = pd.to_numeric(
             output[f"return_{label}_pct"], errors="coerce"
         )
     return output
+
+
 
 
 def performance_summary(frame, group_column):
@@ -79,6 +93,8 @@ def performance_summary(frame, group_column):
             )
         rows.append(row)
     return pd.DataFrame(rows)
+
+
 
 
 conn = sqlite3.connect(DB)
@@ -101,11 +117,19 @@ if table_exists(conn, "paper_entry_skips"):
     )
 else:
     paper_entry_skips = pd.DataFrame()
+if table_exists(conn, "signal_outcomes"):
+    signal_outcomes = pd.read_sql_query(
+        "SELECT * FROM signal_outcomes ORDER BY id", conn
+    )
+else:
+    signal_outcomes = pd.DataFrame()
 conn.close()
+
 
 if scans.empty:
     st.info("Waiting for the first scheduled scan.")
     st.stop()
+
 
 scans["seen_at"] = pd.to_datetime(scans["seen_at"], utc=True)
 if not state_events.empty:
@@ -115,6 +139,14 @@ if not paper_trades.empty:
     paper_trades["closed_at"] = pd.to_datetime(
         paper_trades["closed_at"], utc=True, errors="coerce"
     )
+if not signal_outcomes.empty:
+    signal_outcomes["created_at"] = pd.to_datetime(
+        signal_outcomes["created_at"], utc=True
+    )
+    signal_outcomes["final_at"] = pd.to_datetime(
+        signal_outcomes["final_at"], utc=True, errors="coerce"
+    )
+
 
 latest_scan_id = scans.scan_id.iloc[-1]
 current = scans[scans.scan_id == latest_scan_id].copy()
@@ -123,11 +155,13 @@ scan_count = scans.scan_id.nunique()
 signals = (scans.status == "SIGNAL").sum()
 watches = (scans.status == "WATCH").sum()
 
+
 metric_1, metric_2, metric_3, metric_4 = st.columns(4)
 metric_1.metric("Recorded scans", scan_count)
 metric_2.metric("Last scan", last_time.strftime("%b %d %H:%M UTC"))
 metric_3.metric("WATCH observations", int(watches))
 metric_4.metric("SIGNAL observations", int(signals))
+
 
 st.subheader("Latest Automatic Scan")
 st.dataframe(
@@ -135,6 +169,7 @@ st.dataframe(
     use_container_width=True,
     hide_index=True,
 )
+
 
 st.subheader("Automatic Paper Trading")
 st.caption(
@@ -151,6 +186,7 @@ if paper_trades.empty:
 else:
     open_trades = paper_trades[paper_trades.status == "OPEN"].copy()
     closed_trades = paper_trades[paper_trades.status == "CLOSED"].copy()
+
 
     open_count = len(open_trades)
     closed_count = len(closed_trades)
@@ -169,6 +205,7 @@ else:
         running_peak = equity.cummax().clip(lower=0)
         realized_drawdown = (equity - running_peak).min()
 
+
     p1, p2, p3, p4, p5, p6 = st.columns(6)
     p1.metric("Open paper trades (max 5)", open_count)
     p2.metric("Closed paper trades", closed_count)
@@ -177,6 +214,7 @@ else:
     p5.metric("Avg return", f"{average_return:+.2f}%")
     p6.metric("Expectancy/trade", f"${expectancy:+.2f}")
     st.caption(f"Realized paper P/L drawdown: ${realized_drawdown:.2f}")
+
 
     if open_count:
         st.markdown("**Open simulated positions**")
@@ -191,6 +229,7 @@ else:
             use_container_width=True,
             hide_index=True,
         )
+
 
     if closed_count:
         st.markdown("**Completed simulated trades**")
@@ -218,6 +257,7 @@ else:
         st.markdown("**Results by exit rule**")
         st.dataframe(exit_summary, use_container_width=True, hide_index=True)
 
+
 if not paper_entry_skips.empty:
     st.markdown("**Filtered paper entries**")
     skip_summary = (
@@ -231,6 +271,67 @@ if not paper_entry_skips.empty:
         use_container_width=True,
         hide_index=True,
     )
+
+
+
+st.subheader("Signal Outcome Tracker")
+st.caption(
+    "Compares independent BLOCKED and ALLOWED samples with identical paper costs "
+    "and exit rules. One active sample per coin/decision prevents duplicate counting."
+)
+if signal_outcomes.empty:
+    st.info("Waiting for the first blocked or allowed signal outcome.")
+else:
+    outcome_view = signal_outcomes.copy()
+    outcome_view["btc_aligned"] = outcome_view["btc_aligned"].map(
+        {1: "YES", 0: "NO"}
+    )
+    outcome_view["market_breadth_pct"] = (
+        pd.to_numeric(outcome_view["market_breadth"], errors="coerce") * 100
+    )
+    finalized_outcomes = outcome_view[outcome_view.status == "FINAL"].copy()
+    active_outcomes = outcome_view[outcome_view.status == "OPEN"].copy()
+
+    def bucket_count(decision, result):
+        return len(
+            finalized_outcomes[
+                (finalized_outcomes.decision == decision)
+                & (finalized_outcomes.final_result == result)
+            ]
+        )
+
+    o1, o2, o3, o4, o5 = st.columns(5)
+    o1.metric("BLOCKED → WIN", bucket_count("BLOCKED", "WIN"))
+    o2.metric("BLOCKED → LOSS", bucket_count("BLOCKED", "LOSS"))
+    o3.metric("ALLOWED → WIN", bucket_count("ALLOWED", "WIN"))
+    o4.metric("ALLOWED → LOSS", bucket_count("ALLOWED", "LOSS"))
+    o5.metric("Active samples", len(active_outcomes))
+
+    if not finalized_outcomes.empty:
+        bucket_summary = (
+            finalized_outcomes.groupby(["decision", "final_result"], dropna=False)
+            .agg(
+                samples=("id", "size"),
+                avg_return_pct=("final_return_pct", "mean"),
+            )
+            .reset_index()
+        )
+        st.markdown("**Four-bucket comparison**")
+        st.dataframe(bucket_summary, use_container_width=True, hide_index=True)
+
+    tracker_columns = [
+        "created_at", "final_at", "product", "decision", "signal_score",
+        "entry_price", "btc_aligned", "market_breadth_pct", "highest_price",
+        "lowest_price", "last_price", "status", "final_result",
+        "final_return_pct", "exit_reason", "regime_detail",
+    ]
+    st.markdown("**Tracked signal samples**")
+    st.dataframe(
+        outcome_view.sort_values("id", ascending=False)[tracker_columns].head(250),
+        use_container_width=True,
+        hide_index=True,
+    )
+
 
 st.subheader("Momentum State Tracking")
 if state_events.empty:
@@ -247,6 +348,7 @@ else:
         hide_index=True,
     )
 
+
     st.caption(
         "Performance by state — win means price was above the state-event price "
         "at that horizon. Pending horizons stay blank."
@@ -256,6 +358,7 @@ else:
         use_container_width=True,
         hide_index=True,
     )
+
 
 st.subheader("Status Changes")
 changes = []
@@ -284,12 +387,14 @@ else:
     change_frame = change_frame.sort_values("seen_at", ascending=False).head(100)
 st.dataframe(change_frame, use_container_width=True, hide_index=True)
 
+
 st.subheader("Score History")
 selected_product = st.selectbox(
     "Asset", sorted(scans["product"].dropna().unique().tolist())
 )
 history = scans[scans["product"] == selected_product].set_index("seen_at")
 st.line_chart(history["score"])
+
 
 st.subheader("Forward Performance Research")
 scan_events = scans[["product", "seen_at", "score", "status", "price"]].copy()
@@ -299,6 +404,7 @@ st.dataframe(
     use_container_width=True,
     hide_index=True,
 )
+
 
 evaluated = scan_performance.dropna(subset=["return_1h_pct"]).copy()
 if not evaluated.empty:
@@ -317,9 +423,11 @@ if not evaluated.empty:
     st.caption("Score-bucket research — descriptive results, not a recommendation")
     st.dataframe(score_summary, use_container_width=True, hide_index=True)
 
+
 st.subheader("Performance by Scanner Status")
 status_summary = performance_summary(scan_performance, "status")
 st.dataframe(status_summary, use_container_width=True, hide_index=True)
+
 
 st.info(
     "V4's scanner is scheduled by GitHub Actions. GitHub may delay scheduled jobs "

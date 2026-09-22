@@ -143,6 +143,7 @@ st.caption(
     "maximum 5 open trades / $500 exposure • "
     "2 qualifying scans to enter • 2 weakening scans to exit • "
     "2-hour re-entry cooldown • "
+    "BTC plus 60% market trend filter for new entries • "
     "0.6% estimated fee and 0.1% slippage per side"
 )
 if paper_trades.empty:

@@ -13,6 +13,7 @@ import requests
 
 
 DB = "paper_trader_v4.db"
+STRATEGY_VERSION = "V5"
 PRODUCTS = [
     "BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD", "SHIB-USD", "AVAX-USD",
     "LINK-USD", "ADA-USD", "XRP-USD", "LTC-USD", "BCH-USD",
@@ -28,21 +29,36 @@ PAPER_NOTIONAL_USD = 100.0
 PAPER_FEE_RATE = 0.006
 PAPER_SLIPPAGE_RATE = 0.001
 PAPER_STOP_LOSS_PCT = 3.0
-PAPER_PROFIT_TARGET_PCT = 6.0
-PAPER_TRAILING_ACTIVATION_PCT = 3.0
-PAPER_TRAILING_STOP_PCT = 3.0
+PAPER_PROFIT_TARGET_PCT = 4.0
+PAPER_TRAILING_ACTIVATION_PCT = 2.0
+PAPER_TRAILING_STOP_PCT = 1.0
 PAPER_MAX_HOLD_HOURS = 24
 PAPER_CONFIRMATION_SCANS = 2
 PAPER_WEAKENING_EXIT_SCANS = 2
 PAPER_REENTRY_COOLDOWN_HOURS = 2
+PAPER_ENTRY_MIN_SCORE = 80.0
+PAPER_ENTRY_MIN_REL_VOLUME = 1.50
+PAPER_ENTRY_MIN_RSI = 55.0
+PAPER_ENTRY_MAX_RSI = 68.0
+PAPER_WEAKENING_FAST_LOSS_PCT = -0.75
+PAPER_WEAKENING_PROFIT_LOCK_PCT = 1.75
+PAPER_DAILY_LOSS_LIMIT_USD = 15.0
 MARKET_REGIME_MIN_COVERAGE = 7
-MARKET_REGIME_MIN_BREADTH = 0.60
+MARKET_REGIME_MIN_BREADTH = 0.70
 MARKET_REGIME_MAX_AGE_MINUTES = 45
 OUTCOME_TRACKER_MAX_HOLD_HOURS = 24
 MAX_OPEN_PAPER_TRADES = 5
 MAX_PAPER_EXPOSURE_USD = 500.0
 REPORT_TIMEZONE = ZoneInfo("America/New_York")
 DAILY_REPORT_HOUR = 20
+
+
+def ensure_column(conn, table, column, definition):
+    columns = {
+        row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 
@@ -169,6 +185,21 @@ def db():
     conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS
                     one_open_signal_outcome_per_product_decision
                     ON signal_outcomes(product, decision) WHERE status='OPEN'""")
+    ensure_column(conn, "paper_trades", "strategy_version", "TEXT")
+    ensure_column(conn, "paper_entry_skips", "strategy_version", "TEXT")
+    ensure_column(conn, "signal_outcomes", "strategy_version", "TEXT")
+    conn.execute(
+        "UPDATE paper_trades SET strategy_version='V4' "
+        "WHERE strategy_version IS NULL OR strategy_version=''"
+    )
+    conn.execute(
+        "UPDATE paper_entry_skips SET strategy_version='V4' "
+        "WHERE strategy_version IS NULL OR strategy_version=''"
+    )
+    conn.execute(
+        "UPDATE signal_outcomes SET strategy_version='V4' "
+        "WHERE strategy_version IS NULL OR strategy_version=''"
+    )
     conn.commit()
     return conn
 
@@ -330,10 +361,86 @@ def update_paper_control(
 def record_entry_skip(conn, seen_at, product, score, price, reason, detail):
     conn.execute(
         """INSERT INTO paper_entry_skips(
-               seen_at, product, score, price, reason, detail
-           ) VALUES(?,?,?,?,?,?)""",
-        (seen_at, product, score, price, reason, detail),
+               seen_at, product, score, price, reason, detail, strategy_version
+           ) VALUES(?,?,?,?,?,?,?)""",
+        (seen_at, product, score, price, reason, detail, STRATEGY_VERSION),
     )
+
+
+def v5_entry_quality(result, previous):
+    """Require a fresh, liquid breakout that is still advancing."""
+    if not previous:
+        return False, "No prior completed scan for continuation check"
+    previous_score, _, _, previous_price = previous
+    _, price, score, status, rsi, rel_volume, reason = result
+    required_reasons = ("15m>EMA20", "15m trend", "20-bar breakout", "1h trend")
+    missing = [item for item in required_reasons if item not in (reason or "")]
+    failures = []
+    if status != "SIGNAL" or score < PAPER_ENTRY_MIN_SCORE:
+        failures.append(f"score {score:.1f} below SIGNAL quality")
+    if rel_volume < PAPER_ENTRY_MIN_REL_VOLUME:
+        failures.append(
+            f"volume {rel_volume:.2f}x below {PAPER_ENTRY_MIN_REL_VOLUME:.2f}x"
+        )
+    if not PAPER_ENTRY_MIN_RSI <= rsi <= PAPER_ENTRY_MAX_RSI:
+        failures.append(
+            f"RSI {rsi:.1f} outside {PAPER_ENTRY_MIN_RSI:.0f}-{PAPER_ENTRY_MAX_RSI:.0f}"
+        )
+    if missing:
+        failures.append("missing " + ", ".join(missing))
+    if price < previous_price:
+        failures.append("price did not continue above prior scan")
+    if score < previous_score - 2:
+        failures.append("score faded more than 2 points")
+    return not failures, "; ".join(failures) if failures else "V5 quality passed"
+
+
+def daily_realized_pnl(conn, now):
+    local_date = now.astimezone(REPORT_TIMEZONE).date()
+    total = 0.0
+    rows = conn.execute(
+        """SELECT closed_at, net_pnl_usd FROM paper_trades
+           WHERE status='CLOSED' AND closed_at IS NOT NULL"""
+    ).fetchall()
+    for closed_at, net_pnl in rows:
+        closed_date = (
+            datetime.fromisoformat(closed_at).astimezone(REPORT_TIMEZONE).date()
+        )
+        if closed_date == local_date:
+            total += net_pnl or 0.0
+    return total
+
+
+def weakening_exit_reason(
+    momentum_state,
+    weakening_scan,
+    market_return_pct,
+    high_gain_pct,
+    pullback_from_high_pct,
+    age_hours,
+    weakening_count,
+):
+    if momentum_state == "FAILED":
+        return "STATE_FAILED"
+    if market_return_pct <= -PAPER_STOP_LOSS_PCT:
+        return "STOP_LOSS"
+    if market_return_pct >= PAPER_PROFIT_TARGET_PCT:
+        return "PROFIT_TARGET"
+    if (
+        high_gain_pct >= PAPER_TRAILING_ACTIVATION_PCT
+        and pullback_from_high_pct <= -PAPER_TRAILING_STOP_PCT
+    ):
+        return "TRAILING_STOP"
+    if age_hours >= PAPER_MAX_HOLD_HOURS:
+        return "TIME_EXIT_24H"
+    if weakening_scan and (
+        market_return_pct <= PAPER_WEAKENING_FAST_LOSS_PCT
+        or market_return_pct >= PAPER_WEAKENING_PROFIT_LOCK_PCT
+    ):
+        return "STATE_WEAKENING_RISK"
+    if weakening_count >= PAPER_WEAKENING_EXIT_SCANS:
+        return "STATE_WEAKENING_2X"
+    return None
 
 
 
@@ -364,8 +471,8 @@ def start_signal_outcome(
                created_at, product, decision, signal_score, entry_price,
                btc_aligned, market_breadth, regime_detail, status,
                highest_price, lowest_price, last_price, weakening_count,
-               paper_trade_id
-           ) VALUES(?,?,?,?,?,?,?,?, 'OPEN', ?,?,?,0,?)""",
+               paper_trade_id, strategy_version
+           ) VALUES(?,?,?,?,?,?,?,?, 'OPEN', ?,?,?,0,?,?)""",
         (
             now.isoformat(),
             product,
@@ -379,6 +486,7 @@ def start_signal_outcome(
             price,
             price,
             paper_trade_id,
+            STRATEGY_VERSION,
         ),
     )
     return True
@@ -424,22 +532,15 @@ def update_signal_outcomes(
         net_pnl = exit_value - exit_fee - PAPER_NOTIONAL_USD
         net_return_pct = (net_pnl / PAPER_NOTIONAL_USD) * 100
 
-        exit_reason = None
-        if momentum_state == "FAILED":
-            exit_reason = "STATE_FAILED"
-        elif market_return_pct <= -PAPER_STOP_LOSS_PCT:
-            exit_reason = "STOP_LOSS"
-        elif market_return_pct >= PAPER_PROFIT_TARGET_PCT:
-            exit_reason = "PROFIT_TARGET"
-        elif (
-            high_gain_pct >= PAPER_TRAILING_ACTIVATION_PCT
-            and pullback_from_high_pct <= -PAPER_TRAILING_STOP_PCT
-        ):
-            exit_reason = "TRAILING_STOP"
-        elif age_hours >= OUTCOME_TRACKER_MAX_HOLD_HOURS:
-            exit_reason = "TIME_EXIT_24H"
-        elif weakening_count >= PAPER_WEAKENING_EXIT_SCANS:
-            exit_reason = "STATE_WEAKENING_2X"
+        exit_reason = weakening_exit_reason(
+            momentum_state,
+            weakening_scan,
+            market_return_pct,
+            high_gain_pct,
+            pullback_from_high_pct,
+            age_hours,
+            weakening_count,
+        )
 
         if exit_reason:
             final_result = "WIN" if net_pnl > 0 else "LOSS"
@@ -579,8 +680,8 @@ def open_paper_trade(conn, seen_at, product, score, market_price):
                product, opened_at, entry_state, entry_score,
                entry_market_price, entry_price, notional_usd, quantity,
                entry_fee, status, highest_price, current_price,
-               current_pnl_usd, current_return_pct
-           ) VALUES(?,?,?,?,?,?,?,?,?,'OPEN',?,?,?,?)""",
+               current_pnl_usd, current_return_pct, strategy_version
+           ) VALUES(?,?,?,?,?,?,?,?,?,'OPEN',?,?,?,?,?)""",
         (
             product,
             seen_at,
@@ -595,6 +696,7 @@ def open_paper_trade(conn, seen_at, product, score, market_price):
             market_price,
             -entry_fee,
             (-entry_fee / PAPER_NOTIONAL_USD) * 100,
+            STRATEGY_VERSION,
         ),
     )
     return (
@@ -657,6 +759,27 @@ def consider_paper_entry(
             regime_detail,
         )
         return f"🌧️ PAPER BLOCK {product} — market regime — {regime_detail}"
+
+    realized_today = daily_realized_pnl(conn, now)
+    if realized_today <= -PAPER_DAILY_LOSS_LIMIT_USD:
+        if confirmation_count:
+            update_paper_control(
+                conn, product, now.isoformat(), confirmation_count=0
+            )
+        detail = (
+            f"daily realized P/L ${realized_today:+.2f}; "
+            f"limit -${PAPER_DAILY_LOSS_LIMIT_USD:.0f}"
+        )
+        record_entry_skip(
+            conn,
+            now.isoformat(),
+            product,
+            score,
+            market_price,
+            "DAILY_LOSS_LIMIT",
+            detail,
+        )
+        return f"🛑 PAPER BLOCK {product} — {detail}"
 
 
     confirmation_count += 1
@@ -788,22 +911,15 @@ def manage_paper_trade(
     )
 
 
-    exit_reason = None
-    if momentum_state == "FAILED":
-        exit_reason = "STATE_FAILED"
-    elif market_return_pct <= -PAPER_STOP_LOSS_PCT:
-        exit_reason = "STOP_LOSS"
-    elif market_return_pct >= PAPER_PROFIT_TARGET_PCT:
-        exit_reason = "PROFIT_TARGET"
-    elif (
-        high_gain_pct >= PAPER_TRAILING_ACTIVATION_PCT
-        and pullback_from_high_pct <= -PAPER_TRAILING_STOP_PCT
-    ):
-        exit_reason = "TRAILING_STOP"
-    elif age_hours >= PAPER_MAX_HOLD_HOURS:
-        exit_reason = "TIME_EXIT_24H"
-    elif weakening_count >= PAPER_WEAKENING_EXIT_SCANS:
-        exit_reason = "STATE_WEAKENING_2X"
+    exit_reason = weakening_exit_reason(
+        momentum_state,
+        weakening_scan,
+        market_return_pct,
+        high_gain_pct,
+        pullback_from_high_pct,
+        age_hours,
+        weakening_count,
+    )
 
 
     if exit_reason:
@@ -947,7 +1063,7 @@ for product in PRODUCTS:
     try:
         result = scan_one(product)
         previous = conn.execute(
-            """SELECT score, rel_volume, status
+            """SELECT score, rel_volume, status, price
                FROM scans
                WHERE product=?
                ORDER BY id DESC
@@ -1134,7 +1250,7 @@ for product in PRODUCTS:
                 )
 
 
-        entry_qualifies = bool(
+        sequence_entry_ready = bool(
             next_state == "CONFIRMED"
             or (
                 sequence_state_before in ("CONFIRMED", "WATCH")
@@ -1142,6 +1258,18 @@ for product in PRODUCTS:
                 and next_state not in ("FAILED", "WEAKENING")
             )
         )
+        quality_passed, quality_detail = v5_entry_quality(result, previous)
+        entry_qualifies = sequence_entry_ready and quality_passed
+        if sequence_entry_ready and not quality_passed:
+            record_entry_skip(
+                conn,
+                now.isoformat(),
+                result[0],
+                result[2],
+                result[1],
+                "ENTRY_QUALITY",
+                quality_detail,
+            )
         paper_entry_alert = consider_paper_entry(
             conn,
             now,
@@ -1213,7 +1341,7 @@ for product in PRODUCTS:
         print("ERROR", product, exc)
 
 
-if alerts:
+if alerts and os.environ.get("NTFY_DISABLED") != "1":
     positions_alert = open_positions_summary(conn)
     if positions_alert:
         alerts.append(positions_alert)

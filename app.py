@@ -1,7 +1,10 @@
+import html
 import os
 import sqlite3
 
 
+import altair as alt
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -13,26 +16,60 @@ HORIZONS = [("15m", 15), ("1h", 60), ("4h", 240), ("24h", 1440)]
 
 
 st.set_page_config(
-    page_title="AI Crypto Paper Trader V5", page_icon="📡", layout="wide"
+    page_title="AI Crypto Paper Trader V4", page_icon="📡", layout="wide"
 )
 st.markdown(
     """
     <style>
-    .block-container {padding-top: 1.4rem; padding-bottom: 3rem;}
+    .block-container {max-width: 1500px; padding-top: .8rem; padding-bottom: 4rem;}
+    #MainMenu, footer {visibility: hidden;}
+    h1 {font-size: 1.75rem !important; margin-bottom: 0 !important;}
     [data-testid="stMetric"] {
-        background: rgba(120, 120, 120, 0.08);
-        border: 1px solid rgba(120, 120, 120, 0.18);
-        border-radius: 14px;
+        background: #101622;
+        border: 1px solid #273044;
+        border-radius: 16px;
         padding: 12px 14px;
+        min-height: 102px;
+    }
+    [data-testid="stMetricLabel"] {color: #aeb7c8;}
+    .health-row {display:flex; gap:8px; flex-wrap:wrap; margin:.4rem 0 1rem;}
+    .health-pill {border-radius:999px; padding:7px 11px; background:#101622;
+        border:1px solid #273044; font-size:.83rem;}
+    .signal-grid {display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+        gap:10px; margin:.4rem 0 1rem;}
+    .signal-card {border:1px solid #273044; border-left:5px solid var(--state);
+        border-radius:16px; padding:14px; background:var(--bg); min-height:170px;}
+    .signal-head {display:flex; justify-content:space-between; align-items:center; gap:8px;}
+    .coin {font-size:1.08rem; font-weight:750;}
+    .state-badge {font-size:.68rem; font-weight:800; border:1px solid var(--state);
+        color:var(--state); padding:4px 7px; border-radius:999px;}
+    .signal-price {font-size:1.22rem; font-weight:750; margin:.55rem 0;}
+    .signal-stats {display:grid; grid-template-columns:repeat(3,1fr); gap:7px;}
+    .signal-stat {font-size:.72rem; color:#aeb7c8;}
+    .signal-stat b {display:block; color:#f4f7fb; font-size:.92rem; margin-top:2px;}
+    .sequence {font-size:.76rem; color:#c9d1df; margin-top:10px; white-space:nowrap;
+        overflow:hidden; text-overflow:ellipsis;}
+    .up {color:#16c784}.down {color:#ff8c42}.flat {color:#aeb7c8}
+    @media (max-width: 700px) {
+        .block-container {padding:.45rem .7rem 5rem;}
+        h1 {font-size:1.45rem !important;}
+        [data-testid="column"] {min-width:46% !important; flex:1 1 46% !important;}
+        [data-testid="stMetric"] {min-height:92px; padding:10px;}
+        .signal-grid {grid-template-columns:1fr 1fr; gap:8px;}
+        .signal-card {padding:11px; min-height:160px;}
+        .signal-stats {grid-template-columns:1fr 1fr;}
+        .signal-stat:last-child {display:none;}
+        .coin {font-size:.94rem}.state-badge {font-size:.58rem}
+        .signal-price {font-size:1.04rem;}
     }
     </style>
     <meta http-equiv="refresh" content="60">
     """,
     unsafe_allow_html=True,
 )
-st.title("AI Crypto Paper Trader — V5")
+st.title("📈 V5 Trading Control Center")
 st.caption(
-    "Live scanner control center • Refreshes every 60 seconds • "
+    "Mobile-first trading dashboard • Refreshes every 60 seconds • "
     "Paper research only • No real-money execution"
 )
 
@@ -75,6 +112,41 @@ def scanner_action(state, status):
     if status == "WATCH":
         return "🟡 Watch"
     return "⚪ No trade"
+
+
+def state_color(state):
+    return {
+        "CONFIRMED": ("#16c784", "rgba(22,199,132,.13)"),
+        "STRENGTHENING": ("#16c784", "rgba(22,199,132,.13)"),
+        "HOLD": ("#f4c542", "rgba(244,197,66,.12)"),
+        "WATCH": ("#f4c542", "rgba(244,197,66,.12)"),
+        "EARLY": ("#f4c542", "rgba(244,197,66,.12)"),
+        "WEAKENING": ("#ff8c42", "rgba(255,140,66,.13)"),
+        "FAILED": ("#ff4b4b", "rgba(255,75,75,.13)"),
+    }.get(state, ("#8b93a7", "rgba(139,147,167,.10)"))
+
+
+def price_text(value):
+    value = float(value or 0)
+    if value < 0.001:
+        return "$" + f"{value:.8f}"
+    if value < 1:
+        return "$" + f"{value:.5f}"
+    return "$" + f"{value:,.2f}"
+
+
+def signal_sequence(product):
+    if state_events.empty:
+        return "No active sequence"
+    items = (
+        state_events[state_events["product"] == product]
+        .sort_values("id")["state"].tail(5).tolist()
+    )
+    compact = []
+    for item in items:
+        if not compact or compact[-1] != item:
+            compact.append(item)
+    return " → ".join(compact) if compact else "No active sequence"
 
 
 
@@ -237,6 +309,7 @@ current["state"] = current["product"].map(latest_state)
 current["action"] = current.apply(
     lambda row: scanner_action(row["state"], row["status"]), axis=1
 )
+current["sequence"] = current["product"].map(signal_sequence)
 current["chart"] = current["product"].map(tradingview_url)
 current = current.sort_values(["score", "product"], ascending=[False, True])
 
@@ -256,6 +329,19 @@ realized_pnl = closed_now.net_pnl_usd.sum() if not closed_now.empty else 0.0
 win_rate_now = (
     (closed_now.net_pnl_usd > 0).mean() * 100 if not closed_now.empty else 0.0
 )
+today = pd.Timestamp.now(tz="America/New_York").date()
+today_closed = (
+    closed_now[
+        closed_now.closed_at.dt.tz_convert("America/New_York").dt.date == today
+    ].copy()
+    if not closed_now.empty else pd.DataFrame()
+)
+today_pnl = today_closed.net_pnl_usd.sum() if not today_closed.empty else 0.0
+today_wins = (today_closed.net_pnl_usd > 0).sum() if not today_closed.empty else 0
+today_losses = (today_closed.net_pnl_usd <= 0).sum() if not today_closed.empty else 0
+active_alerts = current.state.isin(
+    ["EARLY", "HOLD", "WATCH", "STRENGTHENING", "CONFIRMED"]
+).sum()
 age_minutes = max(
     0, int((pd.Timestamp.now(tz="UTC") - last_time).total_seconds() / 60)
 )
@@ -270,48 +356,106 @@ if not market_regime_log.empty:
     )
     regime_detail = latest_regime.detail
 
-st.subheader("Live Scanner Control Center")
+scanner_color = "#16c784" if fresh_label == "LIVE" else "#ff4b4b"
+regime_color = "#16c784" if regime_label == "ENTRIES ALLOWED" else "#ff4b4b"
+st.markdown(
+    f'<div class="health-row">'
+    f'<span class="health-pill">Scanner: <b style="color:{scanner_color}">{fresh_label}</b></span>'
+    f'<span class="health-pill">Last scan: <b>{age_minutes} min ago</b></span>'
+    f'<span class="health-pill">Market: <b style="color:{regime_color}">{regime_label}</b></span>'
+    f'<span class="health-pill">{html.escape(str(regime_detail))}</span></div>',
+    unsafe_allow_html=True,
+)
+st.subheader("Trading summary")
 m1, m2, m3, m4, m5, m6 = st.columns(6)
-m1.metric("Scanner", fresh_label, f"{age_minutes} min ago")
-m2.metric("Market filter", regime_label)
-m3.metric("Open positions", f"{len(open_now)}/5")
-m4.metric("Open P/L", f"${open_pnl:+.2f}")
-m5.metric("V5 realized P/L", f"${realized_pnl:+.2f}")
-m6.metric("V5 win rate", f"{win_rate_now:.1f}%")
-st.info(f"**Latest market check:** {regime_detail}")
+m1.metric("Open paper trades", f"{len(open_now)}/5")
+m2.metric("Today's P/L", "$" + f"{today_pnl:+.2f}")
+m3.metric("Today's record", f"{today_wins}W / {today_losses}L")
+m4.metric("Active alerts", int(active_alerts))
+m5.metric("V5 closed trades", len(closed_now))
+m6.metric("Open P/L", "$" + f"{open_pnl:+.2f}")
 st.caption(
     f"Last completed scan: {last_time.strftime('%b %d %H:%M UTC')} • "
     f"{scan_count} scan cycles recorded • {int(watches)} WATCH and "
     f"{int(signals)} SIGNAL observations"
 )
 
-st.markdown("**What the scanner sees right now**")
+st.subheader("Live signals")
+state_rank = {
+    "CONFIRMED": 0, "STRENGTHENING": 1, "HOLD": 2, "WATCH": 2, "EARLY": 3,
+    "WEAKENING": 4, "FAILED": 5,
+}
+current["state_rank"] = current["state"].map(state_rank).fillna(9)
+current = current.sort_values(["state_rank", "score"], ascending=[True, False])
+cards = ['<div class="signal-grid">']
+for _, row in current.iterrows():
+    card_state = row["state"] if pd.notna(row["state"]) else row["status"]
+    color, background = state_color(card_state)
+    delta = float(row["score_change"])
+    trend_class = "up" if delta > 1 else "down" if delta < -1 else "flat"
+    trend_icon = "▲" if delta > 1 else "▼" if delta < -1 else "•"
+    cards.append(
+        f'<div class="signal-card" style="--state:{color};--bg:{background}">'
+        f'<div class="signal-head"><span class="coin">{html.escape(row["product"])}</span>'
+        f'<span class="state-badge">{html.escape(str(card_state))}</span></div>'
+        f'<div class="signal-price">{price_text(row["price"])}</div>'
+        f'<div class="signal-stats"><span class="signal-stat">SCORE<b>{row["score"]:.1f}</b></span>'
+        f'<span class="signal-stat">VOLUME<b>{row["rel_volume"]:.2f}x</b></span>'
+        f'<span class="signal-stat">RSI<b>{row["rsi"]:.1f}</b></span></div>'
+        f'<div class="sequence"><span class="{trend_class}">{trend_icon} {delta:+.1f}</span>'
+        f' · {html.escape(row["sequence"])}</div></div>'
+    )
+cards.append("</div>")
+st.markdown("".join(cards), unsafe_allow_html=True)
+
+st.subheader("Best opportunities")
+opportunities = current.copy()
+opportunities["rank_score"] = (
+    opportunities.score * 0.58
+    + opportunities.rel_volume.clip(upper=5) * 6
+    + opportunities.score_change.clip(-10, 10) * 0.8
+    + opportunities.state.map(
+        {"CONFIRMED": 15, "STRENGTHENING": 10, "HOLD": 5, "WATCH": 5, "EARLY": 3}
+    ).fillna(0)
+)
+opportunities["trend"] = np.where(
+    opportunities.score_change > 1, "Improving ↑",
+    np.where(opportunities.score_change < -1, "Fading ↓", "Flat →"),
+)
 st.dataframe(
-    current[
-        [
-            "product", "price", "score", "score_change", "status", "state",
-            "action", "rsi", "rel_volume", "chart",
-        ]
-    ],
+    opportunities.sort_values("rank_score", ascending=False)[
+        ["product", "state", "score", "rel_volume", "trend", "chart"]
+    ].head(6),
     column_config={
-        "product": "Coin",
-        "price": st.column_config.NumberColumn("Price", format="$%.8g"),
+        "product": "Coin", "state": "State",
         "score": st.column_config.ProgressColumn(
             "Score", min_value=0, max_value=85, format="%.1f"
         ),
-        "score_change": st.column_config.NumberColumn("Change", format="%+.1f"),
-        "status": "Scanner",
-        "state": "Sequence",
-        "action": "Current action",
-        "rsi": st.column_config.NumberColumn("RSI", format="%.1f"),
         "rel_volume": st.column_config.NumberColumn("Volume", format="%.2fx"),
-        "chart": st.column_config.LinkColumn(
-            "TradingView", display_text="Open chart ↗"
-        ),
+        "trend": "Trend",
+        "chart": st.column_config.LinkColumn("Chart", display_text="Open ↗"),
     },
-    use_container_width=True,
-    hide_index=True,
+    use_container_width=True, hide_index=True,
 )
+
+with st.expander("All scanner details"):
+    st.dataframe(
+        current[[
+            "product", "price", "score", "score_change", "status", "state",
+            "rsi", "rel_volume", "chart",
+        ]],
+        column_config={
+            "product": "Coin",
+            "price": st.column_config.NumberColumn("Price", format="$%.8g"),
+            "score": st.column_config.ProgressColumn(
+                "Score", min_value=0, max_value=85, format="%.1f"
+            ),
+            "score_change": st.column_config.NumberColumn("Change", format="%+.1f"),
+            "rel_volume": st.column_config.NumberColumn("Volume", format="%.2fx"),
+            "chart": st.column_config.LinkColumn("TradingView", display_text="Open ↗"),
+        },
+        use_container_width=True, hide_index=True,
+    )
 
 activity_rows = []
 if not state_events.empty:
@@ -362,7 +506,7 @@ if not paper_trades.empty:
                 }
             )
 
-with st.expander("Recent decisions and paper-trade activity", expanded=True):
+with st.expander("Recent decisions and paper-trade activity", expanded=False):
     if activity_rows:
         activity = pd.DataFrame(activity_rows).sort_values(
             "time", ascending=False
@@ -422,6 +566,13 @@ else:
         closed_trades.net_return_pct.mean() if closed_count else 0.0
     )
     expectancy = total_net_pnl / closed_count if closed_count else 0.0
+    winning_trades = closed_trades[closed_trades.net_pnl_usd > 0]
+    losing_trades = closed_trades[closed_trades.net_pnl_usd <= 0]
+    average_win = winning_trades.net_pnl_usd.mean() if len(winning_trades) else 0.0
+    average_loss = losing_trades.net_pnl_usd.mean() if len(losing_trades) else 0.0
+    gross_wins = winning_trades.net_pnl_usd.sum() if len(winning_trades) else 0.0
+    gross_losses = abs(losing_trades.net_pnl_usd.sum()) if len(losing_trades) else 0.0
+    profit_factor = gross_wins / gross_losses if gross_losses else 0.0
     realized_drawdown = 0.0
     if closed_count:
         ordered = closed_trades.sort_values("closed_at")
@@ -439,6 +590,11 @@ else:
     p6.metric("V5 expectancy/trade", f"${expectancy:+.2f}")
     st.caption(f"V5 realized paper P/L drawdown: ${realized_drawdown:.2f}")
 
+    q1, q2, q3 = st.columns(3)
+    q1.metric("Average win", "$" + f"{average_win:+.2f}")
+    q2.metric("Average loss", "$" + f"{average_loss:+.2f}")
+    q3.metric("Profit factor", f"{profit_factor:.2f}")
+
     if closed_count == 0:
         st.info("V5 starts clean. Waiting for the first completed V5 paper trade.")
     if len(legacy_closed_trades):
@@ -453,12 +609,18 @@ else:
 
     if open_count:
         st.markdown("**Open simulated positions**")
+        open_trades["stop_price"] = open_trades.entry_market_price * 0.97
+        open_trades["target_price"] = open_trades.entry_market_price * 1.04
+        open_trades["time_open_hours"] = (
+            pd.Timestamp.now(tz="UTC") - open_trades.opened_at
+        ).dt.total_seconds() / 3600
         open_trades["chart"] = open_trades["product"].map(tradingview_url)
         st.dataframe(
             open_trades[
                 [
                     "opened_at", "product", "entry_score", "entry_market_price",
                     "current_price", "current_pnl_usd", "current_return_pct",
+                    "stop_price", "target_price", "time_open_hours",
                     "highest_price", "chart",
                 ]
             ].sort_values("opened_at", ascending=False),
@@ -473,6 +635,22 @@ else:
 
 
     if closed_count:
+        by_coin = (
+            closed_trades.groupby("product")
+            .agg(
+                trades=("id", "size"),
+                wins=("net_pnl_usd", lambda values: int((values > 0).sum())),
+                net_pnl_usd=("net_pnl_usd", "sum"),
+                average_return_pct=("net_return_pct", "mean"),
+            )
+            .reset_index()
+        )
+        by_coin["win_rate_pct"] = by_coin.wins / by_coin.trades * 100
+        st.markdown("**Results by coin**")
+        st.dataframe(
+            by_coin.sort_values("net_pnl_usd", ascending=False),
+            use_container_width=True, hide_index=True,
+        )
         st.markdown("**Completed simulated trades**")
         closed_trades["chart"] = closed_trades["product"].map(tradingview_url)
         st.dataframe(
@@ -506,18 +684,31 @@ else:
 
 
 if not paper_entry_skips.empty:
-    st.markdown("**Filtered paper entries**")
+    st.subheader("Why entries were blocked")
     current_skips = paper_entry_skips[
         paper_entry_skips.strategy_version == "V5"
     ].copy()
+    reason_labels = {
+        "MARKET_REGIME": "BTC not aligned / market breadth weak",
+        "DAILY_LOSS_LIMIT": "Daily loss limit reached",
+        "AWAITING_CONFIRMATION": "Waiting for confirmation",
+        "COOLDOWN": "Re-entry cooldown active",
+        "EXPOSURE_LIMIT": "Maximum exposure reached",
+        "ENTRY_QUALITY": "V5 quality filter",
+    }
+    current_skips["blocked_by"] = current_skips.reason.map(reason_labels).fillna(
+        current_skips.reason.str.replace("_", " ").str.title()
+    )
     skip_summary = (
-        current_skips.groupby("reason", dropna=False)
+        current_skips.groupby("blocked_by", dropna=False)
         .size()
         .reset_index(name="events")
     )
     st.dataframe(skip_summary, use_container_width=True, hide_index=True)
     st.dataframe(
-        paper_entry_skips.sort_values("id", ascending=False).head(100),
+        current_skips.sort_values("id", ascending=False)[
+            ["seen_at", "product", "score", "blocked_by", "detail"]
+        ].head(100),
         use_container_width=True,
         hide_index=True,
     )
@@ -589,6 +780,23 @@ st.subheader("Momentum State Tracking")
 if state_events.empty:
     st.info("No EARLY momentum sequence has been recorded yet.")
 else:
+    journey_rows = []
+    for product, group in state_events.sort_values("id").groupby("product"):
+        recent = group.tail(8)
+        journey_rows.append(
+            {
+                "coin": product,
+                "started": recent.seen_at.iloc[0],
+                "latest": recent.seen_at.iloc[-1],
+                "sequence": " → ".join(recent.state.tolist()),
+                "latest_score": recent.score.iloc[-1],
+            }
+        )
+    st.markdown("**Signal journeys**")
+    st.dataframe(
+        pd.DataFrame(journey_rows).sort_values("latest", ascending=False),
+        use_container_width=True, hide_index=True,
+    )
     state_performance = add_forward_returns(state_events, scans)
     latest_columns = [
         "seen_at", "product", "state", "score", "previous_score", "price",
@@ -648,15 +856,47 @@ history = (
     scans[scans["product"] == selected_product]
     .sort_values("seen_at")
     .tail(100)
-    .set_index("seen_at")
 )
-chart_1, chart_2 = st.columns(2)
-with chart_1:
-    st.markdown("**Scanner score**")
-    st.line_chart(history["score"], height=280)
-with chart_2:
-    st.markdown("**Recorded market price**")
-    st.line_chart(history["price"], height=280)
+selected_events = (
+    state_events[state_events["product"] == selected_product]
+    .sort_values("seen_at").tail(40)
+    if not state_events.empty else pd.DataFrame()
+)
+price_line = alt.Chart(history).mark_line(color="#4da3ff", strokeWidth=2).encode(
+    x=alt.X("seen_at:T", title=None),
+    y=alt.Y("price:Q", scale=alt.Scale(zero=False), title="Price"),
+    tooltip=[
+        "seen_at:T",
+        alt.Tooltip("price:Q", format=".8g"),
+        alt.Tooltip("score:Q", format=".1f"),
+    ],
+)
+price_chart = price_line
+if not selected_events.empty:
+    markers = alt.Chart(selected_events).mark_point(size=100, filled=True).encode(
+        x="seen_at:T",
+        y=alt.Y("price:Q", scale=alt.Scale(zero=False)),
+        color=alt.Color(
+            "state:N",
+            scale=alt.Scale(
+                domain=["CONFIRMED", "STRENGTHENING", "HOLD", "EARLY", "WEAKENING", "FAILED"],
+                range=["#16c784", "#16c784", "#f4c542", "#f4c542", "#ff8c42", "#ff4b4b"],
+            ),
+        ),
+        tooltip=["seen_at:T", "state:N", alt.Tooltip("score:Q", format=".1f")],
+    )
+    price_chart = price_line + markers
+st.markdown("**Price with signal markers**")
+st.altair_chart(price_chart.properties(height=320), use_container_width=True)
+score_chart = alt.Chart(history).mark_area(
+    line={"color": "#16c784"}, color="#163d35"
+).encode(
+    x=alt.X("seen_at:T", title=None),
+    y=alt.Y("score:Q", scale=alt.Scale(domain=[0, 85]), title="Scanner score"),
+    tooltip=["seen_at:T", alt.Tooltip("score:Q", format=".1f"), "status:N"],
+)
+st.markdown("**Score history**")
+st.altair_chart(score_chart.properties(height=220), use_container_width=True)
 st.link_button(
     f"Open {selected_product} on TradingView ↗",
     tradingview_url(selected_product),
@@ -695,8 +935,37 @@ st.subheader("Performance by Scanner Status")
 status_summary = performance_summary(scan_performance, "status")
 st.dataframe(status_summary, use_container_width=True, hide_index=True)
 
+st.subheader("Settings & emergency controls")
+with st.expander("Open control panel"):
+    st.warning(
+        "Read-only safety mode: these show the live V5 rules. The scheduled scanner "
+        "runs on GitHub, so phone controls stay locked until a private GitHub control "
+        "token is connected through Streamlit Secrets."
+    )
+    settings_left, settings_right = st.columns(2)
+    with settings_left:
+        st.number_input("Minimum EARLY score", value=45.0, disabled=True)
+        st.number_input("Entry volume threshold", value=1.50, step=0.05, disabled=True)
+        st.number_input("Confirmation scans", value=2, disabled=True)
+    with settings_right:
+        st.number_input("Stop loss %", value=3.0, step=0.25, disabled=True)
+        st.number_input("Profit target %", value=4.0, step=0.25, disabled=True)
+        st.number_input("Maximum open trades", value=5, disabled=True)
+    e1, e2, e3 = st.columns(3)
+    e1.button("⏸ Pause scanner", disabled=True, use_container_width=True)
+    e2.button("🛑 Pause entries", disabled=True, use_container_width=True)
+    e3.button("▶ Resume", disabled=True, use_container_width=True)
+    e4, e5 = st.columns(2)
+    e4.button("🧹 Clear stale sequences", disabled=True, use_container_width=True)
+    e5.button("🔄 Run manual scan", disabled=True, use_container_width=True)
+    st.link_button(
+        "Open GitHub Actions controls ↗",
+        "https://github.com/yeremi1321/-ai-crypto-paper-trader/actions",
+        use_container_width=True,
+    )
+
 
 st.info(
-    "V5's scanner is scheduled by GitHub Actions. GitHub may delay scheduled jobs "
+    "V4's scanner is scheduled by GitHub Actions. GitHub may delay scheduled jobs "
     "during high load, so scans are not guaranteed to occur at the exact minute."
 )

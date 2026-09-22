@@ -8,6 +8,8 @@ V4 separates scanning from the Streamlit dashboard.
 - Results are stored in `paper_trader_v4.db` and committed back to the repository.
 - Streamlit displays the accumulated history.
 - Forward research tracks 1h, 4h, and 24h returns after recorded scores.
+- New paper entries require BTC and at least 60% of fresh tracked markets to be
+  above both their 15-minute EMA20 and 1-hour EMA20 trend filters.
 - Real-money trading is not included.
 
 ## Install

@@ -32,13 +32,15 @@ st.markdown(
         min-height: 102px;
     }
     [data-testid="stMetricLabel"] {color: #aeb7c8;}
+    [data-testid="stMetricValue"] {color: #f4f7fb;}
     .health-row {display:flex; gap:8px; flex-wrap:wrap; margin:.4rem 0 1rem;}
     .health-pill {border-radius:999px; padding:7px 11px; background:#101622;
-        border:1px solid #273044; font-size:.83rem;}
+        border:1px solid #273044; font-size:.83rem; color:#f4f7fb;}
     .signal-grid {display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
         gap:10px; margin:.4rem 0 1rem;}
     .signal-card {border:1px solid #273044; border-left:5px solid var(--state);
-        border-radius:16px; padding:14px; background:var(--bg); min-height:170px;}
+        border-radius:16px; padding:14px; background:#101622; color:#f4f7fb;
+        min-height:170px;}
     .signal-head {display:flex; justify-content:space-between; align-items:center; gap:8px;}
     .coin {font-size:1.08rem; font-weight:750;}
     .state-badge {font-size:.68rem; font-weight:800; border:1px solid var(--state);

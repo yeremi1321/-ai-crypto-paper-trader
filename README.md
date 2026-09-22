@@ -7,6 +7,9 @@ V4 separates scanning from the Streamlit dashboard.
 - Each run uses completed Coinbase 15m/1h candles.
 - Results are stored in `paper_trader_v4.db` and committed back to the repository.
 - Streamlit displays the accumulated history.
+- The live control center shows scanner freshness, market-regime status, open
+  positions, paper P/L, score changes, recent decisions, and direct TradingView
+  links for every tracked coin.
 - Forward research tracks 1h, 4h, and 24h returns after recorded scores.
 - New paper entries require BTC and at least 60% of fresh tracked markets to be
   above both their 15-minute EMA20 and 1-hour EMA20 trend filters.
@@ -25,3 +28,4 @@ After that first successful run, Streamlit will redeploy when the database commi
 ## Important
 GitHub scheduled workflows can be delayed and can be disabled after long inactivity on public repositories.
 This is a research collector, not an execution engine or guaranteed real-time alerting service.
+

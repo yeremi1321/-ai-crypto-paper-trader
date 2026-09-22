@@ -15,9 +15,24 @@ HORIZONS = [("15m", 15), ("1h", 60), ("4h", 240), ("24h", 1440)]
 st.set_page_config(
     page_title="AI Crypto Paper Trader V4", page_icon="📡", layout="wide"
 )
+st.markdown(
+    """
+    <style>
+    .block-container {padding-top: 1.4rem; padding-bottom: 3rem;}
+    [data-testid="stMetric"] {
+        background: rgba(120, 120, 120, 0.08);
+        border: 1px solid rgba(120, 120, 120, 0.18);
+        border-radius: 14px;
+        padding: 12px 14px;
+    }
+    </style>
+    <meta http-equiv="refresh" content="60">
+    """,
+    unsafe_allow_html=True,
+)
 st.title("AI Crypto Paper Trader — V4")
 st.caption(
-    "Automatic scheduled research scanner • Persistent GitHub history • "
+    "Live scanner control center • Refreshes every 60 seconds • "
     "Paper research only • No real-money execution"
 )
 
@@ -37,6 +52,29 @@ def table_exists(conn, table_name):
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table_name,)
     ).fetchone()
     return row is not None
+
+
+def tradingview_url(product):
+    symbol = product.replace("-", "")
+    return f"https://www.tradingview.com/chart/?symbol=COINBASE%3A{symbol}"
+
+
+def scanner_action(state, status):
+    if state == "CONFIRMED":
+        return "✅ Confirmed setup"
+    if state == "STRENGTHENING":
+        return "📈 Strengthening"
+    if state == "WEAKENING":
+        return "📉 Weakening"
+    if state == "FAILED":
+        return "❌ Failed"
+    if state == "EARLY":
+        return "🚨 Early move"
+    if status == "SIGNAL":
+        return "🟢 Signal"
+    if status == "WATCH":
+        return "🟡 Watch"
+    return "⚪ No trade"
 
 
 
@@ -123,6 +161,12 @@ if table_exists(conn, "signal_outcomes"):
     )
 else:
     signal_outcomes = pd.DataFrame()
+if table_exists(conn, "market_regime_log"):
+    market_regime_log = pd.read_sql_query(
+        "SELECT * FROM market_regime_log ORDER BY id", conn
+    )
+else:
+    market_regime_log = pd.DataFrame()
 conn.close()
 
 
@@ -146,6 +190,10 @@ if not signal_outcomes.empty:
     signal_outcomes["final_at"] = pd.to_datetime(
         signal_outcomes["final_at"], utc=True, errors="coerce"
     )
+if not market_regime_log.empty:
+    market_regime_log["seen_at"] = pd.to_datetime(
+        market_regime_log["seen_at"], utc=True
+    )
 
 
 latest_scan_id = scans.scan_id.iloc[-1]
@@ -155,20 +203,171 @@ scan_count = scans.scan_id.nunique()
 signals = (scans.status == "SIGNAL").sum()
 watches = (scans.status == "WATCH").sum()
 
+latest_state = {}
+if not state_events.empty:
+    latest_state = (
+        state_events.sort_values("id").groupby("product").tail(1)
+        .set_index("product")["state"].to_dict()
+    )
 
-metric_1, metric_2, metric_3, metric_4 = st.columns(4)
-metric_1.metric("Recorded scans", scan_count)
-metric_2.metric("Last scan", last_time.strftime("%b %d %H:%M UTC"))
-metric_3.metric("WATCH observations", int(watches))
-metric_4.metric("SIGNAL observations", int(signals))
+score_delta = {}
+for product, group in scans.sort_values("id").groupby("product"):
+    recent = group.tail(2)
+    score_delta[product] = (
+        float(recent.score.iloc[-1] - recent.score.iloc[-2])
+        if len(recent) == 2 else 0.0
+    )
 
+current["score_change"] = current["product"].map(score_delta).fillna(0.0)
+current["state"] = current["product"].map(latest_state)
+current["action"] = current.apply(
+    lambda row: scanner_action(row["state"], row["status"]), axis=1
+)
+current["chart"] = current["product"].map(tradingview_url)
+current = current.sort_values(["score", "product"], ascending=[False, True])
 
-st.subheader("Latest Automatic Scan")
+open_now = (
+    paper_trades[paper_trades.status == "OPEN"].copy()
+    if not paper_trades.empty else pd.DataFrame()
+)
+closed_now = (
+    paper_trades[paper_trades.status == "CLOSED"].copy()
+    if not paper_trades.empty else pd.DataFrame()
+)
+open_pnl = open_now.current_pnl_usd.sum() if not open_now.empty else 0.0
+realized_pnl = closed_now.net_pnl_usd.sum() if not closed_now.empty else 0.0
+win_rate_now = (
+    (closed_now.net_pnl_usd > 0).mean() * 100 if not closed_now.empty else 0.0
+)
+age_minutes = max(
+    0, int((pd.Timestamp.now(tz="UTC") - last_time).total_seconds() / 60)
+)
+fresh_label = "LIVE" if age_minutes <= 30 else "DELAYED"
+
+regime_label = "WAITING FOR NEXT SCAN"
+regime_detail = "The next scan will record BTC alignment and market breadth."
+if not market_regime_log.empty:
+    latest_regime = market_regime_log.iloc[-1]
+    regime_label = (
+        "ENTRIES ALLOWED" if latest_regime.allows_entries else "ENTRIES BLOCKED"
+    )
+    regime_detail = latest_regime.detail
+
+st.subheader("Live Scanner Control Center")
+m1, m2, m3, m4, m5, m6 = st.columns(6)
+m1.metric("Scanner", fresh_label, f"{age_minutes} min ago")
+m2.metric("Market filter", regime_label)
+m3.metric("Open positions", f"{len(open_now)}/5")
+m4.metric("Open P/L", f"${open_pnl:+.2f}")
+m5.metric("Realized P/L", f"${realized_pnl:+.2f}")
+m6.metric("Win rate", f"{win_rate_now:.1f}%")
+st.info(f"**Latest market check:** {regime_detail}")
+st.caption(
+    f"Last completed scan: {last_time.strftime('%b %d %H:%M UTC')} • "
+    f"{scan_count} scan cycles recorded • {int(watches)} WATCH and "
+    f"{int(signals)} SIGNAL observations"
+)
+
+st.markdown("**What the scanner sees right now**")
 st.dataframe(
-    current[["product", "price", "score", "status", "rsi", "rel_volume", "reason"]],
+    current[
+        [
+            "product", "price", "score", "score_change", "status", "state",
+            "action", "rsi", "rel_volume", "chart",
+        ]
+    ],
+    column_config={
+        "product": "Coin",
+        "price": st.column_config.NumberColumn("Price", format="$%.8g"),
+        "score": st.column_config.ProgressColumn(
+            "Score", min_value=0, max_value=85, format="%.1f"
+        ),
+        "score_change": st.column_config.NumberColumn("Change", format="%+.1f"),
+        "status": "Scanner",
+        "state": "Sequence",
+        "action": "Current action",
+        "rsi": st.column_config.NumberColumn("RSI", format="%.1f"),
+        "rel_volume": st.column_config.NumberColumn("Volume", format="%.2fx"),
+        "chart": st.column_config.LinkColumn(
+            "TradingView", display_text="Open chart ↗"
+        ),
+    },
     use_container_width=True,
     hide_index=True,
 )
+
+activity_rows = []
+if not state_events.empty:
+    for _, row in state_events.sort_values("id", ascending=False).head(40).iterrows():
+        activity_rows.append(
+            {
+                "time": row.seen_at,
+                "coin": row["product"],
+                "event": row.state,
+                "details": f"Score {row.score:.1f}",
+                "chart": tradingview_url(row["product"]),
+            }
+        )
+if not paper_entry_skips.empty:
+    skip_times = pd.to_datetime(paper_entry_skips["seen_at"], utc=True)
+    for index, row in paper_entry_skips.sort_values("id", ascending=False).head(30).iterrows():
+        activity_rows.append(
+            {
+                "time": skip_times.loc[index],
+                "coin": row["product"],
+                "event": "BLOCKED",
+                "details": row.detail,
+                "chart": tradingview_url(row["product"]),
+            }
+        )
+if not paper_trades.empty:
+    for _, row in paper_trades.sort_values("id", ascending=False).head(30).iterrows():
+        activity_rows.append(
+            {
+                "time": row.opened_at,
+                "coin": row["product"],
+                "event": "PAPER OPEN",
+                "details": f"Entry score {row.entry_score:.1f}",
+                "chart": tradingview_url(row["product"]),
+            }
+        )
+        if row.status == "CLOSED" and pd.notna(row.closed_at):
+            activity_rows.append(
+                {
+                    "time": row.closed_at,
+                    "coin": row["product"],
+                    "event": "PAPER CLOSE",
+                    "details": (
+                        f"{row.exit_reason} • ${row.net_pnl_usd:+.2f} "
+                        f"({row.net_return_pct:+.2f}%)"
+                    ),
+                    "chart": tradingview_url(row["product"]),
+                }
+            )
+
+with st.expander("Recent decisions and paper-trade activity", expanded=True):
+    if activity_rows:
+        activity = pd.DataFrame(activity_rows).sort_values(
+            "time", ascending=False
+        ).head(40)
+        st.dataframe(
+            activity,
+            column_config={
+                "time": st.column_config.DatetimeColumn(
+                    "Time", format="MMM D, h:mm a"
+                ),
+                "coin": "Coin",
+                "event": "Decision",
+                "details": "Why / result",
+                "chart": st.column_config.LinkColumn(
+                    "Chart", display_text="View ↗"
+                ),
+            },
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("The activity timeline will fill in after the next scan.")
 
 
 st.subheader("Automatic Paper Trading")
@@ -218,14 +417,20 @@ else:
 
     if open_count:
         st.markdown("**Open simulated positions**")
+        open_trades["chart"] = open_trades["product"].map(tradingview_url)
         st.dataframe(
             open_trades[
                 [
                     "opened_at", "product", "entry_score", "entry_market_price",
                     "current_price", "current_pnl_usd", "current_return_pct",
-                    "highest_price",
+                    "highest_price", "chart",
                 ]
             ].sort_values("opened_at", ascending=False),
+            column_config={
+                "chart": st.column_config.LinkColumn(
+                    "TradingView", display_text="Open chart ↗"
+                ),
+            },
             use_container_width=True,
             hide_index=True,
         )
@@ -233,14 +438,20 @@ else:
 
     if closed_count:
         st.markdown("**Completed simulated trades**")
+        closed_trades["chart"] = closed_trades["product"].map(tradingview_url)
         st.dataframe(
             closed_trades[
                 [
                     "opened_at", "closed_at", "product", "entry_score",
                     "entry_market_price", "exit_market_price", "exit_reason",
-                    "net_pnl_usd", "net_return_pct",
+                    "net_pnl_usd", "net_return_pct", "chart",
                 ]
             ].sort_values("closed_at", ascending=False),
+            column_config={
+                "chart": st.column_config.LinkColumn(
+                    "TradingView", display_text="Review chart ↗"
+                ),
+            },
             use_container_width=True,
             hide_index=True,
         )
@@ -388,12 +599,27 @@ else:
 st.dataframe(change_frame, use_container_width=True, hide_index=True)
 
 
-st.subheader("Score History")
+st.subheader("Coin Inspector")
 selected_product = st.selectbox(
     "Asset", sorted(scans["product"].dropna().unique().tolist())
 )
-history = scans[scans["product"] == selected_product].set_index("seen_at")
-st.line_chart(history["score"])
+history = (
+    scans[scans["product"] == selected_product]
+    .sort_values("seen_at")
+    .tail(100)
+    .set_index("seen_at")
+)
+chart_1, chart_2 = st.columns(2)
+with chart_1:
+    st.markdown("**Scanner score**")
+    st.line_chart(history["score"], height=280)
+with chart_2:
+    st.markdown("**Recorded market price**")
+    st.line_chart(history["price"], height=280)
+st.link_button(
+    f"Open {selected_product} on TradingView ↗",
+    tradingview_url(selected_product),
+)
 
 
 st.subheader("Forward Performance Research")

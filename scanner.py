@@ -32,6 +32,9 @@ PAPER_MAX_HOLD_HOURS = 24
 PAPER_CONFIRMATION_SCANS = 2
 PAPER_WEAKENING_EXIT_SCANS = 2
 PAPER_REENTRY_COOLDOWN_HOURS = 2
+MARKET_REGIME_MIN_COVERAGE = 7
+MARKET_REGIME_MIN_BREADTH = 0.60
+MARKET_REGIME_MAX_AGE_MINUTES = 45
 MAX_OPEN_PAPER_TRADES = 5
 MAX_PAPER_EXPOSURE_USD = 500.0
 REPORT_TIMEZONE = ZoneInfo("America/New_York")
@@ -276,6 +279,36 @@ def record_entry_skip(conn, seen_at, product, score, price, reason, detail):
     )
 
 
+def market_regime(conn):
+    """Allow entries only when BTC and most tracked coins have aligned trends."""
+    rows = conn.execute(
+        """SELECT s.product, s.reason
+           FROM scans s
+           JOIN (
+               SELECT product, MAX(id) AS latest_id
+               FROM scans
+               WHERE julianday(seen_at) >= julianday('now', ?)
+               GROUP BY product
+           ) latest ON latest.latest_id = s.id""",
+        (f"-{MARKET_REGIME_MAX_AGE_MINUTES} minutes",),
+    ).fetchall()
+    if len(rows) < MARKET_REGIME_MIN_COVERAGE:
+        return False, f"insufficient fresh coverage ({len(rows)}/{len(PRODUCTS)})"
+
+    trend_by_product = {
+        product: "15m>EMA20" in (reason or "") and "1h trend" in (reason or "")
+        for product, reason in rows
+    }
+    aligned_count = sum(trend_by_product.values())
+    breadth = aligned_count / len(rows)
+    btc_aligned = trend_by_product.get("BTC-USD", False)
+    detail = (
+        f"BTC {'aligned' if btc_aligned else 'not aligned'}; "
+        f"breadth {aligned_count}/{len(rows)} ({breadth:.0%})"
+    )
+    return btc_aligned and breadth >= MARKET_REGIME_MIN_BREADTH, detail
+
+
 def open_paper_trade(conn, seen_at, product, score, market_price):
     """Open one simulated $100 position after the entry filters pass."""
     existing = conn.execute(
@@ -330,7 +363,9 @@ def open_paper_trade(conn, seen_at, product, score, market_price):
     )
 
 
-def consider_paper_entry(conn, now, product, score, market_price, qualifies):
+def consider_paper_entry(
+    conn, now, product, score, market_price, qualifies, regime_allows, regime_detail
+):
     """Require persistent confirmation and enforce a per-product cooldown."""
     existing = conn.execute(
         "SELECT 1 FROM paper_trades WHERE product=? AND status='OPEN' LIMIT 1",
@@ -350,6 +385,22 @@ def consider_paper_entry(conn, now, product, score, market_price, qualifies):
                 conn, product, now.isoformat(), confirmation_count=0
             )
         return None
+
+    if not regime_allows:
+        if confirmation_count:
+            update_paper_control(
+                conn, product, now.isoformat(), confirmation_count=0
+            )
+        record_entry_skip(
+            conn,
+            now.isoformat(),
+            product,
+            score,
+            market_price,
+            "MARKET_REGIME",
+            regime_detail,
+        )
+        return f"🌧️ PAPER BLOCK {product} — market regime — {regime_detail}"
 
     confirmation_count += 1
     update_paper_control(
@@ -583,6 +634,7 @@ now = datetime.now(timezone.utc)
 seen_at = now.isoformat()
 scan_id = now.strftime("%Y%m%dT%H%M%SZ")
 alerts = []
+regime_allows_entries, regime_detail = market_regime(conn)
 
 for product in PRODUCTS:
     try:
@@ -762,7 +814,14 @@ for product in PRODUCTS:
             )
         )
         paper_entry_alert = consider_paper_entry(
-            conn, now, result[0], result[2], result[1], entry_qualifies
+            conn,
+            now,
+            result[0],
+            result[2],
+            result[1],
+            entry_qualifies,
+            regime_allows_entries,
+            regime_detail,
         )
         if paper_entry_alert:
             alerts.append(paper_entry_alert)

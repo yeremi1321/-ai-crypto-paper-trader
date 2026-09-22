@@ -13,7 +13,7 @@ HORIZONS = [("15m", 15), ("1h", 60), ("4h", 240), ("24h", 1440)]
 
 
 st.set_page_config(
-    page_title="AI Crypto Paper Trader V4", page_icon="📡", layout="wide"
+    page_title="AI Crypto Paper Trader V5", page_icon="📡", layout="wide"
 )
 st.markdown(
     """
@@ -30,7 +30,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-st.title("AI Crypto Paper Trader — V4")
+st.title("AI Crypto Paper Trader — V5")
 st.caption(
     "Live scanner control center • Refreshes every 60 seconds • "
     "Paper research only • No real-money execution"
@@ -697,6 +697,6 @@ st.dataframe(status_summary, use_container_width=True, hide_index=True)
 
 
 st.info(
-    "V4's scanner is scheduled by GitHub Actions. GitHub may delay scheduled jobs "
+    "V5's scanner is scheduled by GitHub Actions. GitHub may delay scheduled jobs "
     "during high load, so scans are not guaranteed to occur at the exact minute."
 )

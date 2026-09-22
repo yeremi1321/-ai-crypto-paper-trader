@@ -179,11 +179,19 @@ scans["seen_at"] = pd.to_datetime(scans["seen_at"], utc=True)
 if not state_events.empty:
     state_events["seen_at"] = pd.to_datetime(state_events["seen_at"], utc=True)
 if not paper_trades.empty:
+    if "strategy_version" not in paper_trades.columns:
+        paper_trades["strategy_version"] = "V4"
+    paper_trades["strategy_version"] = paper_trades["strategy_version"].fillna("V4")
     paper_trades["opened_at"] = pd.to_datetime(paper_trades["opened_at"], utc=True)
     paper_trades["closed_at"] = pd.to_datetime(
         paper_trades["closed_at"], utc=True, errors="coerce"
     )
 if not signal_outcomes.empty:
+    if "strategy_version" not in signal_outcomes.columns:
+        signal_outcomes["strategy_version"] = "V4"
+    signal_outcomes["strategy_version"] = signal_outcomes[
+        "strategy_version"
+    ].fillna("V4")
     signal_outcomes["created_at"] = pd.to_datetime(
         signal_outcomes["created_at"], utc=True
     )
@@ -194,6 +202,12 @@ if not market_regime_log.empty:
     market_regime_log["seen_at"] = pd.to_datetime(
         market_regime_log["seen_at"], utc=True
     )
+if not paper_entry_skips.empty:
+    if "strategy_version" not in paper_entry_skips.columns:
+        paper_entry_skips["strategy_version"] = "V4"
+    paper_entry_skips["strategy_version"] = paper_entry_skips[
+        "strategy_version"
+    ].fillna("V4")
 
 
 latest_scan_id = scans.scan_id.iloc[-1]
@@ -231,7 +245,10 @@ open_now = (
     if not paper_trades.empty else pd.DataFrame()
 )
 closed_now = (
-    paper_trades[paper_trades.status == "CLOSED"].copy()
+    paper_trades[
+        (paper_trades.status == "CLOSED")
+        & (paper_trades.strategy_version == "V5")
+    ].copy()
     if not paper_trades.empty else pd.DataFrame()
 )
 open_pnl = open_now.current_pnl_usd.sum() if not open_now.empty else 0.0
@@ -259,8 +276,8 @@ m1.metric("Scanner", fresh_label, f"{age_minutes} min ago")
 m2.metric("Market filter", regime_label)
 m3.metric("Open positions", f"{len(open_now)}/5")
 m4.metric("Open P/L", f"${open_pnl:+.2f}")
-m5.metric("Realized P/L", f"${realized_pnl:+.2f}")
-m6.metric("Win rate", f"{win_rate_now:.1f}%")
+m5.metric("V5 realized P/L", f"${realized_pnl:+.2f}")
+m6.metric("V5 win rate", f"{win_rate_now:.1f}%")
 st.info(f"**Latest market check:** {regime_detail}")
 st.caption(
     f"Last completed scan: {last_time.strftime('%b %d %H:%M UTC')} • "
@@ -372,19 +389,27 @@ with st.expander("Recent decisions and paper-trade activity", expanded=True):
 
 st.subheader("Automatic Paper Trading")
 st.caption(
-    "Research simulation only: $100 per CONFIRMED entry • 3% stop • 6% target • "
-    "3% trailing stop after a 3% gain • 24-hour maximum hold • "
+    "V5 research simulation only: $100 per CONFIRMED entry • 3% stop • 4% target • "
+    "1% trailing stop after a 2% gain • 24-hour maximum hold • "
     "maximum 5 open trades / $500 exposure • "
-    "2 qualifying scans to enter • 2 weakening scans to exit • "
+    "2 V5-quality scans to enter • loss/profit-aware weakening exit • "
     "2-hour re-entry cooldown • "
-    "BTC plus 60% market trend filter for new entries • "
+    "BTC plus 70% market trend filter for new entries • "
+    "$15 daily realized-loss cutoff • "
     "0.6% estimated fee and 0.1% slippage per side"
 )
 if paper_trades.empty:
     st.info("Waiting for the first CONFIRMED setup to open a simulated trade.")
 else:
     open_trades = paper_trades[paper_trades.status == "OPEN"].copy()
-    closed_trades = paper_trades[paper_trades.status == "CLOSED"].copy()
+    closed_trades = paper_trades[
+        (paper_trades.status == "CLOSED")
+        & (paper_trades.strategy_version == "V5")
+    ].copy()
+    legacy_closed_trades = paper_trades[
+        (paper_trades.status == "CLOSED")
+        & (paper_trades.strategy_version != "V5")
+    ].copy()
 
 
     open_count = len(open_trades)
@@ -407,12 +432,23 @@ else:
 
     p1, p2, p3, p4, p5, p6 = st.columns(6)
     p1.metric("Open paper trades (max 5)", open_count)
-    p2.metric("Closed paper trades", closed_count)
-    p3.metric("Win rate", f"{win_rate:.1f}%")
-    p4.metric("Net paper P/L", f"${total_net_pnl:+.2f}")
-    p5.metric("Avg return", f"{average_return:+.2f}%")
-    p6.metric("Expectancy/trade", f"${expectancy:+.2f}")
-    st.caption(f"Realized paper P/L drawdown: ${realized_drawdown:.2f}")
+    p2.metric("V5 closed trades", closed_count)
+    p3.metric("V5 win rate", f"{win_rate:.1f}%")
+    p4.metric("V5 net paper P/L", f"${total_net_pnl:+.2f}")
+    p5.metric("V5 avg return", f"{average_return:+.2f}%")
+    p6.metric("V5 expectancy/trade", f"${expectancy:+.2f}")
+    st.caption(f"V5 realized paper P/L drawdown: ${realized_drawdown:.2f}")
+
+    if closed_count == 0:
+        st.info("V5 starts clean. Waiting for the first completed V5 paper trade.")
+    if len(legacy_closed_trades):
+        legacy_net = legacy_closed_trades.net_pnl_usd.sum()
+        legacy_wins = (legacy_closed_trades.net_pnl_usd > 0).mean() * 100
+        with st.expander("V4 baseline preserved for comparison"):
+            st.write(
+                f"{len(legacy_closed_trades)} closed trades • "
+                f"{legacy_wins:.1f}% win rate • ${legacy_net:+.2f} net P/L"
+            )
 
 
     if open_count:
@@ -471,8 +507,11 @@ else:
 
 if not paper_entry_skips.empty:
     st.markdown("**Filtered paper entries**")
+    current_skips = paper_entry_skips[
+        paper_entry_skips.strategy_version == "V5"
+    ].copy()
     skip_summary = (
-        paper_entry_skips.groupby("reason", dropna=False)
+        current_skips.groupby("reason", dropna=False)
         .size()
         .reset_index(name="events")
     )
@@ -493,7 +532,9 @@ st.caption(
 if signal_outcomes.empty:
     st.info("Waiting for the first blocked or allowed signal outcome.")
 else:
-    outcome_view = signal_outcomes.copy()
+    outcome_view = signal_outcomes[
+        signal_outcomes.strategy_version == "V5"
+    ].copy()
     outcome_view["btc_aligned"] = outcome_view["btc_aligned"].map(
         {1: "YES", 0: "NO"}
     )

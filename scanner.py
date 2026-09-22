@@ -136,6 +136,15 @@ def db():
         reason TEXT,
         detail TEXT
     )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS market_regime_log(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scan_id TEXT,
+        seen_at TEXT,
+        allows_entries INTEGER,
+        btc_aligned INTEGER,
+        market_breadth REAL,
+        detail TEXT
+    )""")
     conn.execute("""CREATE TABLE IF NOT EXISTS signal_outcomes(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         created_at TEXT,
@@ -919,6 +928,19 @@ seen_at = now.isoformat()
 scan_id = now.strftime("%Y%m%dT%H%M%SZ")
 alerts = []
 regime_allows_entries, regime_detail, btc_aligned, market_breadth = market_regime(conn)
+conn.execute(
+    """INSERT INTO market_regime_log(
+           scan_id, seen_at, allows_entries, btc_aligned, market_breadth, detail
+       ) VALUES(?,?,?,?,?,?)""",
+    (
+        scan_id,
+        seen_at,
+        int(bool(regime_allows_entries)),
+        int(bool(btc_aligned)),
+        market_breadth,
+        regime_detail,
+    ),
+)
 
 
 for product in PRODUCTS:

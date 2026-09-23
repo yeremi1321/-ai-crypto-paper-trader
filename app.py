@@ -1121,6 +1121,6 @@ with st.expander("Open control panel"):
 
 
 st.info(
-    "V4's scanner is scheduled by GitHub Actions. GitHub may delay scheduled jobs "
+    "V5's scanner is scheduled by GitHub Actions. GitHub may delay scheduled jobs "
     "during high load, so scans are not guaranteed to occur at the exact minute."
 )

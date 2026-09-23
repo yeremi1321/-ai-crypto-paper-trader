@@ -20,8 +20,10 @@ jobs:
           cache: "pip"
       - run: pip install -r requirements.txt
       - name: Compile Python
-        run: python -m py_compile scanner.py shadow_research.py research_backtest.py app.py
+        run: python -m py_compile scanner.py shadow_research.py research_backtest.py entry_learning.py app.py
       - name: Shadow research self-test
         run: python shadow_research.py --self-test
       - name: Backtest self-test
         run: python research_backtest.py --self-test
+      - name: Entry learning self-test
+        run: python entry_learning.py --self-test

@@ -157,7 +157,8 @@ def self_test():
     for i, price in enumerate(prices, 1):
         conn.execute("INSERT INTO scans VALUES(?,?,?,?)",
                      (i, (start + pd.Timedelta(minutes=15*i)).isoformat(), "BTC-USD", price))
-    assert evaluate(conn) == 1
+    evaluated = evaluate(conn)
+    assert evaluated == 1, f"expected 1 evaluated decision, got {evaluated}"
     row = conn.execute("SELECT best_entry_style, improvement_pct FROM entry_learning").fetchone()
     assert row[0] in {"WAIT_1_SCAN", "WAIT_2_SCAN", "WAIT_3_SCAN", "PULLBACK_RETEST"}
     assert row[1] > 0

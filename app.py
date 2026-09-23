@@ -225,6 +225,10 @@ if table_exists(conn, "paper_trades"):
     paper_trades = pd.read_sql_query("SELECT * FROM paper_trades ORDER BY id", conn)
 else:
     paper_trades = pd.DataFrame()
+if table_exists(conn, "challenger_trades"):
+    challenger_trades = pd.read_sql_query("SELECT * FROM challenger_trades ORDER BY id", conn)
+else:
+    challenger_trades = pd.DataFrame()
 if table_exists(conn, "paper_entry_skips"):
     paper_entry_skips = pd.read_sql_query(
         "SELECT * FROM paper_entry_skips ORDER BY id", conn
@@ -256,6 +260,7 @@ if os.path.exists(SHADOW_DB):
 
 backtest_runs = pd.DataFrame()
 backtest_results = pd.DataFrame()
+walk_forward_results = pd.DataFrame()
 if os.path.exists(BACKTEST_DB):
     research_conn = sqlite3.connect(BACKTEST_DB)
     if table_exists(research_conn, "runs"):
@@ -266,6 +271,8 @@ if os.path.exists(BACKTEST_DB):
         backtest_results = pd.read_sql_query(
             "SELECT * FROM results", research_conn
         )
+    if table_exists(research_conn, "walk_forward_results"):
+        walk_forward_results = pd.read_sql_query("SELECT * FROM walk_forward_results", research_conn)
     research_conn.close()
 
 
@@ -414,6 +421,31 @@ st.caption(
     f"{scan_count} scan cycles recorded • {int(watches)} WATCH and "
     f"{int(signals)} SIGNAL observations"
 )
+
+st.subheader("V5 vs Challenger")
+if challenger_trades.empty:
+    st.caption("Challenger is ready; results appear after its first simulated trade.")
+else:
+    challenger_closed = challenger_trades[challenger_trades.status == "CLOSED"].copy()
+    challenger_open = challenger_trades[challenger_trades.status == "OPEN"].copy()
+    challenger_realized = challenger_closed.net_pnl_usd.sum() if not challenger_closed.empty else 0.0
+    challenger_unrealized = challenger_open.current_pnl_usd.sum() if not challenger_open.empty else 0.0
+    challenger_win_rate = (challenger_closed.net_pnl_usd > 0).mean() * 100 if not challenger_closed.empty else 0.0
+    h1, h2, h3, h4 = st.columns(4)
+    h1.metric("V5 realized P/L", "$" + f"{realized_pnl:+.2f}")
+    h2.metric("Challenger realized P/L", "$" + f"{challenger_realized:+.2f}")
+    h3.metric("V5 win rate", f"{win_rate_now:.1f}%")
+    h4.metric("Challenger win rate", f"{challenger_win_rate:.1f}%")
+    st.caption(f"V5: {len(closed_now)} closed / {len(open_now)} open • Challenger: {len(challenger_closed)} closed / {len(challenger_open)} open • Challenger open P/L ${challenger_unrealized:+.2f}")
+    if not challenger_closed.empty:
+        st.dataframe(challenger_closed[["opened_at","closed_at","product","entry_score","entry_market_price","exit_market_price","exit_reason","net_pnl_usd","net_return_pct"]].sort_values("closed_at", ascending=False).head(50), use_container_width=True, hide_index=True)
+
+if not walk_forward_results.empty:
+    latest_wf_run = walk_forward_results.run_id.iloc[-1]
+    wf = walk_forward_results[walk_forward_results.run_id == latest_wf_run].copy()
+    st.markdown("**Walk-forward benchmark comparison**")
+    st.caption("Each fold is unseen data after parameter selection on prior history.")
+    st.dataframe(wf[["fold","parameter_id","trades","win_rate","net_pnl","expectancy","profit_factor","max_drawdown","btc_buy_hold_pct","eth_buy_hold_pct","basket_buy_hold_pct"]], use_container_width=True, hide_index=True)
 
 st.subheader("Live signals")
 state_rank = {

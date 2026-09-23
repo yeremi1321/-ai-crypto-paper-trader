@@ -3,7 +3,8 @@ name: Memecoin Shadow Safety Checks
 on:
   pull_request:
     paths:
-      - "memecoin_shadow.py"\n      - "memecoin_discovery.py"
+      - "memecoin_shadow.py"
+      - "memecoin_discovery.py"
       - ".github/workflows/memecoin-shadow-ci.yml"
   push:
     branches:
@@ -20,4 +21,6 @@ jobs:
       - name: Compile
         run: python -m py_compile memecoin_shadow.py memecoin_discovery.py
       - name: Self test
-        run: |\n          python memecoin_shadow.py --self-test\n          python memecoin_discovery.py --self-test
+        run: |
+          python memecoin_shadow.py --self-test
+          python memecoin_discovery.py --self-test

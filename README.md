@@ -12,6 +12,11 @@ paper test without deleting the original 22-trade baseline.
   positions, paper P/L, score changes, recent decisions, and direct TradingView
   links for every tracked coin.
 - Forward research tracks 1h, 4h, and 24h returns after recorded scores.
+- A separate shadow evaluator records 4-hour trend alignment, market regime,
+  and pullback/retest readiness without changing V5 trade decisions.
+- A separate historical backtester tests 48 parameter combinations over 60
+  days by default, ranks them on an unseen 30% test period, and never promotes
+  settings into the live scanner automatically.
 - New paper entries require BTC and at least 60% of fresh tracked markets to be
   above both their 15-minute EMA20 and 1-hour EMA20 trend filters.
 - V5 raises that market breadth requirement to 70% and only enters after two
@@ -31,9 +36,17 @@ Upload/replace these items in the SAME GitHub repository:
 - `scanner.py`
 - `requirements.txt`
 - `.github/workflows/scanner.yml`
+- `.github/workflows/research.yml`
+- `shadow_research.py`
+- `research_backtest.py`
 
 Then open GitHub → Actions → Automatic crypto research scan → Run workflow once.
 After that first successful run, Streamlit will redeploy when the database commit lands.
+
+The shadow evaluator runs after each normal scan. The offline backtest can be
+started from GitHub Actions → V5 Offline Research Lab → Run workflow and also
+runs weekly. Research output is stored separately in `research_shadow.db` and
+`research_backtest.db`.
 
 ## Important
 GitHub scheduled workflows can be delayed and can be disabled after long inactivity on public repositories.

@@ -12,6 +12,8 @@ import streamlit as st
 
 
 DB = "paper_trader_v4.db"
+SHADOW_DB = "research_shadow.db"
+BACKTEST_DB = "research_backtest.db"
 HORIZONS = [("15m", 15), ("1h", 60), ("4h", 240), ("24h", 1440)]
 
 
@@ -243,6 +245,29 @@ else:
     market_regime_log = pd.DataFrame()
 conn.close()
 
+shadow_evaluations = pd.DataFrame()
+if os.path.exists(SHADOW_DB):
+    research_conn = sqlite3.connect(SHADOW_DB)
+    if table_exists(research_conn, "shadow_evaluations"):
+        shadow_evaluations = pd.read_sql_query(
+            "SELECT * FROM shadow_evaluations ORDER BY id", research_conn
+        )
+    research_conn.close()
+
+backtest_runs = pd.DataFrame()
+backtest_results = pd.DataFrame()
+if os.path.exists(BACKTEST_DB):
+    research_conn = sqlite3.connect(BACKTEST_DB)
+    if table_exists(research_conn, "runs"):
+        backtest_runs = pd.read_sql_query(
+            "SELECT * FROM runs ORDER BY created_at", research_conn
+        )
+    if table_exists(research_conn, "results"):
+        backtest_results = pd.read_sql_query(
+            "SELECT * FROM results", research_conn
+        )
+    research_conn.close()
+
 
 if scans.empty:
     st.info("Waiting for the first scheduled scan.")
@@ -282,6 +307,14 @@ if not paper_entry_skips.empty:
     paper_entry_skips["strategy_version"] = paper_entry_skips[
         "strategy_version"
     ].fillna("V4")
+if not shadow_evaluations.empty:
+    shadow_evaluations["seen_at"] = pd.to_datetime(
+        shadow_evaluations["seen_at"], utc=True
+    )
+if not backtest_runs.empty:
+    backtest_runs["created_at"] = pd.to_datetime(
+        backtest_runs["created_at"], utc=True
+    )
 
 
 latest_scan_id = scans.scan_id.iloc[-1]
@@ -936,6 +969,126 @@ if not evaluated.empty:
 st.subheader("Performance by Scanner Status")
 status_summary = performance_summary(scan_performance, "status")
 st.dataframe(status_summary, use_container_width=True, hide_index=True)
+
+st.subheader("Research Lab — shadow only")
+st.info(
+    "These experiments cannot open, close, or resize V5 trades. They compare "
+    "4-hour alignment, market regimes, pullback/retest entries, and parameter "
+    "combinations before any rule is considered for promotion."
+)
+
+if shadow_evaluations.empty:
+    st.caption(
+        "The next scanner cycle will create the first shadow evaluation. "
+        "V5 continues operating normally."
+    )
+else:
+    latest_shadow_id = shadow_evaluations.scan_id.iloc[-1]
+    latest_shadow = shadow_evaluations[
+        shadow_evaluations.scan_id == latest_shadow_id
+    ].copy()
+    shadow_regime = latest_shadow.market_regime.mode().iloc[0]
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Shadow market", shadow_regime)
+    s2.metric(
+        "4h bullish",
+        f"{int(latest_shadow.trend_4h.sum())}/{len(latest_shadow)}",
+    )
+    s3.metric("Retest ready", int(latest_shadow.pullback_ready.sum()))
+    s4.metric(
+        "Would enter",
+        int((latest_shadow.shadow_decision == "WOULD_ENTER").sum()),
+    )
+    latest_shadow["trend_4h"] = latest_shadow.trend_4h.map(
+        {1: "Bullish", 0: "Not bullish"}
+    )
+    latest_shadow["pullback_ready"] = latest_shadow.pullback_ready.map(
+        {1: "Ready", 0: "Waiting"}
+    )
+    st.dataframe(
+        latest_shadow[
+            [
+                "product", "score", "rel_volume", "state", "trend_4h",
+                "market_regime", "pullback_ready", "shadow_decision", "detail",
+            ]
+        ].sort_values(["shadow_decision", "score"], ascending=[False, False]),
+        use_container_width=True,
+        hide_index=True,
+    )
+    shadow_entries = shadow_evaluations[
+        shadow_evaluations.shadow_decision == "WOULD_ENTER"
+    ]
+    if not shadow_entries.empty:
+        outcome_summary = []
+        for label in ["1h", "4h", "24h"]:
+            values = shadow_entries[f"return_{label}_pct"].dropna()
+            outcome_summary.append(
+                {
+                    "horizon": label,
+                    "evaluated": len(values),
+                    "win_rate_pct": (values > 0).mean() * 100 if len(values) else None,
+                    "average_return_pct": values.mean() if len(values) else None,
+                }
+            )
+        st.markdown("**Shadow-entry forward results**")
+        st.dataframe(
+            pd.DataFrame(outcome_summary),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+if backtest_results.empty or backtest_runs.empty:
+    st.caption(
+        "Historical parameter results will appear after the first offline "
+        "research workflow finishes."
+    )
+else:
+    latest_run = backtest_runs.iloc[-1]
+    test_results = backtest_results[
+        (backtest_results.run_id == latest_run.run_id)
+        & (backtest_results.segment == "TEST")
+    ].copy()
+    train_results = backtest_results[
+        (backtest_results.run_id == latest_run.run_id)
+        & (backtest_results.segment == "TRAIN")
+    ][["parameter_id", "expectancy", "profit_factor"]].rename(
+        columns={
+            "expectancy": "train_expectancy",
+            "profit_factor": "train_profit_factor",
+        }
+    )
+    comparison = test_results.merge(train_results, on="parameter_id", how="left")
+    comparison["expectancy_gap"] = (
+        comparison.expectancy - comparison.train_expectancy
+    ).abs()
+    minimum_samples = max(10, int(comparison.trades.quantile(0.35)))
+    ranked = comparison[comparison.trades >= minimum_samples].copy()
+    ranked = ranked.sort_values(
+        ["expectancy", "profit_factor", "expectancy_gap"],
+        ascending=[False, False, True],
+    )
+    st.markdown(
+        f"**Offline backtest:** {int(latest_run.days)} days • "
+        f"{int(latest_run.products)} coins • "
+        f"{int(latest_run.parameter_sets)} parameter sets • "
+        "30% unseen test segment"
+    )
+    st.dataframe(
+        ranked[
+            [
+                "min_score", "min_volume", "confirmation_scans", "require_4h",
+                "entry_mode", "trades", "win_rate", "net_pnl", "expectancy",
+                "profit_factor", "max_drawdown", "train_expectancy",
+                "expectancy_gap",
+            ]
+        ].head(12),
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.caption(
+        "Results are ranked for research only. No winning parameter set is "
+        "automatically copied into V5."
+    )
 
 st.subheader("Settings & emergency controls")
 with st.expander("Open control panel"):

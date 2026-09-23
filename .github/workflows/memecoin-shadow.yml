@@ -36,5 +36,5 @@ jobs:
           if [ -f memecoin_shadow.db ]; then git add memecoin_shadow.db; fi
           git diff --cached --quiet && exit 0
           git commit -m "Record memecoin shadow scan"
-          git pull --rebase origin feature/memecoin-shadow
-          git push
+          git pull --rebase origin main
+          git push origin HEAD:main

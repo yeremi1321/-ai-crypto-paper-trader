@@ -80,6 +80,69 @@ def evaluate(conn):
     return inserted
 
 
+def table_exists(conn, name):
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
+def evaluate_trades(conn):
+    """Study completed V5 and Challenger trades without changing either strategy."""
+    ensure_schema(conn)
+    scans = pd.read_sql_query("SELECT id, seen_at, product, price FROM scans ORDER BY id", conn)
+    if scans.empty:
+        return 0
+    scans["seen_at"] = pd.to_datetime(scans.seen_at, utc=True)
+    sources = []
+    if table_exists(conn, "paper_trades"):
+        sources.append(("V5", "paper_trades"))
+    if table_exists(conn, "challenger_trades"):
+        sources.append(("CHALLENGER", "challenger_trades"))
+    inserted = 0
+    for source, table in sources:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(" + table + ")").fetchall()}
+        mfe_expr = "mfe_pct" if "mfe_pct" in cols else "NULL AS mfe_pct"
+        mae_expr = "mae_pct" if "mae_pct" in cols else "NULL AS mae_pct"
+        trades = pd.read_sql_query(
+            f"""SELECT id, product, opened_at, closed_at, entry_market_price,
+                       exit_market_price, net_return_pct, exit_reason,
+                       {mfe_expr}, {mae_expr}
+                FROM {table} WHERE status='CLOSED' AND closed_at IS NOT NULL ORDER BY id""", conn)
+        for t in trades.itertuples():
+            exists = conn.execute("SELECT 1 FROM trade_learning WHERE source=? AND trade_id=?", (source, t.id)).fetchone()
+            if exists or not t.entry_market_price or not t.exit_market_price:
+                continue
+            opened = pd.to_datetime(t.opened_at, utc=True)
+            closed = pd.to_datetime(t.closed_at, utc=True)
+            path = scans[(scans.product == t.product) & (scans.seen_at > opened) & (scans.seen_at < closed)].head(HORIZON_SCANS)
+            candidates = [("ACTUAL", float(t.entry_market_price))]
+            for delay in DELAY_SCANS:
+                if len(path) >= delay:
+                    candidates.append((f"WAIT_{delay}_SCAN", float(path.price.iloc[delay - 1])))
+            pullbacks = path[path.price <= float(t.entry_market_price)]
+            if not pullbacks.empty:
+                candidates.append(("PULLBACK_RETEST", float(pullbacks.price.iloc[0])))
+            exit_market = float(t.exit_market_price)
+            scored = [(style, price, (exit_market / price - 1) * 100) for style, price in candidates if price > 0]
+            style, best_price, cf_return = max(scored, key=lambda x: x[2])
+            actual_return = float(t.net_return_pct or 0)
+            improvement = cf_return - actual_return
+            mfe = None if pd.isna(t.mfe_pct) else float(t.mfe_pct)
+            mae = None if pd.isna(t.mae_pct) else float(t.mae_pct)
+            capture = (actual_return / mfe * 100) if mfe and mfe > 0 else None
+            detail = f"{source}: {style} was best among tested entry timings; {improvement:+.2f}pp vs recorded net return."
+            conn.execute("""INSERT OR IGNORE INTO trade_learning(
+                evaluated_at, source, trade_id, product, opened_at, closed_at, entry_price,
+                exit_price, actual_return_pct, mfe_pct, mae_pct, exit_reason, best_entry_style,
+                best_entry_price, counterfactual_return_pct, entry_improvement_pct,
+                capture_ratio, detail
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (pd.Timestamp.now(tz="UTC").isoformat(), source, t.id, t.product, t.opened_at,
+                 t.closed_at, float(t.entry_market_price), exit_market, actual_return, mfe, mae,
+                 t.exit_reason, style, best_price, cf_return, improvement, capture, detail))
+            inserted += 1
+    conn.commit()
+    return inserted
+
+
 def self_test():
     conn = sqlite3.connect(":memory:")
     conn.execute("""CREATE TABLE decision_log(
@@ -110,5 +173,7 @@ if __name__ == "__main__":
         self_test()
     else:
         conn = sqlite3.connect(args.db)
-        print(f"entry learning: {evaluate(conn)} new decisions evaluated")
+        decision_count = evaluate(conn)
+        trade_count = evaluate_trades(conn)
+        print(f"entry learning: {decision_count} decisions + {trade_count} completed trades evaluated")
         conn.close()

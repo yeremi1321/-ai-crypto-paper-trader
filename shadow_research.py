@@ -10,6 +10,9 @@ import requests
 
 LIVE_DB = "paper_trader_v4.db"
 SHADOW_DB = "research_shadow.db"
+UMBRELLA_ACTIVATION_PCT = 2.0
+UMBRELLA_LOCK_DISTANCE_PCT = 0.50
+SETUP_MIN_SAMPLES = 20
 
 
 def candles(product, granularity, limit=220):
@@ -70,12 +73,42 @@ def pullback_retest(frame):
     return ready, level
 
 
-def classify_regime(btc_4h, breadth):
+def classify_regime(btc_4h, breadth, volatility_pct=None):
+    """Research-only regime label; volatility is optional for backward compatibility."""
+    high_vol = volatility_pct is not None and volatility_pct >= 2.5
     if btc_4h and breadth >= 0.70:
-        return "TRENDING_UP"
+        return "TRENDING_UP_HIGH_VOL" if high_vol else "TRENDING_UP"
     if not btc_4h and breadth < 0.40:
-        return "RISK_OFF"
-    return "CHOPPY"
+        return "RISK_OFF_HIGH_VOL" if high_vol else "RISK_OFF"
+    return "CHOPPY_HIGH_VOL" if high_vol else "CHOPPY"
+
+
+def setup_key(item, regime):
+    """Stable, deterministic setup fingerprint; no AI-generated confidence."""
+    score_bucket = int(float(item["score"]) // 5 * 5)
+    volume_bucket = "HIGH" if float(item["rel_volume"]) >= 1.5 else "NORMAL"
+    structure = "RETEST" if item["pullback_ready"] else "MOMENTUM"
+    return f"{structure}|S{score_bucket}|V{volume_bucket}|4H{int(bool(item['trend_4h']))}|{regime}"
+
+
+def setup_stats(conn, key):
+    row = conn.execute(
+        """SELECT COUNT(*),
+                  AVG(CASE WHEN return_24h_pct > 0 THEN 1.0 ELSE 0.0 END),
+                  AVG(return_24h_pct), AVG(mfe_pct), AVG(mae_pct)
+           FROM shadow_evaluations
+           WHERE setup_key=? AND shadow_decision='WOULD_ENTER' AND return_24h_pct IS NOT NULL""",
+        (key,),
+    ).fetchone()
+    samples = int(row[0] or 0)
+    return {
+        "samples": samples,
+        "win_rate": float(row[1] * 100) if row[1] is not None else None,
+        "expectancy_pct": float(row[2]) if row[2] is not None else None,
+        "avg_mfe_pct": float(row[3]) if row[3] is not None else None,
+        "avg_mae_pct": float(row[4]) if row[4] is not None else None,
+        "validated": samples >= SETUP_MIN_SAMPLES,
+    }
 
 
 def init_db(path):
@@ -99,9 +132,36 @@ def init_db(path):
             return_1h_pct REAL,
             return_4h_pct REAL,
             return_24h_pct REAL,
+            highest_price REAL,
+            lowest_price REAL,
+            mfe_pct REAL,
+            mae_pct REAL,
+            umbrella_activated INTEGER DEFAULT 0,
+            umbrella_stop_price REAL,
+            umbrella_would_exit INTEGER DEFAULT 0,
+            setup_key TEXT,
+            setup_samples INTEGER DEFAULT 0,
+            setup_win_rate REAL,
+            setup_expectancy_pct REAL,
+            setup_avg_mfe_pct REAL,
+            setup_avg_mae_pct REAL,
+            setup_validated INTEGER DEFAULT 0,
             UNIQUE(scan_id, product)
         )"""
     )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(shadow_evaluations)").fetchall()}
+    additions = {
+        "highest_price": "REAL", "lowest_price": "REAL", "mfe_pct": "REAL", "mae_pct": "REAL",
+        "umbrella_activated": "INTEGER DEFAULT 0", "umbrella_stop_price": "REAL",
+        "umbrella_would_exit": "INTEGER DEFAULT 0",
+        "setup_key": "TEXT", "setup_samples": "INTEGER DEFAULT 0", "setup_win_rate": "REAL",
+        "setup_expectancy_pct": "REAL", "setup_avg_mfe_pct": "REAL", "setup_avg_mae_pct": "REAL",
+        "setup_validated": "INTEGER DEFAULT 0",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE shadow_evaluations ADD COLUMN {name} {definition}")
+    conn.commit()
     return conn
 
 
@@ -136,19 +196,27 @@ def latest_live_rows(path):
 def update_outcomes(conn, now, current_prices):
     open_rows = conn.execute(
         """SELECT id, seen_at, product, price, return_1h_pct,
-                  return_4h_pct, return_24h_pct
+                  return_4h_pct, return_24h_pct, highest_price, lowest_price,
+                  umbrella_activated, umbrella_would_exit
            FROM shadow_evaluations
            WHERE shadow_decision='WOULD_ENTER'
              AND (return_1h_pct IS NULL OR return_4h_pct IS NULL
                   OR return_24h_pct IS NULL)"""
     ).fetchall()
     for row in open_rows:
-        row_id, seen_at, product, entry_price, r1, r4, r24 = row
+        row_id, seen_at, product, entry_price, r1, r4, r24, previous_high, previous_low, umbrella_active, umbrella_exit = row
         current_price = current_prices.get(product)
         if current_price is None:
             continue
         age_hours = (now - datetime.fromisoformat(seen_at)).total_seconds() / 3600
         result = (current_price / entry_price - 1) * 100
+        highest = max(previous_high or entry_price, current_price)
+        lowest = min(previous_low or entry_price, current_price)
+        mfe = (highest / entry_price - 1) * 100
+        mae = (lowest / entry_price - 1) * 100
+        umbrella_active = int(bool(umbrella_active) or mfe >= UMBRELLA_ACTIVATION_PCT)
+        umbrella_stop = highest * (1 - UMBRELLA_LOCK_DISTANCE_PCT / 100) if umbrella_active else None
+        umbrella_exit = int(bool(umbrella_exit) or (umbrella_stop is not None and current_price <= umbrella_stop))
         if age_hours >= 1 and r1 is None:
             r1 = result
         if age_hours >= 4 and r4 is None:
@@ -157,9 +225,12 @@ def update_outcomes(conn, now, current_prices):
             r24 = result
         conn.execute(
             """UPDATE shadow_evaluations
-               SET return_1h_pct=?, return_4h_pct=?, return_24h_pct=?
+               SET return_1h_pct=?, return_4h_pct=?, return_24h_pct=?,
+                   highest_price=?, lowest_price=?, mfe_pct=?, mae_pct=?,
+                   umbrella_activated=?, umbrella_stop_price=?, umbrella_would_exit=?
                WHERE id=?""",
-            (r1, r4, r24, row_id),
+            (r1, r4, r24, highest, lowest, mfe, mae, umbrella_active,
+             umbrella_stop, umbrella_exit, row_id),
         )
 
 
@@ -189,11 +260,21 @@ def run_shadow(live_db, shadow_db):
         (item["trend_4h"] for item in research if item["product"] == "BTC-USD"),
         False,
     )
-    regime = classify_regime(btc_4h, breadth)
+    btc_item = next((item for item in research if item["product"] == "BTC-USD"), None)
+    btc_volatility = None
+    if btc_item is not None:
+        try:
+            btc_frame = candles("BTC-USD", 900)
+            btc_volatility = float(btc_frame.close.pct_change().rolling(20).std().iloc[-1] * 100 * np.sqrt(96))
+        except Exception:
+            btc_volatility = None
+    regime = classify_regime(btc_4h, breadth, btc_volatility)
     conn = init_db(shadow_db)
     current_prices = {item["product"]: float(item["price"]) for item in research}
     update_outcomes(conn, now, current_prices)
     for item in research:
+        key = setup_key(item, regime)
+        history = setup_stats(conn, key)
         eligible_state = item.get("state") in (
             "CONFIRMED", "STRENGTHENING", "WATCH"
         )
@@ -202,7 +283,7 @@ def run_shadow(live_db, shadow_db):
             "volume>=1.25x": item["rel_volume"] >= 1.25,
             "state ready": eligible_state,
             "4h bullish": item["trend_4h"],
-            "trending market": regime == "TRENDING_UP",
+            "trending market": regime.startswith("TRENDING_UP"),
             "pullback/retest": item["pullback_ready"],
         }
         decision = "WOULD_ENTER" if all(checks.values()) else "OBSERVE"
@@ -213,16 +294,22 @@ def run_shadow(live_db, shadow_db):
             """INSERT OR IGNORE INTO shadow_evaluations(
                 scan_id, seen_at, product, score, price, rel_volume, state,
                 trend_4h, market_regime, pullback_ready, retest_level,
-                shadow_decision, detail
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                shadow_decision, detail, highest_price, lowest_price, mfe_pct, mae_pct,
+                umbrella_activated, umbrella_stop_price, umbrella_would_exit,
+                setup_key, setup_samples, setup_win_rate, setup_expectancy_pct,
+                setup_avg_mfe_pct, setup_avg_mae_pct, setup_validated
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 scan_id, now.isoformat(), item["product"], item["score"],
                 item["price"], item["rel_volume"], item.get("state"),
                 int(item["trend_4h"]), regime, int(item["pullback_ready"]),
-                item["retest_level"], decision, detail,
+                item["retest_level"], decision, detail, item["price"], item["price"], 0.0, 0.0,
+                0, None, 0, key, history["samples"], history["win_rate"],
+                history["expectancy_pct"], history["avg_mfe_pct"], history["avg_mae_pct"],
+                int(history["validated"]),
             ),
         )
-        print(item["product"], regime, decision)
+        print(item["product"], regime, decision, key, f"samples={history['samples']}", f"validated={history['validated']}")
     conn.commit()
     conn.close()
 
@@ -231,6 +318,9 @@ def self_test():
     assert classify_regime(True, 0.75) == "TRENDING_UP"
     assert classify_regime(False, 0.20) == "RISK_OFF"
     assert classify_regime(True, 0.45) == "CHOPPY"
+    assert classify_regime(True, 0.75, 3.0) == "TRENDING_UP_HIGH_VOL"
+    test_item = {"score": 82, "rel_volume": 1.6, "pullback_ready": True, "trend_4h": True}
+    assert setup_key(test_item, "TRENDING_UP").startswith("RETEST|S80|VHIGH|4H1|")
     periods = 80
     close = np.linspace(100, 110, periods)
     frame = pd.DataFrame(

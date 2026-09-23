@@ -22,7 +22,9 @@ STOP_PCT = 3.0
 TARGET_PCT = 4.0
 TRAIL_ACTIVATION_PCT = 2.0
 TRAIL_DISTANCE_PCT = 1.0
+UMBRELLA_DISTANCE_PCT = 0.50
 MAX_HOLD_BARS = 96
+WALK_FORWARD_FOLDS = 4
 
 
 def get_coinbase_json(session, url, params, attempts=4):
@@ -181,7 +183,8 @@ def entry_mask(frame, params):
     return mask.fillna(False)
 
 
-def close_trade(frame, entry_index):
+def close_trade(frame, entry_index, exit_mode="BASELINE"):
+
     entry_market = float(frame.at[entry_index, "close"])
     entry_fill = entry_market * (1 + SLIPPAGE_RATE)
     entry_fee = NOTIONAL * FEE_RATE
@@ -202,9 +205,12 @@ def close_trade(frame, entry_index):
             exit_market, exit_reason, exit_index = target, "PROFIT_TARGET", index
             break
         high_gain = (highest / entry_market - 1) * 100
-        trail = highest * (1 - TRAIL_DISTANCE_PCT / 100)
+        distance = UMBRELLA_DISTANCE_PCT if exit_mode == "UMBRELLA" else TRAIL_DISTANCE_PCT
+        trail = highest * (1 - distance / 100)
         if high_gain >= TRAIL_ACTIVATION_PCT and row.low <= trail:
-            exit_market, exit_reason, exit_index = trail, "TRAILING_STOP", index
+            exit_market = trail
+            exit_reason = "UMBRELLA_STOP" if exit_mode == "UMBRELLA" else "TRAILING_STOP"
+            exit_index = index
             break
     exit_fill = exit_market * (1 - SLIPPAGE_RATE)
     exit_value = quantity * exit_fill
@@ -221,8 +227,38 @@ def close_trade(frame, entry_index):
     }
 
 
-def simulate(product, frame, params):
+def benchmark_return(frame, start_at, end_at):
+    window = frame[(frame.decision_at >= start_at) & (frame.decision_at <= end_at)]
+    if len(window) < 2:
+        return None
+    return float((window.close.iloc[-1] / window.close.iloc[0] - 1) * 100)
+
+
+def walk_forward_windows(frames, folds=WALK_FORWARD_FOLDS):
+    start = max(frame.decision_at.min() for frame in frames.values())
+    end = min(frame.decision_at.max() for frame in frames.values())
+    span = end - start
+    # Expanding training window followed by strictly unseen test windows.
+    train_fraction = 0.40
+    train_end = start + span * train_fraction
+    remaining = end - train_end
+    test_span = remaining / folds
+    windows = []
+    for fold in range(1, folds + 1):
+        test_start = train_end + test_span * (fold - 1)
+        test_end = train_end + test_span * fold
+        windows.append((fold, start, test_start, test_start, test_end))
+    return windows
+
+
+def simulate(product, frame, params, start_at=None, end_at=None):
     qualifying = entry_mask(frame, params)
+    allowed = pd.Series(True, index=frame.index)
+    if start_at is not None:
+        allowed &= frame.decision_at >= start_at
+    if end_at is not None:
+        allowed &= frame.decision_at < end_at
+    qualifying &= allowed
     trades = []
     confirmations = 0
     index = 1
@@ -231,7 +267,7 @@ def simulate(product, frame, params):
         if confirmations < params["confirmation_scans"]:
             index += 1
             continue
-        result = close_trade(frame, index)
+        result = close_trade(frame, index, params.get("exit_mode", "BASELINE"))
         trades.append(
             {
                 "product": product,
@@ -270,12 +306,13 @@ def metrics(trades):
 
 
 def parameter_grid():
-    for score, volume, confirmations, require_4h, mode in itertools.product(
+    for score, volume, confirmations, require_4h, mode, exit_mode in itertools.product(
         [75.0, 80.0, 82.0],
         [1.25, 1.50],
-        [1, 2],
+        [1, 2, 3],
         [False, True],
         ["BREAKOUT", "RETEST"],
+        ["BASELINE", "UMBRELLA"],
     ):
         yield {
             "min_score": score,
@@ -283,6 +320,7 @@ def parameter_grid():
             "confirmation_scans": confirmations,
             "require_4h": require_4h,
             "entry_mode": mode,
+            "exit_mode": exit_mode,
         }
 
 
@@ -301,6 +339,12 @@ def init_db(path):
             win_rate REAL, net_pnl REAL, expectancy REAL, profit_factor REAL,
             max_drawdown REAL
         );
+        CREATE TABLE IF NOT EXISTS walk_forward_results(
+            run_id TEXT, fold INTEGER, parameter_id INTEGER, segment TEXT,
+            start_at TEXT, end_at TEXT, trades INTEGER, win_rate REAL,
+            net_pnl REAL, expectancy REAL, profit_factor REAL, max_drawdown REAL,
+            btc_buy_hold_pct REAL, eth_buy_hold_pct REAL, basket_buy_hold_pct REAL
+        );
         CREATE TABLE IF NOT EXISTS trades(
             run_id TEXT, parameter_id INTEGER, segment TEXT, product TEXT,
             entry_at TEXT, exit_at TEXT, entry_score REAL, entry_volume REAL,
@@ -310,6 +354,35 @@ def init_db(path):
         """
     )
     return conn
+
+
+def run_walk_forward(conn, run_id, frames, parameter_sets):
+    conn.execute("DELETE FROM walk_forward_results")
+    windows = walk_forward_windows(frames)
+    for fold, train_start, train_end, test_start, test_end in windows:
+        train_scores = []
+        for parameter_id, params in enumerate(parameter_sets, start=1):
+            train_trades = []
+            for product, frame in frames.items():
+                train_trades.extend(simulate(product, frame, params, train_start, train_end))
+            train_scores.append((metrics(train_trades)["expectancy"], parameter_id, params))
+        _, parameter_id, chosen = max(train_scores, key=lambda row: row[0])
+        test_trades = []
+        for product, frame in frames.items():
+            test_trades.extend(simulate(product, frame, chosen, test_start, test_end))
+        result = metrics(test_trades)
+        btc = benchmark_return(frames["BTC-USD"], test_start, test_end) if "BTC-USD" in frames else None
+        eth = benchmark_return(frames["ETH-USD"], test_start, test_end) if "ETH-USD" in frames else None
+        basket_values = [benchmark_return(frame, test_start, test_end) for frame in frames.values()]
+        basket_values = [value for value in basket_values if value is not None]
+        basket = float(np.mean(basket_values)) if basket_values else None
+        conn.execute(
+            """INSERT INTO walk_forward_results VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (run_id, fold, parameter_id, "TEST", test_start.isoformat(), test_end.isoformat(),
+             result["trades"], result["win_rate"], result["net_pnl"], result["expectancy"],
+             result["profit_factor"], result["max_drawdown"], btc, eth, basket),
+        )
+        print(f"Walk-forward fold {fold}: parameter {parameter_id}, trades={result['trades']}, expectancy={result['expectancy']:.3f}")
 
 
 def run_backtest(days, products, db_path):
@@ -326,6 +399,7 @@ def run_backtest(days, products, db_path):
     conn = init_db(db_path)
     conn.execute("DELETE FROM results")
     conn.execute("DELETE FROM trades")
+    run_walk_forward(conn, run_id, frames, parameter_sets)
     for parameter_id, params in enumerate(parameter_sets, start=1):
         all_trades = []
         for product, frame in frames.items():
@@ -395,7 +469,10 @@ def self_test():
     params = next(parameter_grid())
     result = simulate("TEST-USD", frame, params)
     assert isinstance(result, list)
-    assert len(list(parameter_grid())) == 48
+    assert len(list(parameter_grid())) == 144
+    windows = walk_forward_windows({"TEST": frame}, folds=3)
+    assert len(windows) == 3
+    assert all(test_start >= train_end for _, _, train_end, test_start, _ in windows)
     print("research_backtest self-test passed")
 
 

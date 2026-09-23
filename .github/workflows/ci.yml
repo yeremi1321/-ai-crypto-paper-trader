@@ -1,0 +1,29 @@
+name: Research Safety Checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - feature/research-upgrades
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - run: pip install -r requirements.txt
+      - name: Compile Python
+        run: python -m py_compile scanner.py shadow_research.py research_backtest.py entry_learning.py app.py
+      - name: Shadow research self-test
+        run: python shadow_research.py --self-test
+      - name: Backtest self-test
+        run: python research_backtest.py --self-test
+      - name: Entry learning self-test
+        run: python entry_learning.py --self-test

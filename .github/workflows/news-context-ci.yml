@@ -1,0 +1,20 @@
+name: News Context Safety Checks
+on:
+  pull_request:
+    paths:
+      - "news_context.py"
+      - ".github/workflows/news-context-ci.yml"
+  push:
+    branches:
+      - feature/news-context-shadow
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python -m py_compile news_context.py
+      - run: python news_context.py --self-test

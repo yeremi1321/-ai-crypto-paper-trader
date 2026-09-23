@@ -98,6 +98,7 @@ def candles(product, granularity, limit=220):
             f"{product} at {granularity}s"
         )
     print(f"{product} {granularity}s shadow candles source={source} rows={len(completed)}")
+    completed.attrs["data_source"] = source
     return completed
 
 
@@ -159,6 +160,10 @@ def init_db(path):
             UNIQUE(scan_id, product)
         )"""
     )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(shadow_evaluations)").fetchall()}
+    if "data_source" not in columns:
+        conn.execute("ALTER TABLE shadow_evaluations ADD COLUMN data_source TEXT")
+    conn.commit()
     return conn
 
 
@@ -230,12 +235,15 @@ def run_shadow(live_db, shadow_db):
             quarter_hour = candles(row["product"], 900)
             aligned_4h = trend_4h(four_hour)
             retest_ready, retest_level = pullback_retest(quarter_hour)
+            sources = {four_hour.attrs.get("data_source"), quarter_hour.attrs.get("data_source")}
+            data_source = "Kraken fallback" if "Kraken" in sources else "Coinbase"
             research.append(
                 {
                     **row.to_dict(),
                     "trend_4h": aligned_4h,
                     "pullback_ready": retest_ready,
                     "retest_level": retest_level,
+                    "data_source": data_source,
                 }
             )
         except Exception as error:
@@ -273,13 +281,13 @@ def run_shadow(live_db, shadow_db):
             """INSERT OR IGNORE INTO shadow_evaluations(
                 scan_id, seen_at, product, score, price, rel_volume, state,
                 trend_4h, market_regime, pullback_ready, retest_level,
-                shadow_decision, detail
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                shadow_decision, detail, data_source
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 scan_id, now.isoformat(), item["product"], item["score"],
                 item["price"], item["rel_volume"], item.get("state"),
                 int(item["trend_4h"]), regime, int(item["pullback_ready"]),
-                item["retest_level"], decision, detail,
+                item["retest_level"], decision, detail, item["data_source"],
             ),
         )
         print(item["product"], regime, decision)

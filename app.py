@@ -18,7 +18,7 @@ HORIZONS = [("15m", 15), ("1h", 60), ("4h", 240), ("24h", 1440)]
 
 
 st.set_page_config(
-    page_title="AI Crypto Paper Trader V4", page_icon="📡", layout="wide"
+    page_title="V5 Trading Control Center", page_icon="📡", layout="wide"
 )
 st.markdown(
     """
@@ -308,6 +308,8 @@ if not paper_entry_skips.empty:
         "strategy_version"
     ].fillna("V4")
 if not shadow_evaluations.empty:
+    if "data_source" not in shadow_evaluations.columns:
+        shadow_evaluations["data_source"] = "Legacy / unknown"
     shadow_evaluations["seen_at"] = pd.to_datetime(
         shadow_evaluations["seen_at"], utc=True
     )
@@ -393,11 +395,28 @@ if not market_regime_log.empty:
 
 scanner_color = "#16c784" if fresh_label == "LIVE" else "#ff4b4b"
 regime_color = "#16c784" if regime_label == "ENTRIES ALLOWED" else "#ff4b4b"
+shadow_health = "WAITING"
+shadow_source = "No completed shadow cycle"
+shadow_color = "#f4c542"
+if not shadow_evaluations.empty:
+    latest_shadow_time = shadow_evaluations["seen_at"].max()
+    shadow_age = max(
+        0, int((pd.Timestamp.now(tz="UTC") - latest_shadow_time).total_seconds() / 60)
+    )
+    latest_shadow_rows = shadow_evaluations[
+        shadow_evaluations["seen_at"] == latest_shadow_time
+    ]
+    sources = sorted(set(latest_shadow_rows["data_source"].dropna().astype(str)))
+    shadow_source = ", ".join(sources) if sources else "Legacy / unknown"
+    shadow_health = "HEALTHY" if shadow_age <= 45 else "STALE"
+    shadow_color = "#16c784" if shadow_health == "HEALTHY" else "#ff8c42"
 st.markdown(
     f'<div class="health-row">'
     f'<span class="health-pill">Scanner: <b style="color:{scanner_color}">{fresh_label}</b></span>'
     f'<span class="health-pill">Last scan: <b>{age_minutes} min ago</b></span>'
     f'<span class="health-pill">Market: <b style="color:{regime_color}">{regime_label}</b></span>'
+    f'<span class="health-pill">Research: <b style="color:{shadow_color}">{shadow_health}</b></span>'
+    f'<span class="health-pill">Research data: <b>{html.escape(shadow_source)}</b></span>'
     f'<span class="health-pill">{html.escape(str(regime_detail))}</span></div>',
     unsafe_allow_html=True,
 )

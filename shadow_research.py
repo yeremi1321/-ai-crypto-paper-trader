@@ -12,8 +12,15 @@ LIVE_DB = "paper_trader_v4.db"
 SHADOW_DB = "research_shadow.db"
 
 
-def candles(product, granularity, limit=220):
-    payload = None
+KRAKEN_PAIRS = {
+    "BTC-USD": "XBTUSD", "ETH-USD": "ETHUSD", "SOL-USD": "SOLUSD",
+    "DOGE-USD": "DOGEUSD", "SHIB-USD": "SHIBUSD", "AVAX-USD": "AVAXUSD",
+    "LINK-USD": "LINKUSD", "ADA-USD": "ADAUSD", "XRP-USD": "XRPUSD",
+    "LTC-USD": "LTCUSD", "BCH-USD": "BCHUSD",
+}
+
+
+def _coinbase_candles(product, granularity, limit):
     last_error = None
     for attempt in range(4):
         try:
@@ -23,25 +30,75 @@ def candles(product, granularity, limit=220):
                 headers={"User-Agent": "v5-shadow-research"},
                 timeout=20,
             )
+            if response.status_code != 200:
+                print(
+                    f"{product} Coinbase candles HTTP {response.status_code} "
+                    f"(attempt {attempt + 1}/4)"
+                )
             response.raise_for_status()
             payload = response.json()
             if not isinstance(payload, list):
                 raise RuntimeError(f"Unexpected Coinbase response: {payload!r}")
-            break
+            return payload[:limit]
         except (requests.RequestException, ValueError, RuntimeError) as exc:
             last_error = exc
             if attempt < 3:
                 time.sleep(1.5 * (attempt + 1))
-    if payload is None:
-        raise RuntimeError("Coinbase candle request failed after 4 attempts") from last_error
+    raise RuntimeError(
+        f"Coinbase candle request failed after 4 attempts: {last_error}"
+    ) from last_error
+
+
+def _kraken_candles(product, granularity, limit):
+    pair = KRAKEN_PAIRS.get(product)
+    interval = {900: 15, 14400: 240}.get(granularity)
+    if not pair or not interval:
+        raise RuntimeError("No Kraken fallback mapping for request")
+    response = requests.get(
+        "https://api.kraken.com/0/public/OHLC",
+        params={"pair": pair, "interval": interval},
+        headers={"User-Agent": "v5-shadow-research"},
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("error"):
+        raise RuntimeError(f"Kraken API error: {payload['error']!r}")
+    result = payload.get("result", {})
+    key = next((key for key in result if key != "last"), None)
+    if key is None:
+        raise RuntimeError("Kraken returned no OHLC series")
+    rows = result[key][-limit:]
+    # Kraken: time, open, high, low, close, vwap, volume, count.
+    return [
+        [row[0], row[3], row[2], row[1], row[4], row[6]]
+        for row in rows
+    ]
+
+
+def candles(product, granularity, limit=220):
+    source = "Coinbase"
+    try:
+        payload = _coinbase_candles(product, granularity, limit)
+    except Exception as coinbase_error:
+        print(f"{product} Coinbase unavailable; trying Kraken fallback: {coinbase_error}")
+        source = "Kraken"
+        payload = _kraken_candles(product, granularity, limit)
     frame = pd.DataFrame(
-        payload[:limit],
+        payload,
         columns=["time", "low", "high", "open", "close", "volume"],
     )
     frame = frame.sort_values("time").reset_index(drop=True)
-    for column in ["low", "high", "open", "close", "volume"]:
+    for column in ["time", "low", "high", "open", "close", "volume"]:
         frame[column] = pd.to_numeric(frame[column])
-    return frame[frame.time + granularity <= time.time()].copy()
+    completed = frame[frame.time + granularity <= time.time()].copy()
+    if len(completed) < 55:
+        raise RuntimeError(
+            f"{source} returned only {len(completed)} completed candles for "
+            f"{product} at {granularity}s"
+        )
+    print(f"{product} {granularity}s shadow candles source={source} rows={len(completed)}")
+    return completed
 
 
 def trend_4h(frame):

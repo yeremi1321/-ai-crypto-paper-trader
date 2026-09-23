@@ -957,6 +957,62 @@ st.link_button(
 )
 
 
+st.subheader("V5 Learning Progress")
+research_events = state_events[
+    state_events["state"].isin(["EARLY", "HOLD", "STRENGTHENING", "CONFIRMED", "WEAKENING", "FAILED"])
+].copy() if not state_events.empty else pd.DataFrame()
+if research_events.empty:
+    st.caption("Waiting for the first momentum-state observations.")
+else:
+    research_events = research_events[["product", "seen_at", "state", "score", "price"]].copy()
+    research_performance = add_forward_returns(research_events, scans)
+    evaluated_1h = int(research_performance["return_1h_pct"].notna().sum())
+    evaluated_4h = int(research_performance["return_4h_pct"].notna().sum())
+    evaluated_24h = int(research_performance["return_24h_pct"].notna().sum())
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("State observations", len(research_performance))
+    p2.metric("1h outcomes", evaluated_1h)
+    p3.metric("4h outcomes", evaluated_4h)
+    p4.metric("24h outcomes", evaluated_24h)
+    state_summary = performance_summary(research_performance, "state")
+    preferred = [
+        "state", "events", "evaluated_1h", "avg_1h_pct", "win_rate_1h_pct",
+        "evaluated_4h", "avg_4h_pct", "win_rate_4h_pct",
+        "evaluated_24h", "avg_24h_pct", "win_rate_24h_pct",
+    ]
+    st.caption(
+        "Research only: measures what happened after each scanner state. "
+        "This does not lower V5's 80-point entry requirement."
+    )
+    st.dataframe(
+        state_summary[[column for column in preferred if column in state_summary.columns]],
+        use_container_width=True,
+        hide_index=True,
+    )
+    score_research = research_performance.copy()
+    score_research["score_bucket"] = pd.cut(
+        score_research["score"],
+        bins=[0, 35, 45, 55, 65, 75, 80, 86],
+        labels=["<35", "35-44", "45-54", "55-64", "65-74", "75-79", "80+"],
+        right=False,
+    )
+    bucket_rows = []
+    for bucket, group in score_research.groupby("score_bucket", observed=True):
+        one_hour = group["return_1h_pct"].dropna()
+        four_hour = group["return_4h_pct"].dropna()
+        bucket_rows.append({
+            "score_bucket": str(bucket),
+            "events": len(group),
+            "evaluated_1h": len(one_hour),
+            "avg_1h_pct": one_hour.mean() if len(one_hour) else None,
+            "win_rate_1h_pct": (one_hour > 0).mean() * 100 if len(one_hour) else None,
+            "evaluated_4h": len(four_hour),
+            "avg_4h_pct": four_hour.mean() if len(four_hour) else None,
+            "win_rate_4h_pct": (four_hour > 0).mean() * 100 if len(four_hour) else None,
+        })
+    st.markdown("**Entry-threshold evidence**")
+    st.dataframe(pd.DataFrame(bucket_rows), use_container_width=True, hide_index=True)
+
 st.subheader("Forward Performance Research")
 scan_events = scans[["product", "seen_at", "score", "status", "price"]].copy()
 scan_performance = add_forward_returns(scan_events, scans)

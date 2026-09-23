@@ -27,7 +27,7 @@ def ensure_schema(conn):
 
 
 def future_path(scans, product, seen_at):
-    return scans[(scans.product == product) & (scans.seen_at > seen_at)].head(HORIZON_SCANS).copy()
+    return scans[(scans["product"] == product) & (scans["seen_at"] > seen_at)].head(HORIZON_SCANS).copy()
 
 
 def evaluate(conn):
@@ -39,8 +39,8 @@ def evaluate(conn):
     scans = pd.read_sql_query("SELECT id, seen_at, product, price FROM scans ORDER BY id", conn)
     if decisions.empty or scans.empty:
         return 0
-    decisions["seen_at"] = pd.to_datetime(decisions.seen_at, utc=True)
-    scans["seen_at"] = pd.to_datetime(scans.seen_at, utc=True)
+    decisions["seen_at"] = pd.to_datetime(decisions["seen_at"], utc=True)
+    scans["seen_at"] = pd.to_datetime(scans["seen_at"], utc=True)
     existing = {r[0] for r in conn.execute("SELECT decision_id FROM entry_learning").fetchall()}
     inserted = 0
     for row in decisions.itertuples():

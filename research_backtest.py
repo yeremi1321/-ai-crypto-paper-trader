@@ -22,6 +22,7 @@ STOP_PCT = 3.0
 TARGET_PCT = 4.0
 TRAIL_ACTIVATION_PCT = 2.0
 TRAIL_DISTANCE_PCT = 1.0
+UMBRELLA_DISTANCE_PCT = 0.50
 MAX_HOLD_BARS = 96
 WALK_FORWARD_FOLDS = 4
 
@@ -182,7 +183,8 @@ def entry_mask(frame, params):
     return mask.fillna(False)
 
 
-def close_trade(frame, entry_index):
+def close_trade(frame, entry_index, exit_mode="BASELINE"):
+
     entry_market = float(frame.at[entry_index, "close"])
     entry_fill = entry_market * (1 + SLIPPAGE_RATE)
     entry_fee = NOTIONAL * FEE_RATE
@@ -203,9 +205,12 @@ def close_trade(frame, entry_index):
             exit_market, exit_reason, exit_index = target, "PROFIT_TARGET", index
             break
         high_gain = (highest / entry_market - 1) * 100
-        trail = highest * (1 - TRAIL_DISTANCE_PCT / 100)
+        distance = UMBRELLA_DISTANCE_PCT if exit_mode == "UMBRELLA" else TRAIL_DISTANCE_PCT
+        trail = highest * (1 - distance / 100)
         if high_gain >= TRAIL_ACTIVATION_PCT and row.low <= trail:
-            exit_market, exit_reason, exit_index = trail, "TRAILING_STOP", index
+            exit_market = trail
+            exit_reason = "UMBRELLA_STOP" if exit_mode == "UMBRELLA" else "TRAILING_STOP"
+            exit_index = index
             break
     exit_fill = exit_market * (1 - SLIPPAGE_RATE)
     exit_value = quantity * exit_fill
@@ -262,7 +267,7 @@ def simulate(product, frame, params, start_at=None, end_at=None):
         if confirmations < params["confirmation_scans"]:
             index += 1
             continue
-        result = close_trade(frame, index)
+        result = close_trade(frame, index, params.get("exit_mode", "BASELINE"))
         trades.append(
             {
                 "product": product,
@@ -301,12 +306,13 @@ def metrics(trades):
 
 
 def parameter_grid():
-    for score, volume, confirmations, require_4h, mode in itertools.product(
+    for score, volume, confirmations, require_4h, mode, exit_mode in itertools.product(
         [75.0, 80.0, 82.0],
         [1.25, 1.50],
         [1, 2, 3],
         [False, True],
         ["BREAKOUT", "RETEST"],
+        ["BASELINE", "UMBRELLA"],
     ):
         yield {
             "min_score": score,
@@ -314,6 +320,7 @@ def parameter_grid():
             "confirmation_scans": confirmations,
             "require_4h": require_4h,
             "entry_mode": mode,
+            "exit_mode": exit_mode,
         }
 
 
@@ -462,7 +469,7 @@ def self_test():
     params = next(parameter_grid())
     result = simulate("TEST-USD", frame, params)
     assert isinstance(result, list)
-    assert len(list(parameter_grid())) == 72
+    assert len(list(parameter_grid())) == 144
     windows = walk_forward_windows({"TEST": frame}, folds=3)
     assert len(windows) == 3
     assert all(test_start >= train_end for _, _, train_end, test_start, _ in windows)

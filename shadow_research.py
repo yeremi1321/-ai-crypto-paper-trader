@@ -10,6 +10,8 @@ import requests
 
 LIVE_DB = "paper_trader_v4.db"
 SHADOW_DB = "research_shadow.db"
+UMBRELLA_ACTIVATION_PCT = 2.0
+UMBRELLA_LOCK_DISTANCE_PCT = 0.50
 
 
 def candles(product, granularity, limit=220):
@@ -70,12 +72,14 @@ def pullback_retest(frame):
     return ready, level
 
 
-def classify_regime(btc_4h, breadth):
+def classify_regime(btc_4h, breadth, volatility_pct=None):
+    """Research-only regime label; volatility is optional for backward compatibility."""
+    high_vol = volatility_pct is not None and volatility_pct >= 2.5
     if btc_4h and breadth >= 0.70:
-        return "TRENDING_UP"
+        return "TRENDING_UP_HIGH_VOL" if high_vol else "TRENDING_UP"
     if not btc_4h and breadth < 0.40:
-        return "RISK_OFF"
-    return "CHOPPY"
+        return "RISK_OFF_HIGH_VOL" if high_vol else "RISK_OFF"
+    return "CHOPPY_HIGH_VOL" if high_vol else "CHOPPY"
 
 
 def init_db(path):
@@ -99,9 +103,26 @@ def init_db(path):
             return_1h_pct REAL,
             return_4h_pct REAL,
             return_24h_pct REAL,
+            highest_price REAL,
+            lowest_price REAL,
+            mfe_pct REAL,
+            mae_pct REAL,
+            umbrella_activated INTEGER DEFAULT 0,
+            umbrella_stop_price REAL,
+            umbrella_would_exit INTEGER DEFAULT 0,
             UNIQUE(scan_id, product)
         )"""
     )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(shadow_evaluations)").fetchall()}
+    additions = {
+        "highest_price": "REAL", "lowest_price": "REAL", "mfe_pct": "REAL", "mae_pct": "REAL",
+        "umbrella_activated": "INTEGER DEFAULT 0", "umbrella_stop_price": "REAL",
+        "umbrella_would_exit": "INTEGER DEFAULT 0",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE shadow_evaluations ADD COLUMN {name} {definition}")
+    conn.commit()
     return conn
 
 
@@ -136,19 +157,27 @@ def latest_live_rows(path):
 def update_outcomes(conn, now, current_prices):
     open_rows = conn.execute(
         """SELECT id, seen_at, product, price, return_1h_pct,
-                  return_4h_pct, return_24h_pct
+                  return_4h_pct, return_24h_pct, highest_price, lowest_price,
+                  umbrella_activated, umbrella_would_exit
            FROM shadow_evaluations
            WHERE shadow_decision='WOULD_ENTER'
              AND (return_1h_pct IS NULL OR return_4h_pct IS NULL
                   OR return_24h_pct IS NULL)"""
     ).fetchall()
     for row in open_rows:
-        row_id, seen_at, product, entry_price, r1, r4, r24 = row
+        row_id, seen_at, product, entry_price, r1, r4, r24, previous_high, previous_low, umbrella_active, umbrella_exit = row
         current_price = current_prices.get(product)
         if current_price is None:
             continue
         age_hours = (now - datetime.fromisoformat(seen_at)).total_seconds() / 3600
         result = (current_price / entry_price - 1) * 100
+        highest = max(previous_high or entry_price, current_price)
+        lowest = min(previous_low or entry_price, current_price)
+        mfe = (highest / entry_price - 1) * 100
+        mae = (lowest / entry_price - 1) * 100
+        umbrella_active = int(bool(umbrella_active) or mfe >= UMBRELLA_ACTIVATION_PCT)
+        umbrella_stop = highest * (1 - UMBRELLA_LOCK_DISTANCE_PCT / 100) if umbrella_active else None
+        umbrella_exit = int(bool(umbrella_exit) or (umbrella_stop is not None and current_price <= umbrella_stop))
         if age_hours >= 1 and r1 is None:
             r1 = result
         if age_hours >= 4 and r4 is None:
@@ -157,9 +186,12 @@ def update_outcomes(conn, now, current_prices):
             r24 = result
         conn.execute(
             """UPDATE shadow_evaluations
-               SET return_1h_pct=?, return_4h_pct=?, return_24h_pct=?
+               SET return_1h_pct=?, return_4h_pct=?, return_24h_pct=?,
+                   highest_price=?, lowest_price=?, mfe_pct=?, mae_pct=?,
+                   umbrella_activated=?, umbrella_stop_price=?, umbrella_would_exit=?
                WHERE id=?""",
-            (r1, r4, r24, row_id),
+            (r1, r4, r24, highest, lowest, mfe, mae, umbrella_active,
+             umbrella_stop, umbrella_exit, row_id),
         )
 
 
@@ -189,7 +221,15 @@ def run_shadow(live_db, shadow_db):
         (item["trend_4h"] for item in research if item["product"] == "BTC-USD"),
         False,
     )
-    regime = classify_regime(btc_4h, breadth)
+    btc_item = next((item for item in research if item["product"] == "BTC-USD"), None)
+    btc_volatility = None
+    if btc_item is not None:
+        try:
+            btc_frame = candles("BTC-USD", 900)
+            btc_volatility = float(btc_frame.close.pct_change().rolling(20).std().iloc[-1] * 100 * np.sqrt(96))
+        except Exception:
+            btc_volatility = None
+    regime = classify_regime(btc_4h, breadth, btc_volatility)
     conn = init_db(shadow_db)
     current_prices = {item["product"]: float(item["price"]) for item in research}
     update_outcomes(conn, now, current_prices)
@@ -202,7 +242,7 @@ def run_shadow(live_db, shadow_db):
             "volume>=1.25x": item["rel_volume"] >= 1.25,
             "state ready": eligible_state,
             "4h bullish": item["trend_4h"],
-            "trending market": regime == "TRENDING_UP",
+            "trending market": regime.startswith("TRENDING_UP"),
             "pullback/retest": item["pullback_ready"],
         }
         decision = "WOULD_ENTER" if all(checks.values()) else "OBSERVE"
@@ -213,13 +253,15 @@ def run_shadow(live_db, shadow_db):
             """INSERT OR IGNORE INTO shadow_evaluations(
                 scan_id, seen_at, product, score, price, rel_volume, state,
                 trend_4h, market_regime, pullback_ready, retest_level,
-                shadow_decision, detail
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                shadow_decision, detail, highest_price, lowest_price, mfe_pct, mae_pct,
+                umbrella_activated, umbrella_stop_price, umbrella_would_exit
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 scan_id, now.isoformat(), item["product"], item["score"],
                 item["price"], item["rel_volume"], item.get("state"),
                 int(item["trend_4h"]), regime, int(item["pullback_ready"]),
-                item["retest_level"], decision, detail,
+                item["retest_level"], decision, detail, item["price"], item["price"], 0.0, 0.0,
+                0, None, 0,
             ),
         )
         print(item["product"], regime, decision)
@@ -231,6 +273,7 @@ def self_test():
     assert classify_regime(True, 0.75) == "TRENDING_UP"
     assert classify_regime(False, 0.20) == "RISK_OFF"
     assert classify_regime(True, 0.45) == "CHOPPY"
+    assert classify_regime(True, 0.75, 3.0) == "TRENDING_UP_HIGH_VOL"
     periods = 80
     close = np.linspace(100, 110, periods)
     frame = pd.DataFrame(

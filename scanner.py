@@ -164,6 +164,11 @@ def db():
         market_breadth REAL,
         detail TEXT
     )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS decision_log(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        seen_at TEXT, scan_id TEXT, product TEXT, stage TEXT, decision TEXT,
+        score REAL, price REAL, regime TEXT, detail TEXT, strategy_version TEXT
+    )""")
     conn.execute("""CREATE TABLE IF NOT EXISTS signal_outcomes(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         created_at TEXT,
@@ -367,6 +372,16 @@ def update_paper_control(
     )
 
 
+
+
+def record_decision(conn, seen_at, scan_id, product, stage, decision, score, price, regime, detail):
+    """Append-only audit trail for deterministic decisions and future model comparisons."""
+    conn.execute(
+        """INSERT INTO decision_log(seen_at, scan_id, product, stage, decision,
+               score, price, regime, detail, strategy_version)
+           VALUES(?,?,?,?,?,?,?,?,?,?)""",
+        (seen_at, scan_id, product, stage, decision, score, price, regime, detail, STRATEGY_VERSION),
+    )
 
 
 def record_entry_skip(conn, seen_at, product, score, price, reason, detail):
@@ -1285,6 +1300,11 @@ for product in PRODUCTS:
         )
         quality_passed, quality_detail = v5_entry_quality(result, previous)
         entry_qualifies = sequence_entry_ready and quality_passed
+        record_decision(
+            conn, seen_at, scan_id, result[0], "ENTRY_FILTER",
+            "QUALIFIES" if entry_qualifies else "REJECT", result[2], result[1],
+            regime_detail, quality_detail if sequence_entry_ready else "momentum sequence not entry-ready"
+        )
         if sequence_entry_ready and not quality_passed:
             record_entry_skip(
                 conn,

@@ -1,0 +1,18 @@
+name: Memecoin Outcome Safety Checks
+on:
+  pull_request:
+    paths: ["memecoin_shadow.py","memecoin_outcomes.py",".github/workflows/memecoin-shadow.yml"]
+  push:
+    branches: ["feature/memecoin-outcomes"]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python -m py_compile memecoin_shadow.py memecoin_discovery.py memecoin_outcomes.py
+      - run: python memecoin_shadow.py --self-test
+      - run: python memecoin_discovery.py --self-test

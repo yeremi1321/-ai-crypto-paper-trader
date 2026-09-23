@@ -184,7 +184,7 @@ def run_shadow(live_db, shadow_db):
         except Exception as error:
             print(f"{row['product']} shadow error: {error}")
     if not research:
-        raise RuntimeError("No shadow evaluations completed")
+        # Coinbase can temporarily rate-limit/block GitHub-hosted runners.\n        # Shadow research is optional and must not take down the production scan.\n        print("::warning::Shadow research skipped: Coinbase candle data unavailable for all products")\n        return False
     btc_4h = next(
         (item["trend_4h"] for item in research if item["product"] == "BTC-USD"),
         False,

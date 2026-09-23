@@ -37,6 +37,8 @@ UMBRELLA_ACTIVATION_PCT = 2.0
 UMBRELLA_LOCK_DISTANCE_PCT = 0.50
 PAPER_MAX_HOLD_HOURS = 24
 PAPER_CONFIRMATION_SCANS = 2
+CHALLENGER_CONFIRMATION_SCANS = 3
+CHALLENGER_VERSION = "V5_CHALLENGER_1"
 PAPER_WEAKENING_EXIT_SCANS = 2
 PAPER_REENTRY_COOLDOWN_HOURS = 2
 PAPER_ENTRY_MIN_SCORE = 80.0
@@ -193,6 +195,20 @@ def db():
     conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS
                     one_open_signal_outcome_per_product_decision
                     ON signal_outcomes(product, decision) WHERE status='OPEN'""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS challenger_trades(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, product TEXT, opened_at TEXT,
+        entry_score REAL, entry_market_price REAL, entry_price REAL,
+        notional_usd REAL, quantity REAL, entry_fee REAL, status TEXT,
+        highest_price REAL, lowest_price REAL, current_price REAL,
+        current_pnl_usd REAL, current_return_pct REAL, closed_at TEXT,
+        exit_market_price REAL, exit_price REAL, exit_fee REAL,
+        net_pnl_usd REAL, net_return_pct REAL, exit_reason TEXT, strategy_version TEXT
+    )""")
+    conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS one_open_challenger_trade_per_product
+                    ON challenger_trades(product) WHERE status='OPEN'""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS challenger_controls(
+        product TEXT PRIMARY KEY, confirmation_count INTEGER NOT NULL DEFAULT 0, updated_at TEXT
+    )""")
     ensure_column(conn, "paper_trades", "strategy_version", "TEXT")
     ensure_column(conn, "paper_trades", "lowest_price", "REAL")
     ensure_column(conn, "paper_trades", "mfe_pct", "REAL DEFAULT 0")
@@ -672,6 +688,82 @@ def market_regime(conn):
     )
 
 
+
+
+def challenger_confirmation(conn, product):
+    conn.execute("INSERT OR IGNORE INTO challenger_controls(product, confirmation_count) VALUES(?,0)", (product,))
+    return conn.execute("SELECT confirmation_count FROM challenger_controls WHERE product=?", (product,)).fetchone()[0]
+
+
+def consider_challenger_entry(conn, now, product, score, market_price, qualifies, regime_allows):
+    """Parallel paper challenger: same setup, more patient entry, independent exposure."""
+    existing = conn.execute("SELECT 1 FROM challenger_trades WHERE product=? AND status='OPEN'", (product,)).fetchone()
+    count = challenger_confirmation(conn, product)
+    if existing or not qualifies or not regime_allows:
+        if count:
+            conn.execute("UPDATE challenger_controls SET confirmation_count=0, updated_at=? WHERE product=?", (now.isoformat(), product))
+        return None
+    count += 1
+    conn.execute("UPDATE challenger_controls SET confirmation_count=?, updated_at=? WHERE product=?", (count, now.isoformat(), product))
+    if count < CHALLENGER_CONFIRMATION_SCANS:
+        return None
+    conn.execute("UPDATE challenger_controls SET confirmation_count=0, updated_at=? WHERE product=?", (now.isoformat(), product))
+    open_count, exposure = conn.execute("SELECT COUNT(*), COALESCE(SUM(notional_usd),0) FROM challenger_trades WHERE status='OPEN'").fetchone()
+    if open_count >= MAX_OPEN_PAPER_TRADES or exposure + PAPER_NOTIONAL_USD > MAX_PAPER_EXPOSURE_USD:
+        return None
+    entry_price = market_price * (1 + PAPER_SLIPPAGE_RATE)
+    entry_fee = PAPER_NOTIONAL_USD * PAPER_FEE_RATE
+    quantity = (PAPER_NOTIONAL_USD - entry_fee) / entry_price
+    conn.execute("""INSERT INTO challenger_trades(
+        product, opened_at, entry_score, entry_market_price, entry_price, notional_usd,
+        quantity, entry_fee, status, highest_price, lowest_price, current_price,
+        current_pnl_usd, current_return_pct, strategy_version
+    ) VALUES(?,?,?,?,?,?,?,?,'OPEN',?,?,?,?,?,?)""",
+        (product, now.isoformat(), score, market_price, entry_price, PAPER_NOTIONAL_USD,
+         quantity, entry_fee, market_price, market_price, market_price, -entry_fee,
+         (-entry_fee/PAPER_NOTIONAL_USD)*100, CHALLENGER_VERSION))
+    return f"CHALLENGER OPEN {product} - 3-scan confirmation - Score {score}"
+
+
+def manage_challenger_trade(conn, now, product, market_price):
+    trade = conn.execute("""SELECT id, opened_at, entry_market_price, entry_price, notional_usd,
+        quantity, highest_price, lowest_price FROM challenger_trades
+        WHERE product=? AND status='OPEN' ORDER BY id DESC LIMIT 1""", (product,)).fetchone()
+    if not trade:
+        return None
+    trade_id, opened_at, entry_market, entry_price, notional, quantity, old_high, old_low = trade
+    high = max(old_high or market_price, market_price)
+    low = min(old_low or market_price, market_price)
+    market_return = (market_price / entry_market - 1) * 100
+    mfe = (high / entry_market - 1) * 100
+    age_hours = (now - datetime.fromisoformat(opened_at)).total_seconds() / 3600
+    umbrella_stop = high * (1 - UMBRELLA_LOCK_DISTANCE_PCT / 100) if mfe >= UMBRELLA_ACTIVATION_PCT else None
+    reason = None
+    exit_market = market_price
+    if market_return <= -PAPER_STOP_LOSS_PCT:
+        reason = "STOP_LOSS"
+    elif market_return >= PAPER_PROFIT_TARGET_PCT:
+        reason = "PROFIT_TARGET"
+    elif umbrella_stop is not None and market_price <= umbrella_stop:
+        reason, exit_market = "UMBRELLA_STOP", umbrella_stop
+    elif age_hours >= PAPER_MAX_HOLD_HOURS:
+        reason = "TIME_EXIT_24H"
+    exit_price = exit_market * (1 - PAPER_SLIPPAGE_RATE)
+    exit_value = quantity * exit_price
+    exit_fee = exit_value * PAPER_FEE_RATE
+    net_pnl = exit_value - exit_fee - notional
+    net_return = net_pnl / notional * 100
+    if reason:
+        conn.execute("""UPDATE challenger_trades SET status='CLOSED', highest_price=?, lowest_price=?,
+            current_price=?, current_pnl_usd=?, current_return_pct=?, closed_at=?, exit_market_price=?,
+            exit_price=?, exit_fee=?, net_pnl_usd=?, net_return_pct=?, exit_reason=? WHERE id=?""",
+            (high, low, market_price, net_pnl, net_return, now.isoformat(), exit_market,
+             exit_price, exit_fee, net_pnl, net_return, reason, trade_id))
+        return f"CHALLENGER CLOSE {product} - {reason} - PnL {net_pnl:+.2f} ({net_return:+.2f}%)"
+    conn.execute("""UPDATE challenger_trades SET highest_price=?, lowest_price=?, current_price=?,
+        current_pnl_usd=?, current_return_pct=? WHERE id=?""",
+        (high, low, market_price, net_pnl, net_return, trade_id))
+    return None
 
 
 def open_paper_trade(conn, seen_at, product, score, market_price):
@@ -1330,6 +1422,12 @@ for product in PRODUCTS:
         if paper_entry_alert:
             alerts.append(paper_entry_alert)
 
+        challenger_open_alert = consider_challenger_entry(
+            conn, now, result[0], result[2], result[1], entry_qualifies, regime_allows_entries
+        )
+        if challenger_open_alert:
+            alerts.append(challenger_open_alert)
+
 
         weakening_scan = bool(
             next_state == "WEAKENING"
@@ -1353,6 +1451,10 @@ for product in PRODUCTS:
         if paper_close_alert:
             alerts.append(paper_close_alert)
 
+
+        challenger_close_alert = manage_challenger_trade(conn, now, result[0], result[1])
+        if challenger_close_alert:
+            alerts.append(challenger_close_alert)
 
         outcome_alerts = update_signal_outcomes(
             conn,

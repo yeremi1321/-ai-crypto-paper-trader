@@ -32,6 +32,9 @@ PAPER_STOP_LOSS_PCT = 3.0
 PAPER_PROFIT_TARGET_PCT = 4.0
 PAPER_TRAILING_ACTIVATION_PCT = 2.0
 PAPER_TRAILING_STOP_PCT = 1.0
+# Research-safe umbrella profit lock. V5 production exits remain unchanged until validated.
+UMBRELLA_ACTIVATION_PCT = 2.0
+UMBRELLA_LOCK_DISTANCE_PCT = 0.50
 PAPER_MAX_HOLD_HOURS = 24
 PAPER_CONFIRMATION_SCANS = 2
 PAPER_WEAKENING_EXIT_SCANS = 2
@@ -186,8 +189,16 @@ def db():
                     one_open_signal_outcome_per_product_decision
                     ON signal_outcomes(product, decision) WHERE status='OPEN'""")
     ensure_column(conn, "paper_trades", "strategy_version", "TEXT")
+    ensure_column(conn, "paper_trades", "lowest_price", "REAL")
+    ensure_column(conn, "paper_trades", "mfe_pct", "REAL DEFAULT 0")
+    ensure_column(conn, "paper_trades", "mae_pct", "REAL DEFAULT 0")
+    ensure_column(conn, "paper_trades", "umbrella_activated", "INTEGER DEFAULT 0")
+    ensure_column(conn, "paper_trades", "umbrella_stop_price", "REAL")
+    ensure_column(conn, "signal_outcomes", "mfe_pct", "REAL DEFAULT 0")
+    ensure_column(conn, "signal_outcomes", "mae_pct", "REAL DEFAULT 0")
     ensure_column(conn, "paper_entry_skips", "strategy_version", "TEXT")
     ensure_column(conn, "signal_outcomes", "strategy_version", "TEXT")
+    conn.execute("UPDATE paper_trades SET lowest_price=COALESCE(lowest_price, entry_market_price) WHERE lowest_price IS NULL")
     conn.execute(
         "UPDATE paper_trades SET strategy_version='V4' "
         "WHERE strategy_version IS NULL OR strategy_version=''"
@@ -679,9 +690,9 @@ def open_paper_trade(conn, seen_at, product, score, market_price):
         """INSERT INTO paper_trades(
                product, opened_at, entry_state, entry_score,
                entry_market_price, entry_price, notional_usd, quantity,
-               entry_fee, status, highest_price, current_price,
+               entry_fee, status, highest_price, lowest_price, current_price,
                current_pnl_usd, current_return_pct, strategy_version
-           ) VALUES(?,?,?,?,?,?,?,?,?,'OPEN',?,?,?,?,?)""",
+           ) VALUES(?,?,?,?,?,?,?,?,?,'OPEN',?,?,?,?,?,?)""",
         (
             product,
             seen_at,
@@ -692,6 +703,7 @@ def open_paper_trade(conn, seen_at, product, score, market_price):
             PAPER_NOTIONAL_USD,
             quantity,
             entry_fee,
+            market_price,
             market_price,
             market_price,
             -entry_fee,
@@ -867,7 +879,7 @@ def manage_paper_trade(
     """Mark an open paper position to market and close it when a rule fires."""
     trade = conn.execute(
         """SELECT id, opened_at, entry_market_price, entry_price,
-                  notional_usd, quantity, entry_fee, highest_price
+                  notional_usd, quantity, entry_fee, highest_price, lowest_price
            FROM paper_trades
            WHERE product=? AND status='OPEN'
            ORDER BY id DESC LIMIT 1""",
@@ -886,8 +898,14 @@ def manage_paper_trade(
         quantity,
         entry_fee,
         previous_high,
+        previous_low,
     ) = trade
     highest_price = max(previous_high or market_price, market_price)
+    lowest_price = min(previous_low or market_price, market_price)
+    mfe_pct = ((highest_price / entry_market_price) - 1) * 100
+    mae_pct = ((lowest_price / entry_market_price) - 1) * 100
+    umbrella_activated = int(mfe_pct >= UMBRELLA_ACTIVATION_PCT)
+    umbrella_stop_price = highest_price * (1 - UMBRELLA_LOCK_DISTANCE_PCT / 100) if umbrella_activated else None
     simulated_exit_price = market_price * (1 - PAPER_SLIPPAGE_RATE)
     exit_value = quantity * simulated_exit_price
     estimated_exit_fee = exit_value * PAPER_FEE_RATE
@@ -925,13 +943,18 @@ def manage_paper_trade(
     if exit_reason:
         conn.execute(
             """UPDATE paper_trades
-               SET status='CLOSED', highest_price=?, current_price=?,
+               SET status='CLOSED', highest_price=?, lowest_price=?, mfe_pct=?, mae_pct=?, umbrella_activated=?, umbrella_stop_price=?, current_price=?,
                    current_pnl_usd=?, current_return_pct=?, closed_at=?,
                    exit_state=?, exit_market_price=?, exit_price=?, exit_fee=?,
                    gross_pnl_usd=?, net_pnl_usd=?, net_return_pct=?, exit_reason=?
                WHERE id=?""",
             (
                 highest_price,
+                lowest_price,
+                mfe_pct,
+                mae_pct,
+                umbrella_activated,
+                umbrella_stop_price,
                 market_price,
                 net_pnl,
                 net_return_pct,
@@ -963,10 +986,12 @@ def manage_paper_trade(
 
     conn.execute(
         """UPDATE paper_trades
-           SET highest_price=?, current_price=?, current_pnl_usd=?,
+           SET highest_price=?, lowest_price=?, mfe_pct=?, mae_pct=?,
+               umbrella_activated=?, umbrella_stop_price=?, current_price=?, current_pnl_usd=?,
                current_return_pct=?
            WHERE id=?""",
-        (highest_price, market_price, net_pnl, net_return_pct, trade_id),
+        (highest_price, lowest_price, mfe_pct, mae_pct, umbrella_activated,
+         umbrella_stop_price, market_price, net_pnl, net_return_pct, trade_id),
     )
     return None
 

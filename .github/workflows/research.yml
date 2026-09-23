@@ -1,0 +1,46 @@
+name: V5 Offline Research Lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Historical days to test
+        required: false
+        default: "60"
+  schedule:
+    - cron: "31 5 * * 0"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: crypto-offline-research
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run historical backtest and parameter comparison
+        run: python research_backtest.py --days "${{ inputs.days || '60' }}"
+
+      - name: Commit research database
+        run: |
+          git config user.name "crypto-paper-research"
+          git config user.email "actions@users.noreply.github.com"
+          git add research_backtest.db
+          git diff --cached --quiet && exit 0
+          git commit -m "Update offline strategy research"
+          git pull --rebase origin main
+          git push

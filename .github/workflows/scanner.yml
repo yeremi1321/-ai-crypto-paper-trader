@@ -30,11 +30,15 @@ jobs:
       - name: Run paper research scan
         run: python scanner.py
 
+      - name: Run shadow-only research
+        run: python shadow_research.py
+
       - name: Commit scan history
         run: |
           git config user.name "crypto-paper-scanner"
           git config user.email "actions@users.noreply.github.com"
-          git add paper_trader_v4.db
+          git add paper_trader_v4.db research_shadow.db
           git diff --cached --quiet && exit 0
           git commit -m "Record automated paper scan"
+          git pull --rebase origin main
           git push

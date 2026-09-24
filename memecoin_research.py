@@ -4,7 +4,7 @@ Reads observed shadow outcomes. It does not place orders or change production ru
 """
 import argparse, sqlite3, statistics
 DB="memecoin_shadow.db"
-VERSION="MEME_RESEARCH_V1"
+VERSION="MEME_RESEARCH_V2"
 
 def init(conn):
  conn.execute("""CREATE TABLE IF NOT EXISTS meme_research_summary(
@@ -29,8 +29,37 @@ def summarize(path=DB):
  conn.execute("""INSERT INTO meme_research_summary(version,cohort,samples,avg_mfe_pct,avg_mae_pct,
  avg_last_return_pct,hit_10_pct,hit_20_pct,stopped_10_pct) VALUES(?,?,?,?,?,?,?,?,?)""",
  (VERSION,"ALL",result["samples"],result["avg_mfe_pct"],result["avg_mae_pct"],result["avg_last_return_pct"],
- result["hit_10_pct"],result["hit_20_pct"],result["stopped_10_pct"])); conn.commit(); conn.close()
- print(result); return result
+ result["hit_10_pct"],result["hit_20_pct"],result["stopped_10_pct"])); conn.commit()
+ paths=replay_paths(conn); conn.close()\n print(result); print({"path_replay":paths}); return result
+
+
+def replay_paths(conn):
+ """Replay simple exit hypotheses on timestamped observations; research only."""
+ exists=conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meme_price_snapshots'").fetchone()
+ if not exists: return []
+ candidates=conn.execute("""SELECT candidate_id,token_address,detected_at,entry_price
+ FROM meme_outcomes WHERE entry_price>0""").fetchall()
+ rules=[("TP10_SL10",10,-10,20),("TP20_SL10",20,-10,20),("TP25_SL10",25,-10,20),
+        ("TIME10_SL10",None,-10,10),("TIME20_SL10",None,-10,20)]
+ results=[]
+ for name,tp,sl,minutes in rules:
+  returns=[]
+  for _,token,detected,entry in candidates:
+   snaps=conn.execute("""SELECT observed_at,price FROM meme_price_snapshots
+    WHERE token_address=? AND observed_at>=? ORDER BY observed_at""",(token,detected)).fetchall()
+   if not snaps: continue
+   chosen=None
+   start=__import__("datetime").datetime.fromisoformat(detected)
+   for observed,price in snaps:
+    ret=pct(entry,price)
+    age=(__import__("datetime").datetime.fromisoformat(observed)-start).total_seconds()/60
+    if ret<=sl or (tp is not None and ret>=tp) or age>=minutes:
+     chosen=ret; break
+   if chosen is not None: returns.append(chosen)
+  if returns:
+   results.append({"rule":name,"samples":len(returns),"avg_return_pct":round(statistics.mean(returns),3),
+    "win_rate_pct":round(100*sum(x>0 for x in returns)/len(returns),1)})
+ return results
 
 def self_test():
  c=sqlite3.connect(":memory:"); init(c)

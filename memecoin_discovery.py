@@ -19,6 +19,11 @@ def get_json(url, params=None, headers=None, attempts=3):
     for n in range(attempts):
         try:
             r=SESSION.get(url,params=params,headers=headers,timeout=20)
+            if r.status_code == 429:
+                retry_after = r.headers.get("Retry-After")
+                wait = float(retry_after) if retry_after and retry_after.isdigit() else 3.0*(n+1)
+                err=RuntimeError(f"429 rate limited; retrying after {wait:.1f}s")
+                time.sleep(wait); continue
             r.raise_for_status(); return r.json()
         except Exception as e:
             err=e; time.sleep(1.5*(n+1))

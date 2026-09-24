@@ -1,0 +1,47 @@
+name: V5 Early Probe Checks
+
+on:
+  push:
+    branches:
+      - feature/v5-early-probe
+  pull_request:
+    paths:
+      - scanner.py
+      - .github/workflows/v5-early-probe-ci.yml
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python -m py_compile scanner.py
+      - name: Test early-probe filter
+        env:
+          NTFY_DISABLED: "1"
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          source = Path("scanner.py").read_text()
+          tree = ast.parse(source)
+          keep = []
+          wanted = {"early_probe_quality"}
+          for node in tree.body:
+              if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                  names = {t.id for t in node.targets if isinstance(t, ast.Name)} if isinstance(node, ast.Assign) else ({node.target.id} if isinstance(node.target, ast.Name) else set())
+                  if names & {"EARLY_PROBE_MIN_SCORE","EARLY_PROBE_MIN_REL_VOLUME","EARLY_PROBE_MIN_RSI","EARLY_PROBE_MAX_RSI"}:
+                      keep.append(node)
+              elif isinstance(node, ast.FunctionDef) and node.name in wanted:
+                  keep.append(node)
+          ns = {}
+          exec(compile(ast.Module(body=keep, type_ignores=[]), "scanner.py", "exec"), ns)
+          good=("ETH-USD",100,62,"IGNORE",60,1.8,"15m>EMA20, 15m trend, 1h trend")
+          weak=("ETH-USD",100,50,"IGNORE",60,1.8,"15m>EMA20, 15m trend, 1h trend")
+          assert ns["early_probe_quality"](good)[0] is True
+          assert ns["early_probe_quality"](weak)[0] is False
+          PY

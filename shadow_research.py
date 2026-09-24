@@ -225,6 +225,42 @@ def update_outcomes(conn, now, current_prices):
         )
 
 
+
+def print_research_summary(conn):
+    total = conn.execute("SELECT COUNT(*) FROM shadow_evaluations").fetchone()[0]
+    entries = conn.execute(
+        "SELECT COUNT(*) FROM shadow_evaluations WHERE shadow_decision='WOULD_ENTER'"
+    ).fetchone()[0]
+    print(f"SHADOW SUMMARY observations={total} would_enter={entries}")
+    for column, label in (
+        ("return_1h_pct", "1h"), ("return_4h_pct", "4h"), ("return_24h_pct", "24h")
+    ):
+        values = [
+            float(row[0]) for row in conn.execute(
+                f"""SELECT {column} FROM shadow_evaluations
+                    WHERE shadow_decision='WOULD_ENTER' AND {column} IS NOT NULL"""
+            ).fetchall()
+        ]
+        if values:
+            wins = sum(value > 0 for value in values)
+            print(
+                f"SHADOW {label} samples={len(values)} "
+                f"win_rate={wins / len(values) * 100:.1f}% "
+                f"avg_return={sum(values) / len(values):+.3f}%"
+            )
+        else:
+            print(f"SHADOW {label} samples=0")
+    regimes = conn.execute(
+        """SELECT market_regime, COUNT(*),
+                  SUM(CASE WHEN shadow_decision='WOULD_ENTER' THEN 1 ELSE 0 END)
+           FROM shadow_evaluations GROUP BY market_regime ORDER BY market_regime"""
+    ).fetchall()
+    for regime, observations, would_enter in regimes:
+        print(
+            f"SHADOW REGIME {regime} observations={observations} "
+            f"would_enter={would_enter or 0}"
+        )
+
 def run_shadow(live_db, shadow_db):
     scan_id, current, breadth = latest_live_rows(live_db)
     now = datetime.now(timezone.utc)
@@ -292,6 +328,7 @@ def run_shadow(live_db, shadow_db):
         )
         print(item["product"], regime, decision)
     conn.commit()
+    print_research_summary(conn)
     conn.close()
 
 

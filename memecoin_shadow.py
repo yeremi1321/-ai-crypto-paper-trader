@@ -32,6 +32,15 @@ def init_db(path=DB):
  c=sqlite3.connect(path)
  c.execute("""CREATE TABLE IF NOT EXISTS meme_candidates(id INTEGER PRIMARY KEY,seen_at TEXT,version TEXT,token TEXT,chain TEXT,score REAL,eligible INTEGER,blocked_reasons TEXT,raw_json TEXT)""")
  c.execute("""CREATE TABLE IF NOT EXISTS meme_outcomes(candidate_id INTEGER PRIMARY KEY,token_address TEXT,pair_address TEXT,detected_at TEXT,entry_price REAL,last_price REAL,highest_price REAL,lowest_price REAL,mfe_pct REAL,mae_pct REAL,age_minutes REAL)""")
+ c.execute("""CREATE TABLE IF NOT EXISTS meme_decision_ledger(
+ id INTEGER PRIMARY KEY,candidate_id INTEGER UNIQUE,recorded_at TEXT,version TEXT,
+ token TEXT,token_address TEXT,pair_address TEXT,chain TEXT,venue TEXT,data_source TEXT,
+ regime TEXT,liquidity_usd REAL,volume_1h_usd REAL,participation INTEGER,
+ estimated_entry_slippage_pct REAL,estimated_exit_slippage_pct REAL,
+ setup_type TEXT,entry_rule TEXT,risk_rule TEXT,score REAL,decision TEXT,vetoes TEXT,
+ simulated_entry_price REAL,simulated_entry_fee REAL,notional_usd REAL,
+ outcome_label TEXT,net_return_pct REAL,mfe_pct REAL,mae_pct REAL,time_in_trade_minutes REAL,
+ ai_explanation TEXT,raw_json TEXT)""")
  c.execute("""CREATE TABLE IF NOT EXISTS meme_paper_trades(id INTEGER PRIMARY KEY,candidate_id INTEGER UNIQUE,token TEXT,token_address TEXT,pair_address TEXT,opened_at TEXT,entry_market_price REAL,entry_price REAL,notional_usd REAL,quantity REAL,entry_fee REAL,status TEXT,highest_price REAL,lowest_price REAL,current_price REAL,current_return_pct REAL,mfe_pct REAL,mae_pct REAL)""")
  c.commit(); return c
 
@@ -39,6 +48,27 @@ def record(conn,x,result):
  now=datetime.now(timezone.utc).isoformat()
  cur=conn.execute("""INSERT INTO meme_candidates(seen_at,version,token,chain,score,eligible,blocked_reasons,raw_json) VALUES(?,?,?,?,?,?,?,?)""",(now,VERSION,x.get("token"),x.get("chain"),result["score"],int(result["eligible"]),json.dumps(result["blocked_reasons"]),json.dumps(x)))
  cid=cur.lastrowid
+ decision="PAPER_TRADE_CANDIDATE" if result["eligible"] else ("REJECT" if result["blocked_reasons"] else "WATCHLIST")
+ vetoes=json.dumps(result["blocked_reasons"])
+ explanation=("Eligible: safety gates passed and score meets threshold." if result["eligible"]
+              else "Rejected by deterministic gates: "+(",".join(result["blocked_reasons"]) or "score below threshold."))
+ simulated_entry=None; simulated_fee=None
+ if result["eligible"] and x.get("price_usd"):
+  simulated_entry=float(x["price_usd"])*(1+PAPER_SLIPPAGE_RATE)
+  simulated_fee=PAPER_NOTIONAL_USD*PAPER_FEE_RATE
+ conn.execute("""INSERT INTO meme_decision_ledger(
+ candidate_id,recorded_at,version,token,token_address,pair_address,chain,venue,data_source,regime,
+ liquidity_usd,volume_1h_usd,participation,estimated_entry_slippage_pct,estimated_exit_slippage_pct,
+ setup_type,entry_rule,risk_rule,score,decision,vetoes,simulated_entry_price,simulated_entry_fee,
+ notional_usd,outcome_label,ai_explanation,raw_json)
+ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+ (cid,now,VERSION,x.get("token"),x.get("token_address"),x.get("pair_address"),x.get("chain"),x.get("dex"),
+ x.get("security_source"),x.get("market_regime","UNKNOWN"),float(x.get("liquidity_usd",0)),
+ float(x.get("volume_1h_usd",0)),int(x.get("makers",0)),PAPER_SLIPPAGE_RATE*100,PAPER_SLIPPAGE_RATE*100,
+ "MOMENTUM_ACCELERATION","Research candidate after deterministic safety + score gates",
+ "Research-only; no live execution; simulated costs enforced",result["score"],decision,vetoes,
+ simulated_entry,simulated_fee,PAPER_NOTIONAL_USD if result["eligible"] else 0,
+ "PENDING",explanation,json.dumps(x)))
  if x.get("token_address") and x.get("price_usd"):
   p=float(x["price_usd"])
   conn.execute("INSERT OR IGNORE INTO meme_outcomes VALUES(?,?,?,?,?,?,?,?,?,?,?)",(cid,x.get("token_address"),x.get("pair_address"),now,p,p,p,p,0,0,0))
@@ -52,6 +82,10 @@ def self_test():
  assert evaluate(x)["eligible"]; c=init_db(":memory:"); record(c,x,evaluate(x))
  assert c.execute("select count(*) from meme_outcomes").fetchone()[0]==1
  assert c.execute("select count(*) from meme_paper_trades").fetchone()[0]==1
+ row=c.execute("select decision,outcome_label from meme_decision_ledger").fetchone()
+ assert row==("PAPER_TRADE_CANDIDATE","PENDING")
+ bad=dict(x); bad["liquidity_usd"]=10; record(c,bad,evaluate(bad))
+ assert c.execute("select count(*) from meme_decision_ledger where decision='REJECT'").fetchone()[0]==1
  print("memecoin shadow V2 self-test passed")
 
 def main():

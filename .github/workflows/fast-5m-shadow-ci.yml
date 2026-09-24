@@ -1,0 +1,19 @@
+name: Fast 5m Shadow Checks
+on:
+  push:
+    branches: [feature/fast-5m-shadow]
+  pull_request:
+    paths:
+      - fast_5m_shadow.py
+      - .github/workflows/fast-5m-shadow.yml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python -m py_compile fast_5m_shadow.py
+      - run: python fast_5m_shadow.py --self-test

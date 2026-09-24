@@ -40,6 +40,10 @@ PAPER_ENTRY_MIN_SCORE = 80.0
 PAPER_ENTRY_MIN_REL_VOLUME = 1.50
 PAPER_ENTRY_MIN_RSI = 55.0
 PAPER_ENTRY_MAX_RSI = 68.0
+EARLY_PROBE_MIN_SCORE = 55.0
+EARLY_PROBE_MIN_REL_VOLUME = 1.50
+EARLY_PROBE_MIN_RSI = 52.0
+EARLY_PROBE_MAX_RSI = 72.0
 PAPER_WEAKENING_FAST_LOSS_PCT = -0.75
 PAPER_WEAKENING_PROFIT_LOCK_PCT = 1.75
 PAPER_DAILY_LOSS_LIMIT_USD = 15.0
@@ -393,6 +397,27 @@ def v5_entry_quality(result, previous):
     if score < previous_score - 2:
         failures.append("score faded more than 2 points")
     return not failures, "; ".join(failures) if failures else "V5 quality passed"
+
+
+def early_probe_quality(result):
+    """Research-only challenger: identify strong acceleration before V5 confirmation."""
+    _, _, score, _, rsi, rel_volume, reason = result
+    required = ("15m>EMA20", "15m trend", "1h trend")
+    missing = [item for item in required if item not in (reason or "")]
+    failures = []
+    if score < EARLY_PROBE_MIN_SCORE:
+        failures.append(f"score {score:.1f} below {EARLY_PROBE_MIN_SCORE:.0f}")
+    if rel_volume < EARLY_PROBE_MIN_REL_VOLUME:
+        failures.append(
+            f"volume {rel_volume:.2f}x below {EARLY_PROBE_MIN_REL_VOLUME:.2f}x"
+        )
+    if not EARLY_PROBE_MIN_RSI <= rsi <= EARLY_PROBE_MAX_RSI:
+        failures.append(
+            f"RSI {rsi:.1f} outside {EARLY_PROBE_MIN_RSI:.0f}-{EARLY_PROBE_MAX_RSI:.0f}"
+        )
+    if missing:
+        failures.append("missing " + ", ".join(missing))
+    return not failures, "; ".join(failures) if failures else "early probe passed"
 
 
 def daily_realized_pnl(conn, now):
@@ -1136,6 +1161,37 @@ for product in PRODUCTS:
             )
             sequence = ("EARLY", 0, result[2], result[2])
             started_early_now = True
+
+            # Research-only early-entry challenger. This opens an outcome sample,
+            # not a V5 paper position, so the champion's 80+ rule stays untouched.
+            early_probe_passed, early_probe_detail = early_probe_quality(result)
+            if early_probe_passed:
+                opened_probe = start_signal_outcome(
+                    conn,
+                    now,
+                    result[0],
+                    "EARLY_PROBE",
+                    result[2],
+                    result[1],
+                    btc_aligned,
+                    market_breadth,
+                    regime_detail,
+                )
+                if opened_probe:
+                    alerts.append(
+                        f"🧪 EARLY PROBE {result[0]} — Score {result[2]} — "
+                        f"Volume {result[5]:.2f}x — shadow entry before confirmation"
+                    )
+            else:
+                record_entry_skip(
+                    conn,
+                    now.isoformat(),
+                    result[0],
+                    result[2],
+                    result[1],
+                    "EARLY_PROBE_REJECT",
+                    early_probe_detail,
+                )
 
 
         # Recover a recent sequence if an older run stored EARLY but stopped early.

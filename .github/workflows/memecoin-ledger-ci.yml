@@ -1,0 +1,15 @@
+name: Memecoin Decision Ledger Checks
+on:
+  push:
+    branches: [feature/meme-decision-ledger]
+  pull_request:
+    paths: [memecoin_shadow.py]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: python -m py_compile memecoin_shadow.py
+      - run: python memecoin_shadow.py --self-test

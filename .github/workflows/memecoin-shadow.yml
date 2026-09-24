@@ -30,6 +30,9 @@ jobs:
       - name: Analyze accumulated meme outcomes
         run: python memecoin_research.py
 
+      - name: Analyze pre-spike signatures
+        run: python memecoin_pre_spike.py
+
       - name: Discover and evaluate Solana memecoins
         env:
           GOPLUS_TOKEN: ${{ secrets.GOPLUS_TOKEN }}

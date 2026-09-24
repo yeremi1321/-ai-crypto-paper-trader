@@ -1,6 +1,7 @@
 import html
 import os
 import sqlite3
+import json
 
 
 import altair as alt
@@ -14,6 +15,7 @@ import streamlit as st
 DB = "paper_trader_v4.db"
 SHADOW_DB = "research_shadow.db"
 BACKTEST_DB = "research_backtest.db"
+MEME_DB = "memecoin_shadow.db"
 HORIZONS = [("15m", 15), ("1h", 60), ("4h", 240), ("24h", 1440)]
 
 
@@ -1266,6 +1268,72 @@ else:
         "Results are ranked for research only. No winning parameter set is "
         "automatically copied into V5."
     )
+
+
+# Memecoin decision-ledger dashboard (research/paper only)
+st.subheader("🧪 Memecoin Research Dashboard")
+if not os.path.exists(MEME_DB):
+    st.caption("Waiting for the first memecoin research database.")
+else:
+    meme_conn = sqlite3.connect(MEME_DB)
+    if not table_exists(meme_conn, "meme_decision_ledger"):
+        st.caption("Decision ledger is waiting for its first post-deployment scan.")
+    else:
+        meme_ledger = pd.read_sql_query(
+            "SELECT * FROM meme_decision_ledger ORDER BY id DESC", meme_conn
+        )
+        if meme_ledger.empty:
+            st.caption("Decision ledger is ready; waiting for candidates.")
+        else:
+            for col in ["score","liquidity_usd","volume_1h_usd","mfe_pct","mae_pct","net_return_pct"]:
+                if col in meme_ledger.columns:
+                    meme_ledger[col] = pd.to_numeric(meme_ledger[col], errors="coerce")
+            decisions = meme_ledger["decision"].fillna("UNKNOWN")
+            accepted = int((decisions == "PAPER_TRADE_CANDIDATE").sum())
+            rejected = int((decisions == "REJECT").sum())
+            resolved = int(meme_ledger["outcome_label"].fillna("PENDING").ne("PENDING").sum())
+            d1,d2,d3,d4,d5 = st.columns(5)
+            d1.metric("Ledger candidates", len(meme_ledger))
+            d2.metric("Paper candidates", accepted)
+            d3.metric("Rejected", rejected)
+            d4.metric("Resolved outcomes", resolved)
+            d5.metric("Median score", f"{meme_ledger['score'].median():.1f}" if meme_ledger["score"].notna().any() else "—")
+
+            st.caption("Every accepted and rejected candidate is retained. Results are descriptive research, not live-trading instructions.")
+            left,right = st.columns(2)
+            with left:
+                decision_counts = decisions.value_counts().rename_axis("decision").reset_index(name="candidates")
+                st.markdown("**Decision mix**")
+                st.bar_chart(decision_counts.set_index("decision"))
+            with right:
+                veto_counts = {}
+                for raw in meme_ledger["vetoes"].dropna():
+                    try:
+                        vals=json.loads(raw) if isinstance(raw,str) else []
+                    except Exception:
+                        vals=[]
+                    for v in vals:
+                        veto_counts[v]=veto_counts.get(v,0)+1
+                st.markdown("**Top rejection reasons**")
+                if veto_counts:
+                    veto_frame=pd.DataFrame(sorted(veto_counts.items(), key=lambda x:x[1], reverse=True),columns=["veto","count"])
+                    st.bar_chart(veto_frame.set_index("veto"))
+                else:
+                    st.caption("No deterministic vetoes recorded yet.")
+
+            if "outcome_label" in meme_ledger.columns:
+                outcomes=meme_ledger[meme_ledger["outcome_label"].fillna("PENDING")!="PENDING"].copy()
+                if not outcomes.empty:
+                    st.markdown("**Resolved outcome quality**")
+                    o1,o2,o3=st.columns(3)
+                    o1.metric("Avg net return", f"{outcomes['net_return_pct'].mean():+.2f}%" if outcomes["net_return_pct"].notna().any() else "—")
+                    o2.metric("Avg MFE", f"{outcomes['mfe_pct'].mean():+.2f}%" if outcomes["mfe_pct"].notna().any() else "—")
+                    o3.metric("Avg MAE", f"{outcomes['mae_pct'].mean():+.2f}%" if outcomes["mae_pct"].notna().any() else "—")
+
+            show_cols=[x for x in ["recorded_at","token","venue","regime","score","decision","liquidity_usd","volume_1h_usd","participation","estimated_entry_slippage_pct","vetoes","outcome_label","net_return_pct","mfe_pct","mae_pct","time_in_trade_minutes","ai_explanation"] if x in meme_ledger.columns]
+            st.markdown("**Candidate ledger**")
+            st.dataframe(meme_ledger[show_cols].head(300),use_container_width=True,hide_index=True)
+    meme_conn.close()
 
 st.subheader("Settings & emergency controls")
 with st.expander("Open control panel"):

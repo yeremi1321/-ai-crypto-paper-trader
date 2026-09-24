@@ -30,7 +30,11 @@ def summarize(path=DB):
  avg_last_return_pct,hit_10_pct,hit_20_pct,stopped_10_pct) VALUES(?,?,?,?,?,?,?,?,?)""",
  (VERSION,"ALL",result["samples"],result["avg_mfe_pct"],result["avg_mae_pct"],result["avg_last_return_pct"],
  result["hit_10_pct"],result["hit_20_pct"],result["stopped_10_pct"])); conn.commit()
- paths=replay_paths(conn); conn.close()\n print(result); print({"path_replay":paths}); return result
+ paths=replay_paths(conn)
+ conn.close()
+ print(result)
+ print({"path_replay":paths})
+ return result
 
 
 def replay_paths(conn):

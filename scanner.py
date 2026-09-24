@@ -36,7 +36,7 @@ PAPER_MAX_HOLD_HOURS = 24
 PAPER_CONFIRMATION_SCANS = 2
 PAPER_WEAKENING_EXIT_SCANS = 2
 PAPER_REENTRY_COOLDOWN_HOURS = 2
-PAPER_ENTRY_MIN_SCORE = 80.0
+PAPER_ENTRY_MIN_SCORE = 70.0
 PAPER_ENTRY_MIN_REL_VOLUME = 1.50
 PAPER_ENTRY_MIN_RSI = 55.0
 PAPER_ENTRY_MAX_RSI = 68.0
@@ -294,7 +294,7 @@ def scan_one(product):
 
 
     score = round(min(score, 85), 1)
-    status = "SIGNAL" if score >= 80 else ("WATCH" if score >= 70 else "IGNORE")
+    status = "SIGNAL" if score >= PAPER_ENTRY_MIN_SCORE else ("WATCH" if score >= 60 else "IGNORE")
     return (
         product,
         float(current.close),
@@ -1163,7 +1163,7 @@ for product in PRODUCTS:
             started_early_now = True
 
             # Research-only early-entry challenger. This opens an outcome sample,
-            # not a V5 paper position, so the champion's 80+ rule stays untouched.
+            # not a V5 paper position, so the champion's entry-score rule stays untouched.
             early_probe_passed, early_probe_detail = early_probe_quality(result)
             if early_probe_passed:
                 opened_probe = start_signal_outcome(

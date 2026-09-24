@@ -1,0 +1,19 @@
+name: Memecoin Pre-Spike Checks
+on:
+  push:
+    branches: [feature/meme-pre-spike-challenger]
+  pull_request:
+    paths:
+      - memecoin_pre_spike.py
+      - .github/workflows/memecoin-shadow.yml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python -m py_compile memecoin_pre_spike.py
+      - run: python memecoin_pre_spike.py --self-test

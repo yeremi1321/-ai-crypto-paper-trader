@@ -1013,6 +1013,108 @@ else:
     st.markdown("**Entry-threshold evidence**")
     st.dataframe(pd.DataFrame(bucket_rows), use_container_width=True, hide_index=True)
 
+st.subheader("V5 Entry Latency Research")
+if signal_outcomes.empty:
+    st.caption("Waiting for EARLY_PROBE and confirmed V5 outcome samples.")
+else:
+    latency = signal_outcomes[
+        signal_outcomes["decision"].isin(["EARLY_PROBE", "ALLOWED"])
+    ].copy()
+    if latency.empty:
+        st.caption("No EARLY_PROBE or confirmed V5 samples yet.")
+    else:
+        latency["entry_time"] = latency["created_at"]
+        latency["net_return_pct"] = pd.to_numeric(
+            latency["final_return_pct"], errors="coerce"
+        )
+        latency["mfe_pct"] = (
+            (pd.to_numeric(latency["highest_price"], errors="coerce")
+             / pd.to_numeric(latency["entry_price"], errors="coerce")) - 1
+        ) * 100
+        latency["mae_pct"] = (
+            (pd.to_numeric(latency["lowest_price"], errors="coerce")
+             / pd.to_numeric(latency["entry_price"], errors="coerce")) - 1
+        ) * 100
+        summary_rows = []
+        for decision, group in latency.groupby("decision"):
+            final = group[group["status"] == "FINAL"].copy()
+            summary_rows.append({
+                "entry_type": decision,
+                "samples": len(group),
+                "completed": len(final),
+                "win_rate_pct": (
+                    (final["net_return_pct"] > 0).mean() * 100
+                    if len(final) else None
+                ),
+                "avg_net_return_pct": (
+                    final["net_return_pct"].mean() if len(final) else None
+                ),
+                "avg_mfe_pct": group["mfe_pct"].mean(),
+                "avg_mae_pct": group["mae_pct"].mean(),
+            })
+        st.caption(
+            "Direct challenger comparison: EARLY_PROBE enters before full V5 "
+            "confirmation; ALLOWED represents confirmed V5-quality samples. "
+            "Research only—no production threshold changes."
+        )
+        st.dataframe(
+            pd.DataFrame(summary_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        probes = latency[latency["decision"] == "EARLY_PROBE"].copy()
+        confirmed = latency[latency["decision"] == "ALLOWED"].copy()
+        paired_rows = []
+        for _, probe in probes.iterrows():
+            later = confirmed[
+                (confirmed["product"] == probe["product"])
+                & (confirmed["entry_time"] >= probe["entry_time"])
+            ].sort_values("entry_time")
+            if later.empty:
+                continue
+            confirmation = later.iloc[0]
+            delay_minutes = (
+                confirmation["entry_time"] - probe["entry_time"]
+            ).total_seconds() / 60
+            if delay_minutes > 240:
+                continue
+            price_move = (
+                (float(confirmation["entry_price"]) / float(probe["entry_price"])) - 1
+            ) * 100
+            paired_rows.append({
+                "product": probe["product"],
+                "probe_time": probe["entry_time"],
+                "confirmation_time": confirmation["entry_time"],
+                "delay_minutes": round(delay_minutes, 1),
+                "price_move_before_confirmation_pct": round(price_move, 3),
+                "probe_mfe_pct": round(float(probe["mfe_pct"]), 3)
+                    if pd.notna(probe["mfe_pct"]) else None,
+                "probe_final_return_pct": round(float(probe["net_return_pct"]), 3)
+                    if pd.notna(probe["net_return_pct"]) else None,
+                "confirmed_final_return_pct": round(float(confirmation["net_return_pct"]), 3)
+                    if pd.notna(confirmation["net_return_pct"]) else None,
+            })
+        if paired_rows:
+            paired = pd.DataFrame(paired_rows)
+            q1, q2, q3 = st.columns(3)
+            q1.metric("Probe→V5 pairs", len(paired))
+            q2.metric("Median confirmation delay", f"{paired['delay_minutes'].median():.0f} min")
+            q3.metric(
+                "Median move before V5",
+                f"{paired['price_move_before_confirmation_pct'].median():+.2f}%",
+            )
+            st.dataframe(
+                paired.sort_values("probe_time", ascending=False).head(100),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.caption(
+                "No EARLY_PROBE → confirmed V5 pairs yet. This section will fill "
+                "automatically as the challenger accumulates observations."
+            )
+
 st.subheader("Forward Performance Research")
 scan_events = scans[["product", "seen_at", "score", "status", "price"]].copy()
 scan_performance = add_forward_returns(scan_events, scans)

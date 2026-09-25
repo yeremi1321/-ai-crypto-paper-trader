@@ -58,6 +58,16 @@ def goplus(address):
 def truth(v):
     return str(v).lower() in ("1","true","yes")
 
+def status(sec,key):
+    v=sec.get(key) if sec else None
+    if isinstance(v,dict): v=v.get("status")
+    if v in (None,""): return None
+    return truth(v)
+
+def percent(v):
+    if v in (None,""): return None
+    n=float(v); return n*100 if n<=1 else n
+
 def normalize(profile,pair,sec):
     tx=(pair.get("txns") or {}).get("h1") or {}
     vol=pair.get("volume") or {}
@@ -65,10 +75,20 @@ def normalize(profile,pair,sec):
     liq=pair.get("liquidity") or {}
     h1=float(vol.get("h1") or 0); h6=float(vol.get("h6") or 0)
     makers=int(tx.get("buys") or 0)+int(tx.get("sells") or 0)  # participation proxy, not unique wallets
-    locked=truth(sec.get("is_locked")) if sec else False
-    mint_active=not truth(sec.get("mintable") in ("0",0,False)) if sec and "mintable" in sec else True
-    freeze_active=truth(sec.get("freezable")) if sec and "freezable" in sec else True
-    # Unknown security fields fail closed in V1.
+    holders=sec.get("holders") if sec else None
+    hp=[percent(h.get("percent")) for h in holders or [] if percent(h.get("percent")) is not None]
+    top10=sum(hp) if hp else None
+    creator=percent(sec.get("creator_percent")) if sec else None
+    if creator is None and sec: creator=percent(sec.get("creator_balance_rate"))
+    lp=sec.get("lp_holders") if sec else None
+    locked=truth(sec.get("is_locked")) if sec and "is_locked" in sec else (any(truth(h.get("is_locked")) for h in lp) if lp else None)
+    mint_active=status(sec,"mintable")
+    freeze_active=status(sec,"freezable")
+    nontransfer=status(sec,"non_transferable")
+    cannot_sell=status(sec,"cannot_sell")
+    if cannot_sell is None and sec and isinstance(sec.get("b20_info"),dict): cannot_sell=status(sec["b20_info"],"cannot_sell")
+    sellable=False if nontransfer is True or cannot_sell is True else (True if nontransfer is False or cannot_sell is False else (not truth(sec.get("cannot_sell_all")) if sec and "cannot_sell_all" in sec else False))
+    # Unknown security fields fail closed; current GoPlus Solana fields are parsed explicitly.
     return {
       "token":(pair.get("baseToken") or {}).get("symbol") or profile.get("tokenAddress"),
       "token_address":profile.get("tokenAddress"),"chain":"solana",
@@ -79,11 +99,11 @@ def normalize(profile,pair,sec):
       "price_change_1h_pct":float(pc.get("h1") or 0),
       "market_cap":pair.get("marketCap"),"fdv":pair.get("fdv"),
       "pair_created_at":pair.get("pairCreatedAt"),
-      "top10_holder_pct":float(sec.get("top_10_holder_rate") or 100) * (100 if float(sec.get("top_10_holder_rate") or 0)<=1 else 1),
-      "dev_holder_pct":float(sec.get("creator_balance_rate") or 100) * (100 if float(sec.get("creator_balance_rate") or 0)<=1 else 1),
-      "mint_authority_active":mint_active,"freeze_authority_active":freeze_active,
-      "sellable": not truth(sec.get("cannot_sell_all")) if sec and "cannot_sell_all" in sec else False,
-      "liquidity_locked":locked,
+      "top10_holder_pct":top10 if top10 is not None else (percent(sec.get("top_10_holder_rate")) if sec and sec.get("top_10_holder_rate") not in (None,"") else 100.0),
+      "dev_holder_pct":creator if creator is not None else 100.0,
+      "mint_authority_active":mint_active if mint_active is not None else True,"freeze_authority_active":freeze_active if freeze_active is not None else True,
+      "sellable":sellable,
+      "liquidity_locked":locked if locked is not None else False,
       "holder_growth_1h_pct":0.0,"higher_highs":float(pc.get("m5") or 0)>0 and float(pc.get("h1") or 0)>0,
       "narrative_momentum":bool((pair.get("boosts") or {}).get("active")),
       "security_source":"goplus" if sec else "unavailable",
@@ -108,8 +128,8 @@ def self_test():
     pair={"baseToken":{"symbol":"MEME"},"priceUsd":"0.01","liquidity":{"usd":100000},
           "volume":{"h1":60000,"h6":120000},"priceChange":{"m5":2,"h1":20},
           "txns":{"h1":{"buys":150,"sells":100}},"boosts":{"active":1}}
-    sec={"is_locked":"1","mintable":"0","freezable":"0","cannot_sell_all":"0",
-         "top_10_holder_rate":"0.30","creator_balance_rate":"0.03"}
+    sec={"lp_holders":[{"is_locked":"1"}],"holders":[{"percent":"0.20"},{"percent":"0.10"}],
+         "mintable":{"status":"0"},"freezable":{"status":"0"},"non_transferable":"0","creator_percent":"0.03"}
     x=normalize(p,pair,sec)
     assert x["liquidity_locked"] and x["sellable"] and not x["mint_authority_active"]
     assert x["top10_holder_pct"]==30.0 and x["makers"]==250

@@ -9,12 +9,15 @@ import numpy as np
 import pandas as pd
 import requests
 
+from perplexity_breakout import entry_signal, exit_levels
+
 
 
 
 DB = "paper_trader_v4.db"
 STRATEGY_VERSION = "V5"
 EARLY_STRATEGY_VERSION = "V6_EARLY"
+PERPLEXITY_STRATEGY_VERSION = "PERPLEXITY_BREAKOUT_V1"
 PRODUCTS = [
     "BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD", "SHIB-USD", "AVAX-USD",
     "LINK-USD", "ADA-USD", "XRP-USD", "LTC-USD", "BCH-USD",
@@ -303,6 +306,41 @@ def scan_one(product):
     )
 
 
+
+
+def perplexity_candidate(product):
+    """Evaluate the copied Perplexity breakout gate on completed 15m candles.
+
+    This remains paper-only. Spread uses Coinbase best bid/ask; event risk
+    defaults to clear because the current scanner has no event calendar.
+    """
+    frame = indicators(candles(product, 900))
+    current = frame.iloc[-1]
+    typical_price = (frame.high + frame.low + frame.close) / 3
+    vwap = float((typical_price * frame.volume).cumsum().iloc[-1] / frame.volume.cumsum().iloc[-1])
+    breakout = float(frame.high.iloc[-21:-1].max())
+    book = requests.get(
+        f"https://api.exchange.coinbase.com/products/{product}/book",
+        params={"level": 1}, headers={"User-Agent": "paper-v4"}, timeout=10,
+    )
+    book.raise_for_status()
+    payload = book.json()
+    bid, ask = float(payload["bids"][0][0]), float(payload["asks"][0][0])
+    mid = (bid + ask) / 2
+    spread_bps = ((ask - bid) / mid) * 10000 if mid else 99999
+    rv = float(current.rv) if pd.notna(current.rv) else 0.0
+    atr_pct = float(current.atr / current.close * 100) if pd.notna(current.atr) else 0.0
+    regime_allows, regime_detail, _, _ = market_regime(db())
+    ok, checks = entry_signal(
+        market_regime="risk_on" if regime_allows else "risk_off",
+        price=float(current.close), vwap=vwap, ema20=float(current.ema20),
+        ema50=float(current.ema50), close=float(current.close),
+        previous_highest_high_20=breakout, relative_volume=rv,
+        spread_bps=spread_bps, no_event_risk=True,
+        liquidity_ok=True, volatility_ok=0.15 <= atr_pct <= 4.0, data_ok=True,
+    )
+    levels = exit_levels(float(current.close), float(current.atr), float(current.close))
+    return ok, checks, levels, spread_bps, regime_detail
 
 
 def record_state(conn, seen_at, product, state, score, previous_score, price):

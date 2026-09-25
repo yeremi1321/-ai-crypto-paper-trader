@@ -12,6 +12,7 @@ from memecoin_discovery import scan
 from memecoin_outcomes import run as update_outcomes
 from memecoin_paper import run as paper_run
 from memecoin_shadow import init_db
+from live_two_second_watcher import run as run_paper_watcher
 
 DISCOVERY_SECONDS=float(os.getenv("MEME_DISCOVERY_SECONDS","30"))
 REFRESH_SECONDS=float(os.getenv("MEME_REFRESH_SECONDS","30"))
@@ -75,5 +76,6 @@ if __name__=="__main__":
     if DISCOVERY_SECONDS<30 or REFRESH_SECONDS<30:
         raise SystemExit("Refusing intervals below 30 seconds to reduce upstream API/rate-limit risk.")
     threading.Thread(target=collector,daemon=True).start()
+    threading.Thread(target=run_paper_watcher,daemon=True,name="paper-two-second-watcher").start()
     print(f"fast memecoin collector: discovery={DISCOVERY_SECONDS}s refresh={REFRESH_SECONDS}s",flush=True)
     HTTPServer(("0.0.0.0",PORT),Health).serve_forever()

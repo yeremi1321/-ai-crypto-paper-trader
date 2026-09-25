@@ -4,7 +4,6 @@ on:
     paths:
       - "scanner.py"
       - "perplexity_breakout.py"
-      - "test_two_second_confirmation.py"
       - "two_second_confirmation.py"
       - "test_two_second_confirmation.py"
       - ".github/workflows/perplexity-scanner.yml"
@@ -18,5 +17,5 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pandas numpy requests
-      - run: python -m py_compile scanner.py perplexity_breakout.py test_scanner_perplexity.py
-      - run: python -m unittest -v test_perplexity_breakout.py test_scanner_perplexity.py
+      - run: python -m py_compile perplexity_breakout.py two_second_confirmation.py test_two_second_confirmation.py
+      - run: python -m unittest -v test_perplexity_breakout.py test_two_second_confirmation.py

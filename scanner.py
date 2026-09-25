@@ -36,14 +36,10 @@ PAPER_MAX_HOLD_HOURS = 24
 PAPER_CONFIRMATION_SCANS = 2
 PAPER_WEAKENING_EXIT_SCANS = 2
 PAPER_REENTRY_COOLDOWN_HOURS = 2
-PAPER_ENTRY_MIN_SCORE = 70.0
+PAPER_ENTRY_MIN_SCORE = 80.0
 PAPER_ENTRY_MIN_REL_VOLUME = 1.50
 PAPER_ENTRY_MIN_RSI = 55.0
 PAPER_ENTRY_MAX_RSI = 68.0
-EARLY_PROBE_MIN_SCORE = 55.0
-EARLY_PROBE_MIN_REL_VOLUME = 1.50
-EARLY_PROBE_MIN_RSI = 52.0
-EARLY_PROBE_MAX_RSI = 72.0
 PAPER_WEAKENING_FAST_LOSS_PCT = -0.75
 PAPER_WEAKENING_PROFIT_LOCK_PCT = 1.75
 PAPER_DAILY_LOSS_LIMIT_USD = 15.0
@@ -294,7 +290,7 @@ def scan_one(product):
 
 
     score = round(min(score, 85), 1)
-    status = "SIGNAL" if score >= PAPER_ENTRY_MIN_SCORE else ("WATCH" if score >= 60 else "IGNORE")
+    status = "SIGNAL" if score >= 80 else ("WATCH" if score >= 70 else "IGNORE")
     return (
         product,
         float(current.close),
@@ -399,27 +395,6 @@ def v5_entry_quality(result, previous):
     return not failures, "; ".join(failures) if failures else "V5 quality passed"
 
 
-def early_probe_quality(result):
-    """Research-only challenger: identify strong acceleration before V5 confirmation."""
-    _, _, score, _, rsi, rel_volume, reason = result
-    required = ("15m>EMA20", "15m trend", "1h trend")
-    missing = [item for item in required if item not in (reason or "")]
-    failures = []
-    if score < EARLY_PROBE_MIN_SCORE:
-        failures.append(f"score {score:.1f} below {EARLY_PROBE_MIN_SCORE:.0f}")
-    if rel_volume < EARLY_PROBE_MIN_REL_VOLUME:
-        failures.append(
-            f"volume {rel_volume:.2f}x below {EARLY_PROBE_MIN_REL_VOLUME:.2f}x"
-        )
-    if not EARLY_PROBE_MIN_RSI <= rsi <= EARLY_PROBE_MAX_RSI:
-        failures.append(
-            f"RSI {rsi:.1f} outside {EARLY_PROBE_MIN_RSI:.0f}-{EARLY_PROBE_MAX_RSI:.0f}"
-        )
-    if missing:
-        failures.append("missing " + ", ".join(missing))
-    return not failures, "; ".join(failures) if failures else "early probe passed"
-
-
 def daily_realized_pnl(conn, now):
     local_date = now.astimezone(REPORT_TIMEZONE).date()
     total = 0.0
@@ -465,6 +440,26 @@ def weakening_exit_reason(
         return "STATE_WEAKENING_RISK"
     if weakening_count >= PAPER_WEAKENING_EXIT_SCANS:
         return "STATE_WEAKENING_2X"
+    return None
+
+
+def early_shadow_exit_reason(
+    momentum_state, weakening_scan, market_return_pct, high_gain_pct,
+    pullback_from_high_pct, age_hours,
+):
+    """Fast, cost-aware exits for the early-entry research arm only."""
+    if momentum_state == "FAILED":
+        return "EARLY_FAILED"
+    if market_return_pct <= -1.5:
+        return "EARLY_STOP"
+    if market_return_pct >= 2.8:
+        return "EARLY_TARGET"
+    if high_gain_pct >= 2.0 and pullback_from_high_pct <= -0.4:
+        return "EARLY_TRAIL"
+    if weakening_scan:
+        return "EARLY_WEAKENING"
+    if age_hours >= 4:
+        return "EARLY_TIME_4H"
     return None
 
 
@@ -557,15 +552,17 @@ def update_signal_outcomes(
         net_pnl = exit_value - exit_fee - PAPER_NOTIONAL_USD
         net_return_pct = (net_pnl / PAPER_NOTIONAL_USD) * 100
 
-        exit_reason = weakening_exit_reason(
-            momentum_state,
-            weakening_scan,
-            market_return_pct,
-            high_gain_pct,
-            pullback_from_high_pct,
-            age_hours,
-            weakening_count,
-        )
+        if decision == "EARLY_SHADOW":
+            exit_reason = early_shadow_exit_reason(
+                momentum_state, weakening_scan, market_return_pct,
+                high_gain_pct, pullback_from_high_pct, age_hours,
+            )
+        else:
+            exit_reason = weakening_exit_reason(
+                momentum_state, weakening_scan, market_return_pct,
+                high_gain_pct, pullback_from_high_pct, age_hours,
+                weakening_count,
+            )
 
         if exit_reason:
             final_result = "WIN" if net_pnl > 0 else "LOSS"
@@ -1119,6 +1116,17 @@ for product in PRODUCTS:
                LIMIT 1""",
             (product,),
         ).fetchone()
+        # Record an independent simulated entry at the first acceleration,
+        # before the later confirmation and breakout gates. No live position.
+        if (
+            is_early and not recent_early and regime_allows_entries
+            and result[5] >= 1.25 and result[1] > previous[3]
+            and "15m>EMA20" in result[6]
+        ):
+            start_signal_outcome(
+                conn, now, product, "EARLY_SHADOW", result[2], result[1],
+                btc_aligned, market_breadth, regime_detail,
+            )
         sequence = conn.execute(
             """SELECT state, hold_count, early_score, last_score
                FROM momentum_sequences WHERE product=?""",
@@ -1161,37 +1169,6 @@ for product in PRODUCTS:
             )
             sequence = ("EARLY", 0, result[2], result[2])
             started_early_now = True
-
-            # Research-only early-entry challenger. This opens an outcome sample,
-            # not a V5 paper position, so the champion's entry-score rule stays untouched.
-            early_probe_passed, early_probe_detail = early_probe_quality(result)
-            if early_probe_passed:
-                opened_probe = start_signal_outcome(
-                    conn,
-                    now,
-                    result[0],
-                    "EARLY_PROBE",
-                    result[2],
-                    result[1],
-                    btc_aligned,
-                    market_breadth,
-                    regime_detail,
-                )
-                if opened_probe:
-                    alerts.append(
-                        f"🧪 EARLY PROBE {result[0]} — Score {result[2]} — "
-                        f"Volume {result[5]:.2f}x — shadow entry before confirmation"
-                    )
-            else:
-                record_entry_skip(
-                    conn,
-                    now.isoformat(),
-                    result[0],
-                    result[2],
-                    result[1],
-                    "EARLY_PROBE_REJECT",
-                    early_probe_detail,
-                )
 
 
         # Recover a recent sequence if an older run stored EARLY but stopped early.

@@ -1271,6 +1271,41 @@ else:
 
 
 # Memecoin decision-ledger dashboard (research/paper only)
+st.subheader("🚀 Memecoin Paper Trading")
+if not os.path.exists(MEME_DB):
+    st.caption("Waiting for the memecoin paper database.")
+else:
+    mp_conn=sqlite3.connect(MEME_DB)
+    if table_exists(mp_conn,"meme_paper_trades"):
+        meme_trades=pd.read_sql_query("SELECT * FROM meme_paper_trades ORDER BY id DESC",mp_conn)
+        if meme_trades.empty:
+            st.caption("Paper trader is active; waiting for the first eligible memecoin.")
+        else:
+            for col in ["entry_price","current_price","current_return_pct","mfe_pct","mae_pct","net_pnl_usd","net_return_pct"]:
+                if col in meme_trades.columns:
+                    meme_trades[col]=pd.to_numeric(meme_trades[col],errors="coerce")
+            open_m=meme_trades[meme_trades["status"]=="OPEN"].copy()
+            closed_m=meme_trades[meme_trades["status"]=="CLOSED"].copy()
+            realized=closed_m["net_pnl_usd"].sum() if "net_pnl_usd" in closed_m else 0
+            wins=int((closed_m["net_pnl_usd"]>0).sum()) if "net_pnl_usd" in closed_m else 0
+            win_rate=(100*wins/len(closed_m)) if len(closed_m) else 0
+            m1,m2,m3,m4,m5=st.columns(5)
+            m1.metric("Open meme trades",len(open_m))
+            m2.metric("Closed",len(closed_m))
+            m3.metric("Record",f"{wins}W / {len(closed_m)-wins}L")
+            m4.metric("Win rate",f"{win_rate:.1f}%")
+            m5.metric("Realized P/L",f"${realized:+.2f}")
+            st.caption("MEME_PAPER_V1 • simulated $100 positions • +20% target • -10% stop • 20-minute max hold • simulated fees/slippage")
+            if not open_m.empty:
+                st.markdown("**Open positions**")
+                cols=[x for x in ["token","opened_at","entry_price","current_price","current_return_pct","mfe_pct","mae_pct"] if x in open_m.columns]
+                st.dataframe(open_m[cols],use_container_width=True,hide_index=True)
+            if not closed_m.empty:
+                st.markdown("**Trade history**")
+                cols=[x for x in ["token","opened_at","closed_at","entry_price","exit_price","exit_reason","net_return_pct","net_pnl_usd","mfe_pct","mae_pct"] if x in closed_m.columns]
+                st.dataframe(closed_m[cols].head(200),use_container_width=True,hide_index=True)
+    mp_conn.close()
+
 st.subheader("🧪 Memecoin Research Dashboard")
 if not os.path.exists(MEME_DB):
     st.caption("Waiting for the first memecoin research database.")

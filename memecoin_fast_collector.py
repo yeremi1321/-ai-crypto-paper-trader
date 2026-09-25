@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from memecoin_discovery import scan
 from memecoin_outcomes import run as update_outcomes
 from memecoin_paper import run as paper_run
+from memecoin_shadow import init_db
 
 DISCOVERY_SECONDS=float(os.getenv("MEME_DISCOVERY_SECONDS","30"))
 REFRESH_SECONDS=float(os.getenv("MEME_REFRESH_SECONDS","30"))
@@ -20,19 +21,19 @@ STATE={"started_at":datetime.now(timezone.utc).isoformat(),"cycles":0,"last_disc
 def db_stats():
     out={"observations":0,"eligible":0,"rejected":0,"unique_tokens":0,"snapshots":0,"paper_open":0,"paper_closed":0,"paper_wins":0,"paper_losses":0,"realized_pnl_usd":0.0}
     try:
-        c=sqlite3.connect("memecoin_shadow.db")
+        c=init_db()
         out["observations"]=c.execute("select count(*) from meme_candidates").fetchone()[0]
         out["eligible"]=c.execute("select count(*) from meme_candidates where eligible=1").fetchone()[0]
         out["rejected"]=out["observations"]-out["eligible"]
         out["unique_tokens"]=c.execute("select count(distinct token_address) from meme_candidates where token_address is not null").fetchone()[0]
         try: out["snapshots"]=c.execute("select count(*) from meme_price_snapshots").fetchone()[0]
-        except sqlite3.OperationalError: pass
+        except Exception: pass
         out["paper_open"]=c.execute("select count(*) from meme_paper_trades where status='OPEN'").fetchone()[0]
         out["paper_closed"]=c.execute("select count(*) from meme_paper_trades where status='CLOSED'").fetchone()[0]
         out["paper_wins"]=c.execute("select count(*) from meme_paper_trades where status='CLOSED' and net_pnl_usd>0").fetchone()[0]
         out["paper_losses"]=out["paper_closed"]-out["paper_wins"]
         try: out["realized_pnl_usd"]=round(float(c.execute("select coalesce(sum(net_pnl_usd),0) from meme_paper_trades where status='CLOSED'").fetchone()[0] or 0),2)
-        except sqlite3.OperationalError: pass
+        except Exception: pass
         c.close()
     except Exception as e: out["stats_error"]=repr(e)
     return out
@@ -60,7 +61,7 @@ def collector():
 
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
-        body=json.dumps({"status":"ok","mode":"paper_trading","discovery_seconds":DISCOVERY_SECONDS,
+        body=json.dumps({"status":"ok","mode":"paper_trading","database":"postgres" if os.getenv("DATABASE_URL") else "sqlite","discovery_seconds":DISCOVERY_SECONDS,
                          "refresh_seconds":REFRESH_SECONDS,**STATE,**db_stats()}).encode()
         self.send_response(200); self.send_header("Content-Type","application/json")
         self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)

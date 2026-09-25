@@ -778,8 +778,9 @@ if not paper_entry_skips.empty:
 
 st.subheader("Signal Outcome Tracker")
 st.caption(
-    "Compares independent BLOCKED and ALLOWED samples with identical paper costs "
-    "and exit rules. One active sample per coin/decision prevents duplicate counting."
+    "Compares BLOCKED and ALLOWED samples with identical paper costs and exits. "
+    "EARLY_SHADOW tests acceleration before confirmation with faster exits. "
+    "One active sample per coin/decision prevents duplicate counting."
 )
 if signal_outcomes.empty:
     st.info("Waiting for the first blocked or allowed signal outcome.")
@@ -811,6 +812,24 @@ else:
     o4.metric("ALLOWED → LOSS", bucket_count("ALLOWED", "LOSS"))
     o5.metric("Active samples", len(active_outcomes))
 
+    early_samples = finalized_outcomes[
+        finalized_outcomes.decision == "EARLY_SHADOW"
+    ]
+    early_count = len(early_samples)
+    early_wins = int((early_samples.final_return_pct > 0).sum())
+    early_avg = early_samples.final_return_pct.mean() if early_count else 0.0
+    e1, e2, e3 = st.columns(3)
+    e1.metric("Early shadow exits", early_count)
+    e2.metric("Early shadow wins", early_wins)
+    e3.metric("Early shadow avg net return", f"{early_avg:+.2f}%")
+    st.caption(
+        "Early shadow: acceleration with rising price and volume, simulated "
+        "0.6% fee + 0.1% slippage per side; 1.5% stop, 2.8% target, "
+        "trail after a 2% gain, exit on weakening or after 4 hours. "
+        "Prices are checked on completed scanner cycles, so spikes between "
+        "cycles may be missed. No early shadow orders are placed."
+    )
+
     if not finalized_outcomes.empty:
         bucket_summary = (
             finalized_outcomes.groupby(["decision", "final_result"], dropna=False)
@@ -820,7 +839,7 @@ else:
             )
             .reset_index()
         )
-        st.markdown("**Four-bucket comparison**")
+        st.markdown("**Signal outcome comparison**")
         st.dataframe(bucket_summary, use_container_width=True, hide_index=True)
 
     tracker_columns = [

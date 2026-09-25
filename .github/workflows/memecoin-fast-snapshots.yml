@@ -1,0 +1,40 @@
+name: Memecoin fast snapshots
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "2,7,17,22,32,37,47,52 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: memecoin-shadow
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - run: pip install -r requirements.txt
+      - name: Capture active memecoin price paths
+        run: python memecoin_outcomes.py
+      - name: Update memecoin paper positions
+        run: python memecoin_paper.py
+      - name: Commit snapshot history
+        run: |
+          git config user.name "memecoin-snapshot-collector"
+          git config user.email "actions@users.noreply.github.com"
+          git add memecoin_shadow.db
+          git diff --cached --quiet && exit 0
+          git commit -m "Record fast memecoin snapshots"
+          git pull --rebase origin main
+          git push origin HEAD:main

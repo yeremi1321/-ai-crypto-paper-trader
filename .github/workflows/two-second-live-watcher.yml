@@ -1,0 +1,21 @@
+name: Two Second Live Watcher Checks
+on:
+  pull_request:
+    paths:
+      - "live_two_second_watcher.py"
+      - "test_live_two_second_watcher.py"
+      - "two_second_confirmation.py"
+      - "perplexity_breakout.py"
+      - ".github/workflows/two-second-live-watcher.yml"
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python -m py_compile live_two_second_watcher.py two_second_confirmation.py perplexity_breakout.py
+      - run: python -m unittest -v test_live_two_second_watcher.py test_two_second_confirmation.py test_perplexity_breakout.py

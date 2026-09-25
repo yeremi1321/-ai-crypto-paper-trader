@@ -1,0 +1,21 @@
+name: Memecoin Pre-Spike Replay Fix Checks
+on:
+  push:
+    branches: ["fix/meme-pre-spike-replay"]
+  pull_request:
+    paths:
+      - "memecoin_shadow.py"
+      - "memecoin_pre_spike.py"
+      - "memecoin_research.py"
+      - ".github/workflows/memecoin-pre-spike-replay-fix-ci.yml"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: python -m py_compile memecoin_shadow.py memecoin_pre_spike.py memecoin_research.py
+      - run: python memecoin_shadow.py --self-test
+      - run: python memecoin_pre_spike.py --self-test
+      - run: python memecoin_research.py --self-test

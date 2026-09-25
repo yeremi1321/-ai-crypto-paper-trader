@@ -31,6 +31,10 @@ def evaluate(x):
 def init_db(path=DB):
  c=sqlite3.connect(path)
  c.execute("""CREATE TABLE IF NOT EXISTS meme_candidates(id INTEGER PRIMARY KEY,seen_at TEXT,version TEXT,token TEXT,chain TEXT,score REAL,eligible INTEGER,blocked_reasons TEXT,raw_json TEXT)""")
+ # Pre-spike research needs stable discovery identifiers on both new and legacy DBs.
+ cols={r[1] for r in c.execute("PRAGMA table_info(meme_candidates)")}
+ if "token_address" not in cols: c.execute("ALTER TABLE meme_candidates ADD COLUMN token_address TEXT")
+ if "pair_address" not in cols: c.execute("ALTER TABLE meme_candidates ADD COLUMN pair_address TEXT")
  c.execute("""CREATE TABLE IF NOT EXISTS meme_outcomes(candidate_id INTEGER PRIMARY KEY,token_address TEXT,pair_address TEXT,detected_at TEXT,entry_price REAL,last_price REAL,highest_price REAL,lowest_price REAL,mfe_pct REAL,mae_pct REAL,age_minutes REAL)""")
  c.execute("""CREATE TABLE IF NOT EXISTS meme_decision_ledger(
  id INTEGER PRIMARY KEY,candidate_id INTEGER UNIQUE,recorded_at TEXT,version TEXT,
@@ -43,10 +47,9 @@ def init_db(path=DB):
  ai_explanation TEXT,raw_json TEXT)""")
  c.execute("""CREATE TABLE IF NOT EXISTS meme_paper_trades(id INTEGER PRIMARY KEY,candidate_id INTEGER UNIQUE,token TEXT,token_address TEXT,pair_address TEXT,opened_at TEXT,entry_market_price REAL,entry_price REAL,notional_usd REAL,quantity REAL,entry_fee REAL,status TEXT,highest_price REAL,lowest_price REAL,current_price REAL,current_return_pct REAL,mfe_pct REAL,mae_pct REAL)""")
  c.commit(); return c
-
 def record(conn,x,result):
  now=datetime.now(timezone.utc).isoformat()
- cur=conn.execute("""INSERT INTO meme_candidates(seen_at,version,token,chain,score,eligible,blocked_reasons,raw_json) VALUES(?,?,?,?,?,?,?,?)""",(now,VERSION,x.get("token"),x.get("chain"),result["score"],int(result["eligible"]),json.dumps(result["blocked_reasons"]),json.dumps(x)))
+ cur=conn.execute("""INSERT INTO meme_candidates(seen_at,version,token,chain,score,eligible,blocked_reasons,raw_json,token_address,pair_address) VALUES(?,?,?,?,?,?,?,?,?,?)""",(now,VERSION,x.get("token"),x.get("chain"),result["score"],int(result["eligible"]),json.dumps(result["blocked_reasons"]),json.dumps(x),x.get("token_address"),x.get("pair_address")))
  cid=cur.lastrowid
  decision="PAPER_TRADE_CANDIDATE" if result["eligible"] else ("REJECT" if result["blocked_reasons"] else "WATCHLIST")
  vetoes=json.dumps(result["blocked_reasons"])

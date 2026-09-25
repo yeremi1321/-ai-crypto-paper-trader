@@ -38,7 +38,7 @@ def summarize(path=DB):
 
 
 def replay_paths(conn):
- """Replay simple exit hypotheses on timestamped observations; research only."""
+ """Replay exits only on paths with timely snapshots and full horizon coverage."""
  exists=conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meme_price_snapshots'").fetchone()
  if not exists: return []
  candidates=conn.execute("""SELECT candidate_id,token_address,detected_at,entry_price
@@ -47,22 +47,38 @@ def replay_paths(conn):
         ("TIME10_SL10",None,-10,10),("TIME20_SL10",None,-10,20)]
  results=[]
  for name,tp,sl,minutes in rules:
-  returns=[]
+  returns=[]; eligible_paths=0; rejected_late=0; rejected_short=0
   for _,token,detected,entry in candidates:
    snaps=conn.execute("""SELECT observed_at,price FROM meme_price_snapshots
     WHERE token_address=? AND observed_at>=? ORDER BY observed_at""",(token,detected)).fetchall()
    if not snaps: continue
-   chosen=None
    start=__import__("datetime").datetime.fromisoformat(detected)
-   for observed,price in snaps:
+   parsed=[((__import__("datetime").datetime.fromisoformat(o)-start).total_seconds()/60,p) for o,p in snaps]
+   # A replay is valid only when observation begins near detection and spans the rule horizon.
+   if parsed[0][0] > 5:
+    rejected_late += 1; continue
+   if parsed[-1][0] < minutes:
+    rejected_short += 1; continue
+   eligible_paths += 1
+   chosen=None
+   for age,price in parsed:
+    if age < 0 or age > minutes: continue
     ret=pct(entry,price)
-    age=(__import__("datetime").datetime.fromisoformat(observed)-start).total_seconds()/60
-    if ret<=sl or (tp is not None and ret>=tp) or age>=minutes:
-     chosen=ret; break
+    if ret<=sl:
+     chosen=sl; break
+    if tp is not None and ret>=tp:
+     chosen=tp; break
+   if chosen is None:
+    # Time exit uses the first snapshot at/after the requested horizon.
+    after=[(age,price) for age,price in parsed if age>=minutes]
+    if after: chosen=pct(entry,after[0][1])
    if chosen is not None: returns.append(chosen)
+  row={"rule":name,"valid_paths":eligible_paths,"samples":len(returns),
+       "rejected_late_start":rejected_late,"rejected_short_path":rejected_short}
   if returns:
-   results.append({"rule":name,"samples":len(returns),"avg_return_pct":round(statistics.mean(returns),3),
-    "win_rate_pct":round(100*sum(x>0 for x in returns)/len(returns),1)})
+   row.update({"avg_return_pct":round(statistics.mean(returns),3),
+               "win_rate_pct":round(100*sum(x>0 for x in returns)/len(returns),1)})
+  results.append(row)
  return results
 
 def self_test():

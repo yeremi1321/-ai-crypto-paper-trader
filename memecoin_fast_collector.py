@@ -36,7 +36,9 @@ def db_stats():
         try: out["realized_pnl_usd"]=round(float(c.execute("select coalesce(sum(net_pnl_usd),0) from meme_paper_trades where status='CLOSED'").fetchone()[0] or 0),2)
         except Exception: pass
         c.close()
-    except Exception as e:\n        out["db_connected"]=False\n        out["stats_error"]=repr(e)
+    except Exception as e:
+        out["db_connected"]=False
+        out["stats_error"]=repr(e)
     return out
 
 def collector():
@@ -62,7 +64,8 @@ def collector():
 
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
-        stats=db_stats()\n        body=json.dumps({"status":"ok" if stats.get("db_connected") else "degraded","mode":"paper_trading","database":"postgres" if os.getenv("DATABASE_URL") else "sqlite","database_connected":stats.get("db_connected",False),"discovery_seconds":DISCOVERY_SECONDS,
+        stats=db_stats()
+        body=json.dumps({"status":"ok" if stats.get("db_connected") else "degraded","mode":"paper_trading","database":"postgres" if os.getenv("DATABASE_URL") else "sqlite","database_connected":stats.get("db_connected",False),"discovery_seconds":DISCOVERY_SECONDS,
                          "refresh_seconds":REFRESH_SECONDS,**STATE,**stats}).encode()
         self.send_response(200); self.send_header("Content-Type","application/json")
         self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)

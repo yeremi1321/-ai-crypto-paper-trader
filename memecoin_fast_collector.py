@@ -5,6 +5,7 @@ recent candidates/open paper positions every 30 seconds. API calls remain rate-l
 Exposes a tiny HTTP health endpoint so it can run as a Render web service.
 """
 import json, os, sqlite3, threading, time
+import requests
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -15,7 +16,9 @@ from memecoin_paper import run as paper_run
 DISCOVERY_SECONDS=float(os.getenv("MEME_DISCOVERY_SECONDS","30"))
 REFRESH_SECONDS=float(os.getenv("MEME_REFRESH_SECONDS","30"))
 PORT=int(os.getenv("PORT","10000"))
-STATE={"started_at":datetime.now(timezone.utc).isoformat(),"cycles":0,"last_discovery":None,"last_refresh":None,"last_error":None}
+STATE={"started_at":datetime.now(timezone.utc).isoformat(),"cycles":0,"last_discovery":None,"last_refresh":None,"last_error":None,"last_persist":None}
+DATABASE_URL=os.getenv("DATABASE_URL","")
+PERSIST_SECONDS=float(os.getenv("MEME_PERSIST_SECONDS","30"))
 
 def db_stats():
     out={"observations":0,"eligible":0,"rejected":0,"unique_tokens":0,"snapshots":0,"paper_open":0,"paper_closed":0,"paper_wins":0,"paper_losses":0,"realized_pnl_usd":0.0}
@@ -37,8 +40,35 @@ def db_stats():
     except Exception as e: out["stats_error"]=repr(e)
     return out
 
+def persist_snapshot():
+    """Persist the collector's SQLite state to the shared database service.
+
+    DATABASE_URL is treated as a private endpoint. The database stores one
+    authoritative SQLite snapshot as binary data; this keeps the existing,
+    well-tested SQLite trading code unchanged while making state durable and
+    shareable with the dashboard.
+    """
+    if not DATABASE_URL:
+        return
+    with open("memecoin_shadow.db","rb") as fh:
+        data=fh.read()
+    r=requests.put(DATABASE_URL.rstrip("/")+"/meme-snapshot",
+                   data=data,headers={"Content-Type":"application/octet-stream"},timeout=20)
+    r.raise_for_status()
+    STATE["last_persist"]=datetime.now(timezone.utc).isoformat()
+
+def restore_snapshot():
+    if not DATABASE_URL:
+        return
+    try:
+        r=requests.get(DATABASE_URL.rstrip("/")+"/meme-snapshot",timeout=20)
+        if r.status_code==200 and r.content:
+            with open("memecoin_shadow.db","wb") as fh: fh.write(r.content)
+    except Exception as e:
+        print(f"::warning::snapshot restore skipped: {e}",flush=True)
+
 def collector():
-    next_discovery=0.0; next_refresh=0.0
+    next_discovery=0.0; next_refresh=0.0; next_persist=0.0
     while True:
         now=time.monotonic()
         try:
@@ -69,6 +99,6 @@ class Health(BaseHTTPRequestHandler):
 if __name__=="__main__":
     if DISCOVERY_SECONDS<30 or REFRESH_SECONDS<30:
         raise SystemExit("Refusing intervals below 30 seconds to reduce upstream API/rate-limit risk.")
-    threading.Thread(target=collector,daemon=True).start()
+    restore_snapshot()\n    threading.Thread(target=collector,daemon=True).start()
     print(f"fast memecoin collector: discovery={DISCOVERY_SECONDS}s refresh={REFRESH_SECONDS}s",flush=True)
     HTTPServer(("0.0.0.0",PORT),Health).serve_forever()

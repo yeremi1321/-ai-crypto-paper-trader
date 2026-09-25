@@ -27,6 +27,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Update prior meme outcomes
         run: python memecoin_outcomes.py
+      - name: Update memecoin paper positions
+        run: python memecoin_paper.py
       - name: Analyze accumulated meme outcomes
         run: python memecoin_research.py
 

@@ -19,9 +19,10 @@ PORT=int(os.getenv("PORT","10000"))
 STATE={"started_at":datetime.now(timezone.utc).isoformat(),"cycles":0,"last_discovery":None,"last_refresh":None,"last_error":None}
 
 def db_stats():
-    out={"observations":0,"eligible":0,"rejected":0,"unique_tokens":0,"snapshots":0,"paper_open":0,"paper_closed":0,"paper_wins":0,"paper_losses":0,"realized_pnl_usd":0.0}
+    out={"db_connected":False,"observations":0,"eligible":0,"rejected":0,"unique_tokens":0,"snapshots":0,"paper_open":0,"paper_closed":0,"paper_wins":0,"paper_losses":0,"realized_pnl_usd":0.0}
     try:
         c=init_db()
+        out["db_connected"]=True
         out["observations"]=c.execute("select count(*) from meme_candidates").fetchone()[0]
         out["eligible"]=c.execute("select count(*) from meme_candidates where eligible=1").fetchone()[0]
         out["rejected"]=out["observations"]-out["eligible"]
@@ -35,7 +36,9 @@ def db_stats():
         try: out["realized_pnl_usd"]=round(float(c.execute("select coalesce(sum(net_pnl_usd),0) from meme_paper_trades where status='CLOSED'").fetchone()[0] or 0),2)
         except Exception: pass
         c.close()
-    except Exception as e: out["stats_error"]=repr(e)
+    except Exception as e:
+        out["db_connected"]=False
+        out["stats_error"]=repr(e)
     return out
 
 def collector():
@@ -61,8 +64,9 @@ def collector():
 
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
-        body=json.dumps({"status":"ok","mode":"paper_trading","database":"postgres" if os.getenv("DATABASE_URL") else "sqlite","discovery_seconds":DISCOVERY_SECONDS,
-                         "refresh_seconds":REFRESH_SECONDS,**STATE,**db_stats()}).encode()
+        stats=db_stats()
+        body=json.dumps({"status":"ok" if stats.get("db_connected") else "degraded","mode":"paper_trading","database":"postgres" if os.getenv("DATABASE_URL") else "sqlite","database_connected":stats.get("db_connected",False),"discovery_seconds":DISCOVERY_SECONDS,
+                         "refresh_seconds":REFRESH_SECONDS,**STATE,**stats}).encode()
         self.send_response(200); self.send_header("Content-Type","application/json")
         self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
     def log_message(self,fmt,*args): pass

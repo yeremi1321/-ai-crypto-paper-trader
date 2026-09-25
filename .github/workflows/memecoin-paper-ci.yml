@@ -1,0 +1,20 @@
+name: Memecoin Paper Trader Checks
+on:
+  push:
+    branches: ["feature/meme-paper-trader"]
+  pull_request:
+    paths:
+      - "memecoin_paper.py"
+      - "memecoin_shadow.py"
+      - ".github/workflows/memecoin-shadow.yml"
+      - ".github/workflows/memecoin-paper-ci.yml"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: python -m py_compile memecoin_paper.py memecoin_shadow.py
+      - run: python memecoin_paper.py --self-test
+      - run: python memecoin_shadow.py --self-test

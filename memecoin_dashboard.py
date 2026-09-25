@@ -21,10 +21,21 @@ if not exists(c,"meme_paper_trades"):
  st.info("Paper trader is ready; waiting for its table/data.")
  st.stop()
 trades=pd.read_sql_query("SELECT * FROM meme_paper_trades ORDER BY id DESC",c)
+candidate_count=c.execute("SELECT COUNT(*) FROM meme_candidates").fetchone()[0] if exists(c,"meme_candidates") else 0
+eligible_count=c.execute("SELECT COUNT(*) FROM meme_candidates WHERE eligible=1").fetchone()[0] if exists(c,"meme_candidates") else 0
+snapshot_count=c.execute("SELECT COUNT(*) FROM meme_price_snapshots").fetchone()[0] if exists(c,"meme_price_snapshots") else 0
 c.close()
 
 if trades.empty:
- st.info("Paper trader is active. Waiting for the first eligible memecoin trade.")
+ st.success("🟢 Paper trader active — scanning for eligible setups")
+ a,b,d=st.columns(3)
+ a.metric("Candidate observations",candidate_count)
+ b.metric("Eligible observations",eligible_count)
+ d.metric("Price snapshots",snapshot_count)
+ st.caption("No paper entry has qualified yet. This page will populate automatically when a setup passes every safety and entry gate.")
+ st.subheader("Qualification pipeline")
+ st.markdown("**DISCOVER → SAFETY CHECK → SCORE SETUP → EXECUTION CHECK → PAPER ENTRY**")
+ st.info("Candidates may be rejected for liquidity, holder/dev concentration, liquidity control, sellability, security, or setup quality.")
  st.stop()
 
 for x in ["entry_price","current_price","current_return_pct","mfe_pct","mae_pct","net_pnl_usd","net_return_pct"]:

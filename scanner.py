@@ -14,6 +14,7 @@ import requests
 
 DB = "paper_trader_v4.db"
 STRATEGY_VERSION = "V5"
+EARLY_STRATEGY_VERSION = "V6_EARLY"
 PRODUCTS = [
     "BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD", "SHIB-USD", "AVAX-USD",
     "LINK-USD", "ADA-USD", "XRP-USD", "LTC-USD", "BCH-USD",
@@ -670,7 +671,10 @@ def market_regime(conn):
 
 
 
-def open_paper_trade(conn, seen_at, product, score, market_price):
+def open_paper_trade(
+    conn, seen_at, product, score, market_price,
+    entry_state="CONFIRMED", strategy_version=STRATEGY_VERSION,
+):
     """Open one simulated $100 position after the entry filters pass."""
     existing = conn.execute(
         "SELECT id FROM paper_trades WHERE product=? AND status='OPEN' LIMIT 1",
@@ -707,7 +711,7 @@ def open_paper_trade(conn, seen_at, product, score, market_price):
         (
             product,
             seen_at,
-            "CONFIRMED",
+            entry_state,
             score,
             market_price,
             entry_price,
@@ -718,12 +722,35 @@ def open_paper_trade(conn, seen_at, product, score, market_price):
             market_price,
             -entry_fee,
             (-entry_fee / PAPER_NOTIONAL_USD) * 100,
-            STRATEGY_VERSION,
+            strategy_version,
         ),
     )
     return (
-        f"🧪 PAPER OPEN {product} — CONFIRMED {score} — "
+        f"🧪 PAPER OPEN {product} — {entry_state} {score} — "
         f"Simulated ${PAPER_NOTIONAL_USD:.0f} at ${market_price}"
+    )
+
+
+def consider_early_paper_entry(
+    conn, now, product, score, market_price, regime_allows,
+):
+    """Open on the first early acceleration with the existing risk limits."""
+    if not regime_allows:
+        return None
+    if daily_realized_pnl(conn, now) <= -PAPER_DAILY_LOSS_LIMIT_USD:
+        return None
+    last_close = conn.execute(
+        """SELECT closed_at FROM paper_trades
+           WHERE product=? AND status='CLOSED' AND closed_at IS NOT NULL
+           ORDER BY id DESC LIMIT 1""", (product,),
+    ).fetchone()
+    if last_close and (
+        now - datetime.fromisoformat(last_close[0])
+    ).total_seconds() < PAPER_REENTRY_COOLDOWN_HOURS * 3600:
+        return None
+    return open_paper_trade(
+        conn, now.isoformat(), product, score, market_price,
+        entry_state="EARLY", strategy_version=EARLY_STRATEGY_VERSION,
     )
 
 
@@ -889,7 +916,8 @@ def manage_paper_trade(
     """Mark an open paper position to market and close it when a rule fires."""
     trade = conn.execute(
         """SELECT id, opened_at, entry_market_price, entry_price,
-                  notional_usd, quantity, entry_fee, highest_price
+                  notional_usd, quantity, entry_fee, highest_price,
+                  strategy_version
            FROM paper_trades
            WHERE product=? AND status='OPEN'
            ORDER BY id DESC LIMIT 1""",
@@ -908,6 +936,7 @@ def manage_paper_trade(
         quantity,
         entry_fee,
         previous_high,
+        strategy_version,
     ) = trade
     highest_price = max(previous_high or market_price, market_price)
     simulated_exit_price = market_price * (1 - PAPER_SLIPPAGE_RATE)
@@ -933,15 +962,17 @@ def manage_paper_trade(
     )
 
 
-    exit_reason = weakening_exit_reason(
-        momentum_state,
-        weakening_scan,
-        market_return_pct,
-        high_gain_pct,
-        pullback_from_high_pct,
-        age_hours,
-        weakening_count,
-    )
+    if strategy_version == EARLY_STRATEGY_VERSION:
+        exit_reason = early_shadow_exit_reason(
+            momentum_state, weakening_scan, market_return_pct,
+            high_gain_pct, pullback_from_high_pct, age_hours,
+        )
+    else:
+        exit_reason = weakening_exit_reason(
+            momentum_state, weakening_scan, market_return_pct,
+            high_gain_pct, pullback_from_high_pct, age_hours,
+            weakening_count,
+        )
 
 
     if exit_reason:
@@ -1116,17 +1147,18 @@ for product in PRODUCTS:
                LIMIT 1""",
             (product,),
         ).fetchone()
-        # Record an independent simulated entry at the first acceleration,
-        # before the later confirmation and breakout gates. No live position.
+        # Enter the paper portfolio on the first qualified acceleration.
         if (
             is_early and not recent_early and regime_allows_entries
             and result[5] >= 1.25 and result[1] > previous[3]
             and "15m>EMA20" in result[6]
         ):
-            start_signal_outcome(
-                conn, now, product, "EARLY_SHADOW", result[2], result[1],
-                btc_aligned, market_breadth, regime_detail,
+            early_alert = consider_early_paper_entry(
+                conn, now, product, result[2], result[1],
+                regime_allows_entries,
             )
+            if early_alert:
+                alerts.append(early_alert)
         sequence = conn.execute(
             """SELECT state, hold_count, early_score, last_score
                FROM momentum_sequences WHERE product=?""",

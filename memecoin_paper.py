@@ -9,15 +9,19 @@ TP_PCT=20.0; SL_PCT=-10.0; MAX_HOLD_MIN=20.0; MAX_OPEN=5
 def pct(a,b): return ((b/a)-1)*100 if a else 0.0
 
 def migrate(c):
- cols={r[1] for r in c.execute("PRAGMA table_info(meme_paper_trades)")}
- additions={"closed_at":"TEXT","exit_market_price":"REAL","exit_price":"REAL","exit_fee":"REAL",
- "net_pnl_usd":"REAL","net_return_pct":"REAL","exit_reason":"TEXT","strategy_version":"TEXT"}
- for name,typ in additions.items():
-  if name not in cols: c.execute(f"ALTER TABLE meme_paper_trades ADD COLUMN {name} {typ}")
+ pg=c.__class__.__module__.startswith("psycopg")
+ additions={"closed_at":"TEXT","exit_market_price":"DOUBLE PRECISION","exit_price":"DOUBLE PRECISION","exit_fee":"DOUBLE PRECISION",
+ "net_pnl_usd":"DOUBLE PRECISION","net_return_pct":"DOUBLE PRECISION","exit_reason":"TEXT","strategy_version":"TEXT"}
+ if pg:
+  for name,typ in additions.items(): c.execute(f"ALTER TABLE meme_paper_trades ADD COLUMN IF NOT EXISTS {name} {typ}")
+ else:
+  cols={r[1] for r in c.execute("PRAGMA table_info(meme_paper_trades)")}
+  for name,typ in additions.items():
+   if name not in cols: c.execute(f"ALTER TABLE meme_paper_trades ADD COLUMN {name} {typ.replace('DOUBLE PRECISION','REAL')}")
  c.commit()
 
 def close_positions(c, now=None):
- now=now or datetime.now(timezone.utc); closed=[]
+ now=now or datetime.now(timezone.utc); closed=[]; pg=c.__class__.__module__.startswith("psycopg")
  rows=c.execute("""SELECT id,candidate_id,token,entry_price,quantity,entry_fee,opened_at,current_price,
  highest_price,lowest_price FROM meme_paper_trades WHERE status='OPEN' ORDER BY id""").fetchall()
  for i,cid,token,entry,qty,entry_fee,opened,current,hi,lo in rows:
@@ -34,12 +38,13 @@ def close_positions(c, now=None):
   proceeds=gross-exit_fee; net_pnl=proceeds-(float(qty)*float(entry)+float(entry_fee))
   invested=float(qty)*float(entry)+float(entry_fee)
   net_ret=100*net_pnl/invested if invested else 0
-  c.execute("""UPDATE meme_paper_trades SET status='CLOSED',closed_at=?,exit_market_price=?,exit_price=?,
-   exit_fee=?,net_pnl_usd=?,net_return_pct=?,exit_reason=?,strategy_version=? WHERE id=?""",
-   (now.isoformat(),exit_market,exit_price,exit_fee,net_pnl,net_ret,reason,VERSION,i))
+  sql="""UPDATE meme_paper_trades SET status='CLOSED',closed_at=?,exit_market_price=?,exit_price=?,
+   exit_fee=?,net_pnl_usd=?,net_return_pct=?,exit_reason=?,strategy_version=? WHERE id=?"""
+  c.execute(sql.replace("?","%s") if pg else sql,(now.isoformat(),exit_market,exit_price,exit_fee,net_pnl,net_ret,reason,VERSION,i))
   label="WIN" if net_pnl>0 else "LOSS"
-  c.execute("""UPDATE meme_decision_ledger SET outcome_label=?,net_return_pct=?,mfe_pct=?,mae_pct=?,
-   time_in_trade_minutes=? WHERE candidate_id=?""",(label,net_ret,pct(entry,hi),pct(entry,lo),age,cid))
+  sql="""UPDATE meme_decision_ledger SET outcome_label=?,net_return_pct=?,mfe_pct=?,mae_pct=?,
+   time_in_trade_minutes=? WHERE candidate_id=?"""
+  c.execute(sql.replace("?","%s") if pg else sql,(label,net_ret,pct(entry,hi),pct(entry,lo),age,cid))
   closed.append((token,reason,round(net_ret,2)))
  c.commit(); return closed
 

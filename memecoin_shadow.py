@@ -1,5 +1,5 @@
 """Research-only memecoin candidate, outcome, and simulated-trade storage."""
-import argparse,json,sqlite3
+import argparse,json,sqlite3,os
 from datetime import datetime,timezone
 DB="memecoin_shadow.db"; VERSION="MEME_SHADOW_V2"
 PAPER_NOTIONAL_USD=100.0; PAPER_FEE_RATE=.006; PAPER_SLIPPAGE_RATE=.01
@@ -29,6 +29,15 @@ def evaluate(x):
  return {"version":VERSION,"token":x.get("token"),"chain":x.get("chain"),"score":s,"eligible":not b and s>=DEFAULTS["min_score"],"blocked_reasons":b}
 
 def init_db(path=DB):
+ # Keep SQLite for explicit test/local paths. Render uses PostgreSQL when DATABASE_URL is present.
+ if path==DB and os.getenv("DATABASE_URL"):
+  import psycopg
+  c=psycopg.connect(os.environ["DATABASE_URL"])
+  c.execute("""CREATE TABLE IF NOT EXISTS meme_candidates(id BIGSERIAL PRIMARY KEY,seen_at TEXT,version TEXT,token TEXT,chain TEXT,score DOUBLE PRECISION,eligible INTEGER,blocked_reasons TEXT,raw_json TEXT,token_address TEXT,pair_address TEXT)""")
+  c.execute("""CREATE TABLE IF NOT EXISTS meme_outcomes(candidate_id BIGINT PRIMARY KEY,token_address TEXT,pair_address TEXT,detected_at TEXT,entry_price DOUBLE PRECISION,last_price DOUBLE PRECISION,highest_price DOUBLE PRECISION,lowest_price DOUBLE PRECISION,mfe_pct DOUBLE PRECISION,mae_pct DOUBLE PRECISION,age_minutes DOUBLE PRECISION)""")
+  c.execute("""CREATE TABLE IF NOT EXISTS meme_decision_ledger(id BIGSERIAL PRIMARY KEY,candidate_id BIGINT UNIQUE,recorded_at TEXT,version TEXT,token TEXT,token_address TEXT,pair_address TEXT,chain TEXT,venue TEXT,data_source TEXT,regime TEXT,liquidity_usd DOUBLE PRECISION,volume_1h_usd DOUBLE PRECISION,participation INTEGER,estimated_entry_slippage_pct DOUBLE PRECISION,estimated_exit_slippage_pct DOUBLE PRECISION,setup_type TEXT,entry_rule TEXT,risk_rule TEXT,score DOUBLE PRECISION,decision TEXT,vetoes TEXT,simulated_entry_price DOUBLE PRECISION,simulated_entry_fee DOUBLE PRECISION,notional_usd DOUBLE PRECISION,outcome_label TEXT,net_return_pct DOUBLE PRECISION,mfe_pct DOUBLE PRECISION,mae_pct DOUBLE PRECISION,time_in_trade_minutes DOUBLE PRECISION,ai_explanation TEXT,raw_json TEXT)""")
+  c.execute("""CREATE TABLE IF NOT EXISTS meme_paper_trades(id BIGSERIAL PRIMARY KEY,candidate_id BIGINT UNIQUE,token TEXT,token_address TEXT,pair_address TEXT,opened_at TEXT,entry_market_price DOUBLE PRECISION,entry_price DOUBLE PRECISION,notional_usd DOUBLE PRECISION,quantity DOUBLE PRECISION,entry_fee DOUBLE PRECISION,status TEXT,highest_price DOUBLE PRECISION,lowest_price DOUBLE PRECISION,current_price DOUBLE PRECISION,current_return_pct DOUBLE PRECISION,mfe_pct DOUBLE PRECISION,mae_pct DOUBLE PRECISION)""")
+  c.commit(); return c
  c=sqlite3.connect(path)
  c.execute("""CREATE TABLE IF NOT EXISTS meme_candidates(id INTEGER PRIMARY KEY,seen_at TEXT,version TEXT,token TEXT,chain TEXT,score REAL,eligible INTEGER,blocked_reasons TEXT,raw_json TEXT)""")
  # Pre-spike research needs stable discovery identifiers on both new and legacy DBs.
@@ -49,8 +58,11 @@ def init_db(path=DB):
  c.commit(); return c
 def record(conn,x,result):
  now=datetime.now(timezone.utc).isoformat()
- cur=conn.execute("""INSERT INTO meme_candidates(seen_at,version,token,chain,score,eligible,blocked_reasons,raw_json,token_address,pair_address) VALUES(?,?,?,?,?,?,?,?,?,?)""",(now,VERSION,x.get("token"),x.get("chain"),result["score"],int(result["eligible"]),json.dumps(result["blocked_reasons"]),json.dumps(x),x.get("token_address"),x.get("pair_address")))
- cid=cur.lastrowid
+ pg=conn.__class__.__module__.startswith("psycopg")
+ sql="""INSERT INTO meme_candidates(seen_at,version,token,chain,score,eligible,blocked_reasons,raw_json,token_address,pair_address) VALUES(?,?,?,?,?,?,?,?,?,?)"""
+ if pg: sql=sql.replace("?","%s")+" RETURNING id"
+ cur=conn.execute(sql,(now,VERSION,x.get("token"),x.get("chain"),result["score"],int(result["eligible"]),json.dumps(result["blocked_reasons"]),json.dumps(x),x.get("token_address"),x.get("pair_address")))
+ cid=cur.fetchone()[0] if pg else cur.lastrowid
  decision="PAPER_TRADE_CANDIDATE" if result["eligible"] else ("REJECT" if result["blocked_reasons"] else "WATCHLIST")
  vetoes=json.dumps(result["blocked_reasons"])
  explanation=("Eligible: safety gates passed and score meets threshold." if result["eligible"]
@@ -59,12 +71,14 @@ def record(conn,x,result):
  if result["eligible"] and x.get("price_usd"):
   simulated_entry=float(x["price_usd"])*(1+PAPER_SLIPPAGE_RATE)
   simulated_fee=PAPER_NOTIONAL_USD*PAPER_FEE_RATE
- conn.execute("""INSERT INTO meme_decision_ledger(
+ ledger_sql="""INSERT INTO meme_decision_ledger(
  candidate_id,recorded_at,version,token,token_address,pair_address,chain,venue,data_source,regime,
  liquidity_usd,volume_1h_usd,participation,estimated_entry_slippage_pct,estimated_exit_slippage_pct,
  setup_type,entry_rule,risk_rule,score,decision,vetoes,simulated_entry_price,simulated_entry_fee,
  notional_usd,outcome_label,ai_explanation,raw_json)
- VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+ if pg: ledger_sql=ledger_sql.replace("?","%s")
+ conn.execute(ledger_sql,
  (cid,now,VERSION,x.get("token"),x.get("token_address"),x.get("pair_address"),x.get("chain"),x.get("dex"),
  x.get("security_source"),x.get("market_regime","UNKNOWN"),float(x.get("liquidity_usd",0)),
  float(x.get("volume_1h_usd",0)),int(x.get("makers",0)),PAPER_SLIPPAGE_RATE*100,PAPER_SLIPPAGE_RATE*100,
@@ -74,10 +88,10 @@ def record(conn,x,result):
  "PENDING",explanation,json.dumps(x)))
  if x.get("token_address") and x.get("price_usd"):
   p=float(x["price_usd"])
-  conn.execute("INSERT OR IGNORE INTO meme_outcomes VALUES(?,?,?,?,?,?,?,?,?,?,?)",(cid,x.get("token_address"),x.get("pair_address"),now,p,p,p,p,0,0,0))
+  conn.execute(("INSERT INTO meme_outcomes VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING" if pg else "INSERT OR IGNORE INTO meme_outcomes VALUES(?,?,?,?,?,?,?,?,?,?,?)"),(cid,x.get("token_address"),x.get("pair_address"),now,p,p,p,p,0,0,0))
   if result["eligible"]:
    ep=p*(1+PAPER_SLIPPAGE_RATE); fee=PAPER_NOTIONAL_USD*PAPER_FEE_RATE; qty=(PAPER_NOTIONAL_USD-fee)/ep
-   conn.execute("""INSERT OR IGNORE INTO meme_paper_trades(candidate_id,token,token_address,pair_address,opened_at,entry_market_price,entry_price,notional_usd,quantity,entry_fee,status,highest_price,lowest_price,current_price,current_return_pct,mfe_pct,mae_pct) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(cid,x.get("token"),x.get("token_address"),x.get("pair_address"),now,p,ep,PAPER_NOTIONAL_USD,qty,fee,"OPEN",p,p,p,0,0,0))
+   conn.execute(("""INSERT INTO meme_paper_trades(candidate_id,token,token_address,pair_address,opened_at,entry_market_price,entry_price,notional_usd,quantity,entry_fee,status,highest_price,lowest_price,current_price,current_return_pct,mfe_pct,mae_pct) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""" if pg else """INSERT OR IGNORE INTO meme_paper_trades(candidate_id,token,token_address,pair_address,opened_at,entry_market_price,entry_price,notional_usd,quantity,entry_fee,status,highest_price,lowest_price,current_price,current_return_pct,mfe_pct,mae_pct) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""),(cid,x.get("token"),x.get("token_address"),x.get("pair_address"),now,p,ep,PAPER_NOTIONAL_USD,qty,fee,"OPEN",p,p,p,0,0,0))
  conn.commit()
 
 def self_test():

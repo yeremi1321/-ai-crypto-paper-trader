@@ -4,6 +4,8 @@ The slow strategy still supplies context. This loop only detects live accelerati
 and emits candidates; it never sends real orders.
 """
 import argparse, json, time
+import threading
+import requests
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -14,6 +16,12 @@ POLL_SECONDS=2.0
 WINDOW_SECONDS=20
 MIN_ACCEL_PCT=0.12
 MAX_SPREAD_BPS=10.0
+_thread_state=threading.local()
+
+def _quote(product):
+    if not hasattr(_thread_state,"session"):
+        _thread_state.session=requests.Session()
+    return top_of_book(product,session=_thread_state.session)
 
 class LiveDetector:
     def __init__(self, window_seconds=WINDOW_SECONDS):
@@ -40,7 +48,7 @@ def run(products=PRODUCTS, interval=POLL_SECONDS):
     with ThreadPoolExecutor(max_workers=len(products)) as pool:
         while True:
             started=time.monotonic()
-            results={pool.submit(top_of_book, product): product for product in products}
+            results={pool.submit(_quote, product): product for product in products}
             successful=[]; errors=[]
             for future in as_completed(results):
                 product=results[future]

@@ -357,7 +357,7 @@ open_now = (
 closed_now = (
     paper_trades[
         (paper_trades.status == "CLOSED")
-        & (paper_trades.strategy_version == "V5")
+        & paper_trades.strategy_version.isin(["V5", "V6_EARLY"])
     ].copy()
     if not paper_trades.empty else pd.DataFrame()
 )
@@ -409,7 +409,7 @@ m1.metric("Open paper trades", f"{len(open_now)}/5")
 m2.metric("Today's P/L", "$" + f"{today_pnl:+.2f}")
 m3.metric("Today's record", f"{today_wins}W / {today_losses}L")
 m4.metric("Active alerts", int(active_alerts))
-m5.metric("V5 closed trades", len(closed_now))
+m5.metric("Current paper closed trades", len(closed_now))
 m6.metric("Open P/L", "$" + f"{open_pnl:+.2f}")
 st.caption(
     f"Last completed scan: {last_time.strftime('%b %d %H:%M UTC')} • "
@@ -570,10 +570,12 @@ with st.expander("Recent decisions and paper-trade activity", expanded=False):
 
 st.subheader("Automatic Paper Trading")
 st.caption(
-    "V5 research simulation only: $100 per CONFIRMED entry • 3% stop • 4% target • "
-    "1% trailing stop after a 2% gain • 24-hour maximum hold • "
+    "Paper simulation: V5 confirmed entries or V6 early acceleration entries. "
+    "Early exits: 1.5% stop • 2.8% target • trail after 2% • 4-hour max. "
+    "V5 exits: 3% stop • 4% target • 24-hour maximum hold • "
     "maximum 5 open trades / $500 exposure • "
-    "2 V5-quality scans to enter • loss/profit-aware weakening exit • "
+    "V5 needs 2 quality scans; early entries trigger on first acceleration • "
+    "loss/profit-aware weakening exit • "
     "2-hour re-entry cooldown • "
     "BTC plus 70% market trend filter for new entries • "
     "$15 daily realized-loss cutoff • "
@@ -585,11 +587,11 @@ else:
     open_trades = paper_trades[paper_trades.status == "OPEN"].copy()
     closed_trades = paper_trades[
         (paper_trades.status == "CLOSED")
-        & (paper_trades.strategy_version == "V5")
+        & paper_trades.strategy_version.isin(["V5", "V6_EARLY"])
     ].copy()
     legacy_closed_trades = paper_trades[
         (paper_trades.status == "CLOSED")
-        & (paper_trades.strategy_version != "V5")
+        & (paper_trades.strategy_version == "V4")
     ].copy()
 
 
@@ -620,12 +622,21 @@ else:
 
     p1, p2, p3, p4, p5, p6 = st.columns(6)
     p1.metric("Open paper trades (max 5)", open_count)
-    p2.metric("V5 closed trades", closed_count)
-    p3.metric("V5 win rate", f"{win_rate:.1f}%")
-    p4.metric("V5 net paper P/L", f"${total_net_pnl:+.2f}")
-    p5.metric("V5 avg return", f"{average_return:+.2f}%")
-    p6.metric("V5 expectancy/trade", f"${expectancy:+.2f}")
-    st.caption(f"V5 realized paper P/L drawdown: ${realized_drawdown:.2f}")
+    p2.metric("Current closed trades", closed_count)
+    p3.metric("Current win rate", f"{win_rate:.1f}%")
+    p4.metric("Current net paper P/L", f"${total_net_pnl:+.2f}")
+    p5.metric("Current avg return", f"{average_return:+.2f}%")
+    p6.metric("Current expectancy/trade", f"${expectancy:+.2f}")
+    st.caption(f"Current realized paper P/L drawdown: ${realized_drawdown:.2f}")
+
+    if closed_count:
+        by_strategy = closed_trades.groupby("strategy_version").agg(
+            trades=("id", "size"),
+            wins=("net_pnl_usd", lambda values: int((values > 0).sum())),
+            net_pnl_usd=("net_pnl_usd", "sum"),
+        ).reset_index()
+        st.markdown("**Confirmed vs early paper trades**")
+        st.dataframe(by_strategy, use_container_width=True, hide_index=True)
 
     q1, q2, q3 = st.columns(3)
     q1.metric("Average win", "$" + f"{average_win:+.2f}")
@@ -640,16 +651,16 @@ else:
             + closed_trades.exit_fee.fillna(0)
         ).sum()
         c1, c2, c3 = st.columns(3)
-        c1.metric("V5 gross P/L before fees", f"${gross_pnl:+.2f}")
-        c2.metric("V5 simulated fees", f"${total_fees:.2f}")
+        c1.metric("Current gross P/L before fees", f"${gross_pnl:+.2f}")
+        c2.metric("Current simulated fees", f"${total_fees:.2f}")
         c3.metric("Average fees per trade", f"${total_fees / closed_count:.2f}")
         st.caption(
             "Gross P/L includes simulated slippage. Net P/L subtracts both "
-            "entry and exit fees. Review V5 alone before changing its rules."
+            "entry and exit fees. The table above separates V5 from early entries."
         )
 
     if closed_count == 0:
-        st.info("V5 starts clean. Waiting for the first completed V5 paper trade.")
+        st.info("Waiting for the first completed current paper trade.")
     if len(legacy_closed_trades):
         legacy_net = legacy_closed_trades.net_pnl_usd.sum()
         legacy_wins = (legacy_closed_trades.net_pnl_usd > 0).mean() * 100
@@ -662,8 +673,13 @@ else:
 
     if open_count:
         st.markdown("**Open simulated positions**")
-        open_trades["stop_price"] = open_trades.entry_market_price * 0.97
-        open_trades["target_price"] = open_trades.entry_market_price * 1.04
+        early_open = open_trades.strategy_version == "V6_EARLY"
+        open_trades["stop_price"] = open_trades.entry_market_price * np.where(
+            early_open, 0.985, 0.97
+        )
+        open_trades["target_price"] = open_trades.entry_market_price * np.where(
+            early_open, 1.028, 1.04
+        )
         # The market price that would cover the initial outlay, exit slippage,
         # and the estimated exit fee at today's configured rates.
         open_trades["break_even_market_price"] = (
@@ -678,7 +694,7 @@ else:
         st.dataframe(
             open_trades[
                 [
-                    "opened_at", "product", "entry_score", "entry_market_price",
+                    "opened_at", "product", "strategy_version", "entry_score", "entry_market_price",
                     "current_price", "current_pnl_usd", "current_return_pct",
                     "stop_price", "target_price", "break_even_market_price",
                     "time_open_hours",
@@ -717,7 +733,7 @@ else:
         st.dataframe(
             closed_trades[
                 [
-                    "opened_at", "closed_at", "product", "entry_score",
+                    "opened_at", "closed_at", "product", "strategy_version", "entry_score",
                     "entry_market_price", "exit_market_price", "exit_reason",
                     "net_pnl_usd", "net_return_pct", "chart",
                 ]
@@ -779,7 +795,7 @@ if not paper_entry_skips.empty:
 st.subheader("Signal Outcome Tracker")
 st.caption(
     "Compares BLOCKED and ALLOWED samples with identical paper costs and exits. "
-    "EARLY_SHADOW tests acceleration before confirmation with faster exits. "
+    "Earlier EARLY_SHADOW samples tested acceleration before confirmation. "
     "One active sample per coin/decision prevents duplicate counting."
 )
 if signal_outcomes.empty:
@@ -823,11 +839,11 @@ else:
     e2.metric("Early shadow wins", early_wins)
     e3.metric("Early shadow avg net return", f"{early_avg:+.2f}%")
     st.caption(
-        "Early shadow: acceleration with rising price and volume, simulated "
+        "Historical early shadow: acceleration with rising price and volume, simulated "
         "0.6% fee + 0.1% slippage per side; 1.5% stop, 2.8% target, "
         "trail after a 2% gain, exit on weakening or after 4 hours. "
         "Prices are checked on completed scanner cycles, so spikes between "
-        "cycles may be missed. No early shadow orders are placed."
+        "cycles may be missed. Current early entries are shown in paper trades above."
     )
 
     if not finalized_outcomes.empty:

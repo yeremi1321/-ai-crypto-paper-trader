@@ -3,7 +3,7 @@
 Research-only. No orders are placed.
 """
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from memecoin_shadow import init_db
 from memecoin_discovery import best_pair
 
@@ -27,7 +27,8 @@ def ensure_snapshot_table(c):
 
 def run():
  c=init_db(); ensure_snapshot_table(c); now=datetime.now(timezone.utc)
- addresses={r[0] for r in c.execute("select token_address from meme_outcomes union select token_address from meme_paper_trades where status='OPEN'")}
+ cutoff=(now-timedelta(minutes=30)).isoformat()
+ addresses={r[0] for r in c.execute("select token_address from meme_outcomes where detected_at>=? union select token_address from meme_paper_trades where status='OPEN'",(cutoff,)) if r[0]}
  updated=0; failed=0
  for a in addresses:
   try:

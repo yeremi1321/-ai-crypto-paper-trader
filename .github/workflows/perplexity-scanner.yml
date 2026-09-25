@@ -1,0 +1,20 @@
+name: Perplexity Scanner Integration
+on:
+  pull_request:
+    paths:
+      - "scanner.py"
+      - "perplexity_breakout.py"
+      - "test_scanner_perplexity.py"
+      - ".github/workflows/perplexity-scanner.yml"
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas numpy requests
+      - run: python -m py_compile scanner.py perplexity_breakout.py test_scanner_perplexity.py
+      - run: python -m unittest -v test_perplexity_breakout.py test_scanner_perplexity.py

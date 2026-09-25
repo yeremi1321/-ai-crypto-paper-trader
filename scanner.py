@@ -12,7 +12,6 @@ import requests
 
 
 
-
 DB = "paper_trader_v4.db"
 STRATEGY_VERSION = "V5"
 EARLY_STRATEGY_VERSION = "V6_EARLY"

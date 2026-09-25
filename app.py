@@ -1,7 +1,6 @@
 import html
 import os
 import sqlite3
-import json
 
 
 import altair as alt
@@ -15,12 +14,13 @@ import streamlit as st
 DB = "paper_trader_v4.db"
 SHADOW_DB = "research_shadow.db"
 BACKTEST_DB = "research_backtest.db"
-MEME_DB = "memecoin_shadow.db"
+SIMULATED_FEE_RATE = 0.006
+SIMULATED_SLIPPAGE_RATE = 0.001
 HORIZONS = [("15m", 15), ("1h", 60), ("4h", 240), ("24h", 1440)]
 
 
 st.set_page_config(
-    page_title="V5 Trading Control Center", page_icon="📡", layout="wide"
+    page_title="AI Crypto Paper Trader V4", page_icon="📡", layout="wide"
 )
 st.markdown(
     """
@@ -310,8 +310,6 @@ if not paper_entry_skips.empty:
         "strategy_version"
     ].fillna("V4")
 if not shadow_evaluations.empty:
-    if "data_source" not in shadow_evaluations.columns:
-        shadow_evaluations["data_source"] = "Legacy / unknown"
     shadow_evaluations["seen_at"] = pd.to_datetime(
         shadow_evaluations["seen_at"], utc=True
     )
@@ -397,28 +395,11 @@ if not market_regime_log.empty:
 
 scanner_color = "#16c784" if fresh_label == "LIVE" else "#ff4b4b"
 regime_color = "#16c784" if regime_label == "ENTRIES ALLOWED" else "#ff4b4b"
-shadow_health = "WAITING"
-shadow_source = "No completed shadow cycle"
-shadow_color = "#f4c542"
-if not shadow_evaluations.empty:
-    latest_shadow_time = shadow_evaluations["seen_at"].max()
-    shadow_age = max(
-        0, int((pd.Timestamp.now(tz="UTC") - latest_shadow_time).total_seconds() / 60)
-    )
-    latest_shadow_rows = shadow_evaluations[
-        shadow_evaluations["seen_at"] == latest_shadow_time
-    ]
-    sources = sorted(set(latest_shadow_rows["data_source"].dropna().astype(str)))
-    shadow_source = ", ".join(sources) if sources else "Legacy / unknown"
-    shadow_health = "HEALTHY" if shadow_age <= 45 else "STALE"
-    shadow_color = "#16c784" if shadow_health == "HEALTHY" else "#ff8c42"
 st.markdown(
     f'<div class="health-row">'
     f'<span class="health-pill">Scanner: <b style="color:{scanner_color}">{fresh_label}</b></span>'
     f'<span class="health-pill">Last scan: <b>{age_minutes} min ago</b></span>'
     f'<span class="health-pill">Market: <b style="color:{regime_color}">{regime_label}</b></span>'
-    f'<span class="health-pill">Research: <b style="color:{shadow_color}">{shadow_health}</b></span>'
-    f'<span class="health-pill">Research data: <b>{html.escape(shadow_source)}</b></span>'
     f'<span class="health-pill">{html.escape(str(regime_detail))}</span></div>',
     unsafe_allow_html=True,
 )
@@ -651,6 +632,22 @@ else:
     q2.metric("Average loss", "$" + f"{average_loss:+.2f}")
     q3.metric("Profit factor", f"{profit_factor:.2f}")
 
+    # Show the cost hurdle explicitly; small gross gains can still lose money.
+    if closed_count:
+        gross_pnl = closed_trades.gross_pnl_usd.fillna(0).sum()
+        total_fees = (
+            closed_trades.entry_fee.fillna(0)
+            + closed_trades.exit_fee.fillna(0)
+        ).sum()
+        c1, c2, c3 = st.columns(3)
+        c1.metric("V5 gross P/L before fees", f"${gross_pnl:+.2f}")
+        c2.metric("V5 simulated fees", f"${total_fees:.2f}")
+        c3.metric("Average fees per trade", f"${total_fees / closed_count:.2f}")
+        st.caption(
+            "Gross P/L includes simulated slippage. Net P/L subtracts both "
+            "entry and exit fees. Review V5 alone before changing its rules."
+        )
+
     if closed_count == 0:
         st.info("V5 starts clean. Waiting for the first completed V5 paper trade.")
     if len(legacy_closed_trades):
@@ -667,6 +664,13 @@ else:
         st.markdown("**Open simulated positions**")
         open_trades["stop_price"] = open_trades.entry_market_price * 0.97
         open_trades["target_price"] = open_trades.entry_market_price * 1.04
+        # The market price that would cover the initial outlay, exit slippage,
+        # and the estimated exit fee at today's configured rates.
+        open_trades["break_even_market_price"] = (
+            open_trades.notional_usd
+            / (open_trades.quantity * (1 - SIMULATED_FEE_RATE)
+               * (1 - SIMULATED_SLIPPAGE_RATE))
+        )
         open_trades["time_open_hours"] = (
             pd.Timestamp.now(tz="UTC") - open_trades.opened_at
         ).dt.total_seconds() / 3600
@@ -676,7 +680,8 @@ else:
                 [
                     "opened_at", "product", "entry_score", "entry_market_price",
                     "current_price", "current_pnl_usd", "current_return_pct",
-                    "stop_price", "target_price", "time_open_hours",
+                    "stop_price", "target_price", "break_even_market_price",
+                    "time_open_hours",
                     "highest_price", "chart",
                 ]
             ].sort_values("opened_at", ascending=False),
@@ -959,164 +964,6 @@ st.link_button(
 )
 
 
-st.subheader("V5 Learning Progress")
-research_events = state_events[
-    state_events["state"].isin(["EARLY", "HOLD", "STRENGTHENING", "CONFIRMED", "WEAKENING", "FAILED"])
-].copy() if not state_events.empty else pd.DataFrame()
-if research_events.empty:
-    st.caption("Waiting for the first momentum-state observations.")
-else:
-    research_events = research_events[["product", "seen_at", "state", "score", "price"]].copy()
-    research_performance = add_forward_returns(research_events, scans)
-    evaluated_1h = int(research_performance["return_1h_pct"].notna().sum())
-    evaluated_4h = int(research_performance["return_4h_pct"].notna().sum())
-    evaluated_24h = int(research_performance["return_24h_pct"].notna().sum())
-    p1, p2, p3, p4 = st.columns(4)
-    p1.metric("State observations", len(research_performance))
-    p2.metric("1h outcomes", evaluated_1h)
-    p3.metric("4h outcomes", evaluated_4h)
-    p4.metric("24h outcomes", evaluated_24h)
-    state_summary = performance_summary(research_performance, "state")
-    preferred = [
-        "state", "events", "evaluated_1h", "avg_1h_pct", "win_rate_1h_pct",
-        "evaluated_4h", "avg_4h_pct", "win_rate_4h_pct",
-        "evaluated_24h", "avg_24h_pct", "win_rate_24h_pct",
-    ]
-    st.caption(
-        "Research only: measures what happened after each scanner state. "
-        "This does not lower V5's 80-point entry requirement."
-    )
-    st.dataframe(
-        state_summary[[column for column in preferred if column in state_summary.columns]],
-        use_container_width=True,
-        hide_index=True,
-    )
-    score_research = research_performance.copy()
-    score_research["score_bucket"] = pd.cut(
-        score_research["score"],
-        bins=[0, 35, 45, 55, 65, 75, 80, 86],
-        labels=["<35", "35-44", "45-54", "55-64", "65-74", "75-79", "80+"],
-        right=False,
-    )
-    bucket_rows = []
-    for bucket, group in score_research.groupby("score_bucket", observed=True):
-        one_hour = group["return_1h_pct"].dropna()
-        four_hour = group["return_4h_pct"].dropna()
-        bucket_rows.append({
-            "score_bucket": str(bucket),
-            "events": len(group),
-            "evaluated_1h": len(one_hour),
-            "avg_1h_pct": one_hour.mean() if len(one_hour) else None,
-            "win_rate_1h_pct": (one_hour > 0).mean() * 100 if len(one_hour) else None,
-            "evaluated_4h": len(four_hour),
-            "avg_4h_pct": four_hour.mean() if len(four_hour) else None,
-            "win_rate_4h_pct": (four_hour > 0).mean() * 100 if len(four_hour) else None,
-        })
-    st.markdown("**Entry-threshold evidence**")
-    st.dataframe(pd.DataFrame(bucket_rows), use_container_width=True, hide_index=True)
-
-st.subheader("V5 Entry Latency Research")
-if signal_outcomes.empty:
-    st.caption("Waiting for EARLY_PROBE and confirmed V5 outcome samples.")
-else:
-    latency = signal_outcomes[
-        signal_outcomes["decision"].isin(["EARLY_PROBE", "ALLOWED"])
-    ].copy()
-    if latency.empty:
-        st.caption("No EARLY_PROBE or confirmed V5 samples yet.")
-    else:
-        latency["entry_time"] = latency["created_at"]
-        latency["net_return_pct"] = pd.to_numeric(
-            latency["final_return_pct"], errors="coerce"
-        )
-        latency["mfe_pct"] = (
-            (pd.to_numeric(latency["highest_price"], errors="coerce")
-             / pd.to_numeric(latency["entry_price"], errors="coerce")) - 1
-        ) * 100
-        latency["mae_pct"] = (
-            (pd.to_numeric(latency["lowest_price"], errors="coerce")
-             / pd.to_numeric(latency["entry_price"], errors="coerce")) - 1
-        ) * 100
-        summary_rows = []
-        for decision, group in latency.groupby("decision"):
-            final = group[group["status"] == "FINAL"].copy()
-            summary_rows.append({
-                "entry_type": decision,
-                "samples": len(group),
-                "completed": len(final),
-                "win_rate_pct": (
-                    (final["net_return_pct"] > 0).mean() * 100
-                    if len(final) else None
-                ),
-                "avg_net_return_pct": (
-                    final["net_return_pct"].mean() if len(final) else None
-                ),
-                "avg_mfe_pct": group["mfe_pct"].mean(),
-                "avg_mae_pct": group["mae_pct"].mean(),
-            })
-        st.caption(
-            "Direct challenger comparison: EARLY_PROBE enters before full V5 "
-            "confirmation; ALLOWED represents confirmed V5-quality samples. "
-            "Research only—no production threshold changes."
-        )
-        st.dataframe(
-            pd.DataFrame(summary_rows),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        probes = latency[latency["decision"] == "EARLY_PROBE"].copy()
-        confirmed = latency[latency["decision"] == "ALLOWED"].copy()
-        paired_rows = []
-        for _, probe in probes.iterrows():
-            later = confirmed[
-                (confirmed["product"] == probe["product"])
-                & (confirmed["entry_time"] >= probe["entry_time"])
-            ].sort_values("entry_time")
-            if later.empty:
-                continue
-            confirmation = later.iloc[0]
-            delay_minutes = (
-                confirmation["entry_time"] - probe["entry_time"]
-            ).total_seconds() / 60
-            if delay_minutes > 240:
-                continue
-            price_move = (
-                (float(confirmation["entry_price"]) / float(probe["entry_price"])) - 1
-            ) * 100
-            paired_rows.append({
-                "product": probe["product"],
-                "probe_time": probe["entry_time"],
-                "confirmation_time": confirmation["entry_time"],
-                "delay_minutes": round(delay_minutes, 1),
-                "price_move_before_confirmation_pct": round(price_move, 3),
-                "probe_mfe_pct": round(float(probe["mfe_pct"]), 3)
-                    if pd.notna(probe["mfe_pct"]) else None,
-                "probe_final_return_pct": round(float(probe["net_return_pct"]), 3)
-                    if pd.notna(probe["net_return_pct"]) else None,
-                "confirmed_final_return_pct": round(float(confirmation["net_return_pct"]), 3)
-                    if pd.notna(confirmation["net_return_pct"]) else None,
-            })
-        if paired_rows:
-            paired = pd.DataFrame(paired_rows)
-            q1, q2, q3 = st.columns(3)
-            q1.metric("Probe→V5 pairs", len(paired))
-            q2.metric("Median confirmation delay", f"{paired['delay_minutes'].median():.0f} min")
-            q3.metric(
-                "Median move before V5",
-                f"{paired['price_move_before_confirmation_pct'].median():+.2f}%",
-            )
-            st.dataframe(
-                paired.sort_values("probe_time", ascending=False).head(100),
-                use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            st.caption(
-                "No EARLY_PROBE → confirmed V5 pairs yet. This section will fill "
-                "automatically as the challenger accumulates observations."
-            )
-
 st.subheader("Forward Performance Research")
 scan_events = scans[["product", "seen_at", "score", "status", "price"]].copy()
 scan_performance = add_forward_returns(scan_events, scans)
@@ -1268,107 +1115,6 @@ else:
         "Results are ranked for research only. No winning parameter set is "
         "automatically copied into V5."
     )
-
-
-# Memecoin decision-ledger dashboard (research/paper only)
-st.subheader("🚀 Memecoin Paper Trading")
-if not os.path.exists(MEME_DB):
-    st.caption("Waiting for the memecoin paper database.")
-else:
-    mp_conn=sqlite3.connect(MEME_DB)
-    if table_exists(mp_conn,"meme_paper_trades"):
-        meme_trades=pd.read_sql_query("SELECT * FROM meme_paper_trades ORDER BY id DESC",mp_conn)
-        if meme_trades.empty:
-            st.caption("Paper trader is active; waiting for the first eligible memecoin.")
-        else:
-            for col in ["entry_price","current_price","current_return_pct","mfe_pct","mae_pct","net_pnl_usd","net_return_pct"]:
-                if col in meme_trades.columns:
-                    meme_trades[col]=pd.to_numeric(meme_trades[col],errors="coerce")
-            open_m=meme_trades[meme_trades["status"]=="OPEN"].copy()
-            closed_m=meme_trades[meme_trades["status"]=="CLOSED"].copy()
-            realized=closed_m["net_pnl_usd"].sum() if "net_pnl_usd" in closed_m else 0
-            wins=int((closed_m["net_pnl_usd"]>0).sum()) if "net_pnl_usd" in closed_m else 0
-            win_rate=(100*wins/len(closed_m)) if len(closed_m) else 0
-            m1,m2,m3,m4,m5=st.columns(5)
-            m1.metric("Open meme trades",len(open_m))
-            m2.metric("Closed",len(closed_m))
-            m3.metric("Record",f"{wins}W / {len(closed_m)-wins}L")
-            m4.metric("Win rate",f"{win_rate:.1f}%")
-            m5.metric("Realized P/L",f"${realized:+.2f}")
-            st.caption("MEME_PAPER_V1 • simulated $100 positions • +20% target • -10% stop • 20-minute max hold • simulated fees/slippage")
-            if not open_m.empty:
-                st.markdown("**Open positions**")
-                cols=[x for x in ["token","opened_at","entry_price","current_price","current_return_pct","mfe_pct","mae_pct"] if x in open_m.columns]
-                st.dataframe(open_m[cols],use_container_width=True,hide_index=True)
-            if not closed_m.empty:
-                st.markdown("**Trade history**")
-                cols=[x for x in ["token","opened_at","closed_at","entry_price","exit_price","exit_reason","net_return_pct","net_pnl_usd","mfe_pct","mae_pct"] if x in closed_m.columns]
-                st.dataframe(closed_m[cols].head(200),use_container_width=True,hide_index=True)
-    mp_conn.close()
-
-st.subheader("🧪 Memecoin Research Dashboard")
-if not os.path.exists(MEME_DB):
-    st.caption("Waiting for the first memecoin research database.")
-else:
-    meme_conn = sqlite3.connect(MEME_DB)
-    if not table_exists(meme_conn, "meme_decision_ledger"):
-        st.caption("Decision ledger is waiting for its first post-deployment scan.")
-    else:
-        meme_ledger = pd.read_sql_query(
-            "SELECT * FROM meme_decision_ledger ORDER BY id DESC", meme_conn
-        )
-        if meme_ledger.empty:
-            st.caption("Decision ledger is ready; waiting for candidates.")
-        else:
-            for col in ["score","liquidity_usd","volume_1h_usd","mfe_pct","mae_pct","net_return_pct"]:
-                if col in meme_ledger.columns:
-                    meme_ledger[col] = pd.to_numeric(meme_ledger[col], errors="coerce")
-            decisions = meme_ledger["decision"].fillna("UNKNOWN")
-            accepted = int((decisions == "PAPER_TRADE_CANDIDATE").sum())
-            rejected = int((decisions == "REJECT").sum())
-            resolved = int(meme_ledger["outcome_label"].fillna("PENDING").ne("PENDING").sum())
-            d1,d2,d3,d4,d5 = st.columns(5)
-            d1.metric("Ledger candidates", len(meme_ledger))
-            d2.metric("Paper candidates", accepted)
-            d3.metric("Rejected", rejected)
-            d4.metric("Resolved outcomes", resolved)
-            d5.metric("Median score", f"{meme_ledger['score'].median():.1f}" if meme_ledger["score"].notna().any() else "—")
-
-            st.caption("Every accepted and rejected candidate is retained. Results are descriptive research, not live-trading instructions.")
-            left,right = st.columns(2)
-            with left:
-                decision_counts = decisions.value_counts().rename_axis("decision").reset_index(name="candidates")
-                st.markdown("**Decision mix**")
-                st.bar_chart(decision_counts.set_index("decision"))
-            with right:
-                veto_counts = {}
-                for raw in meme_ledger["vetoes"].dropna():
-                    try:
-                        vals=json.loads(raw) if isinstance(raw,str) else []
-                    except Exception:
-                        vals=[]
-                    for v in vals:
-                        veto_counts[v]=veto_counts.get(v,0)+1
-                st.markdown("**Top rejection reasons**")
-                if veto_counts:
-                    veto_frame=pd.DataFrame(sorted(veto_counts.items(), key=lambda x:x[1], reverse=True),columns=["veto","count"])
-                    st.bar_chart(veto_frame.set_index("veto"))
-                else:
-                    st.caption("No deterministic vetoes recorded yet.")
-
-            if "outcome_label" in meme_ledger.columns:
-                outcomes=meme_ledger[meme_ledger["outcome_label"].fillna("PENDING")!="PENDING"].copy()
-                if not outcomes.empty:
-                    st.markdown("**Resolved outcome quality**")
-                    o1,o2,o3=st.columns(3)
-                    o1.metric("Avg net return", f"{outcomes['net_return_pct'].mean():+.2f}%" if outcomes["net_return_pct"].notna().any() else "—")
-                    o2.metric("Avg MFE", f"{outcomes['mfe_pct'].mean():+.2f}%" if outcomes["mfe_pct"].notna().any() else "—")
-                    o3.metric("Avg MAE", f"{outcomes['mae_pct'].mean():+.2f}%" if outcomes["mae_pct"].notna().any() else "—")
-
-            show_cols=[x for x in ["recorded_at","token","venue","regime","score","decision","liquidity_usd","volume_1h_usd","participation","estimated_entry_slippage_pct","vetoes","outcome_label","net_return_pct","mfe_pct","mae_pct","time_in_trade_minutes","ai_explanation"] if x in meme_ledger.columns]
-            st.markdown("**Candidate ledger**")
-            st.dataframe(meme_ledger[show_cols].head(300),use_container_width=True,hide_index=True)
-    meme_conn.close()
 
 st.subheader("Settings & emergency controls")
 with st.expander("Open control panel"):

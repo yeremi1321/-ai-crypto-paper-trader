@@ -1,0 +1,21 @@
+name: Perplexity Scanner Integration
+on:
+  pull_request:
+    paths:
+      - "scanner.py"
+      - "perplexity_breakout.py"
+      - "two_second_confirmation.py"
+      - "test_two_second_confirmation.py"
+      - ".github/workflows/perplexity-scanner.yml"
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas numpy requests
+      - run: python -m py_compile perplexity_breakout.py two_second_confirmation.py test_two_second_confirmation.py
+      - run: python -m unittest -v test_perplexity_breakout.py test_two_second_confirmation.py

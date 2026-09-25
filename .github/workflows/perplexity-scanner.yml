@@ -4,7 +4,9 @@ on:
     paths:
       - "scanner.py"
       - "perplexity_breakout.py"
-      - "test_scanner_perplexity.py"
+      - "test_two_second_confirmation.py"
+      - "two_second_confirmation.py"
+      - "test_two_second_confirmation.py"
       - ".github/workflows/perplexity-scanner.yml"
   workflow_dispatch:
 jobs:

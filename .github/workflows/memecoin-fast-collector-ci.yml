@@ -1,0 +1,22 @@
+name: Memecoin Fast Collector Checks
+on:
+  pull_request:
+    paths:
+      - "memecoin_fast_collector.py"
+      - "memecoin_discovery.py"
+      - "memecoin_outcomes.py"
+      - "memecoin_paper.py"
+      - ".github/workflows/memecoin-fast-collector-ci.yml"
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python memecoin_discovery.py --self-test
+      - run: python memecoin_paper.py --self-test
+      - run: python -m py_compile memecoin_fast_collector.py

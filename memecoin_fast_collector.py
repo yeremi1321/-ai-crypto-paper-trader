@@ -69,5 +69,6 @@ class Health(BaseHTTPRequestHandler):
 if __name__=="__main__":
     if DISCOVERY_SECONDS<30 or REFRESH_SECONDS<30:
         raise SystemExit("Refusing intervals below 30 seconds to reduce upstream API/rate-limit risk.")
-    threading.Thread(target=collector,daemon=True).start()\n    print(f"fast memecoin collector: discovery={DISCOVERY_SECONDS}s refresh={REFRESH_SECONDS}s",flush=True)
+    threading.Thread(target=collector,daemon=True).start()
+    print(f"fast memecoin collector: discovery={DISCOVERY_SECONDS}s refresh={REFRESH_SECONDS}s",flush=True)
     HTTPServer(("0.0.0.0",PORT),Health).serve_forever()

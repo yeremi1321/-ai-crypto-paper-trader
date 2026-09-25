@@ -22,6 +22,7 @@ def db_stats():
     out={"db_connected":False,"observations":0,"eligible":0,"rejected":0,"unique_tokens":0,"snapshots":0,"paper_open":0,"paper_closed":0,"paper_wins":0,"paper_losses":0,"realized_pnl_usd":0.0}
     try:
         c=init_db()
+        out["db_connected"]=True
         out["observations"]=c.execute("select count(*) from meme_candidates").fetchone()[0]
         out["eligible"]=c.execute("select count(*) from meme_candidates where eligible=1").fetchone()[0]
         out["rejected"]=out["observations"]-out["eligible"]

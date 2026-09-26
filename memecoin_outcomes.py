@@ -8,6 +8,7 @@ from memecoin_shadow import init_db
 from memecoin_discovery import best_pair
 
 REQUEST_DELAY_SECONDS = 0.35
+OPEN_TOKENS_SQL = "select distinct token_address from meme_paper_trades where status='OPEN'"
 
 def pct(a,b): return ((b/a)-1)*100 if a else 0
 
@@ -26,15 +27,17 @@ def ensure_snapshot_table(c):
                  ON meme_price_snapshots(token_address, observed_at)""")
     c.commit()
 
-def run(only_open=False):
+def run(only_open=False,exclude_open=False):
+ """The full refresh skips open tokens when the independent watcher owns them."""
  c=init_db(); ensure_snapshot_table(c); now=datetime.now(timezone.utc); pg=c.__class__.__module__.startswith("psycopg")
  cutoff=(now-timedelta(minutes=30)).isoformat()
  if only_open:
-  q="select distinct token_address from meme_paper_trades where status='OPEN'"
-  addresses={r[0] for r in c.execute(q) if r[0]}
+  addresses={r[0] for r in c.execute(OPEN_TOKENS_SQL) if r[0]}
  else:
   q="select token_address from meme_outcomes where detected_at>=? union select token_address from meme_paper_trades where status='OPEN'"
   addresses={r[0] for r in c.execute(q.replace("?","%s") if pg else q,(cutoff,)) if r[0]}
+  if exclude_open:
+   addresses-={r[0] for r in c.execute(OPEN_TOKENS_SQL) if r[0]}
  updated=0; failed=0
  for a in addresses:
   try:

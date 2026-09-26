@@ -36,27 +36,44 @@ def _r(x, n=2):
     return None if x is None else round(float(x), n)
 
 
-def net_return_pct(entry_price, exit_market):
+NOTIONAL = 100.0
+REALISTIC_MIN_LIQ = 20000.0
+
+
+def impact(liquidity_usd):
+    """Approximate constant-product price impact of a $100 order: ~2*order/pool liquidity, capped at 50%."""
+    if not liquidity_usd or liquidity_usd <= 0:
+        return 0.5
+    return min(0.5, 2 * NOTIONAL / float(liquidity_usd))
+
+
+def net_return_pct(entry_price, exit_market, exit_slip=SLIP):
     qty = 100 * (1 - FEE) / entry_price
-    return qty * exit_market * (1 - SLIP) * (1 - FEE) - 100
+    return qty * exit_market * (1 - exit_slip) * (1 - FEE) - 100
 
 
-def simulate_live(entry_price, path):
-    """Live paper rule on a sampled path [(secs, price)]. Returns (reason, net_return_pct, max_up_pct) or None."""
+def simulate_live(entry_price, path, exit_slip=None):
+    """Live paper rule on a sampled path [(secs, price[, liquidity])]. exit_slip(liq) -> slippage fraction;
+    default is the flat live 1%. Returns (reason, net_return_pct, max_up_pct) or None."""
     max_up = 0.0
-    for t, p in path:
+    slip = (lambda liq: SLIP) if exit_slip is None else exit_slip
+    for step in path:
+        t, p = step[0], step[1]
+        liq = step[2] if len(step) > 2 else None
+        nr = lambda px: net_return_pct(entry_price, px, slip(liq))
         if t > HORIZON_S + END_TOLERANCE_S:
             break
         ret = _pct(entry_price, p)
         max_up = max(max_up, ret)
         if ret <= -SL:
-            return "STOP", net_return_pct(entry_price, p), max_up
+            return "STOP", nr(p), max_up
         if ret >= TP:
-            return "TARGET", net_return_pct(entry_price, p), max_up
+            return "TARGET", nr(p), max_up
         if t >= HORIZON_S:
-            return "TIME", net_return_pct(entry_price, p), max_up
+            return "TIME", nr(p), max_up
     if path and path[-1][0] >= HORIZON_S - END_TOLERANCE_S:
-        return "TIME", net_return_pct(entry_price, path[-1][1]), max_up
+        last = path[-1]
+        return "TIME", net_return_pct(entry_price, last[1], slip(last[2] if len(last) > 2 else None)), max_up
     return None
 
 
@@ -66,7 +83,7 @@ def load(conn):
         WHERE id IN (SELECT MIN(id) FROM meme_candidates WHERE token_address IS NOT NULL GROUP BY token_address)
         ORDER BY seen_at""").fetchall()
     try:
-        snaps = conn.execute("""SELECT token_address,observed_at,price FROM meme_price_snapshots
+        snaps = conn.execute("""SELECT token_address,observed_at,price,liquidity_usd FROM meme_price_snapshots
             ORDER BY token_address,observed_at""").fetchall()
     except Exception:
         snaps = []
@@ -74,11 +91,11 @@ def load(conn):
     return firsts, snaps, traded
 
 
-def build_rows(firsts, snaps, traded):
+def build_rows(firsts, snaps, traded, liquidity_aware=False):
     by_tok = {}
-    for tok, at, price in snaps:
-        d = by_tok.setdefault(tok, ([], []))
-        d[0].append(at); d[1].append(float(price))
+    for tok, at, price, liq in snaps:
+        d = by_tok.setdefault(tok, ([], [], []))
+        d[0].append(at); d[1].append(float(price)); d[2].append(liq)
     rows = []; incomplete = no_price = 0
     for cid, seen, addr, score, eligible, blocked, raw in firsts:
         try:
@@ -88,13 +105,14 @@ def build_rows(firsts, snaps, traded):
         price = x.get("price_usd")
         if not price:
             no_price += 1; continue
-        entry = float(price) * (1 + SLIP)
-        times, prices = by_tok.get(addr, ([], []))
+        entry_liq = x.get("liquidity_usd")
+        entry = float(price) * (1 + SLIP + (impact(entry_liq) if liquidity_aware else 0))
+        times, prices, liqs = by_tok.get(addr, ([], [], []))
         s = datetime.fromisoformat(seen)
         lo = bisect.bisect_right(times, seen)
         hi = bisect.bisect_right(times, (s + timedelta(seconds=HORIZON_S + END_TOLERANCE_S)).isoformat())
-        path = [((datetime.fromisoformat(times[i]) - s).total_seconds(), prices[i]) for i in range(lo, hi)]
-        sim = simulate_live(entry, path)
+        path = [((datetime.fromisoformat(times[i]) - s).total_seconds(), prices[i], liqs[i] or entry_liq) for i in range(lo, hi)]
+        sim = simulate_live(entry, path, (lambda liq: SLIP + impact(liq)) if liquidity_aware else None)
         if sim is None:
             incomplete += 1; continue
         reason, net, max_up = sim
@@ -105,7 +123,7 @@ def build_rows(firsts, snaps, traded):
         feats = {k: float(v) for k, v in x.items()
                  if k not in SKIP_FIELDS and isinstance(v, (int, float)) and not isinstance(v, bool)}
         feats["score"] = float(score) if score is not None else None
-        rows.append({"token_address": addr, "seen_at": seen, "eligible": bool(eligible), "blocked": reasons,
+        rows.append({"token_address": addr, "seen_at": seen, "entry_liquidity_usd": entry_liq, "eligible": bool(eligible), "blocked": reasons,
                      "traded": addr in traded, "reason": reason, "net": net, "max_up": max_up, "feats": feats})
     return rows, incomplete, no_price
 
@@ -182,10 +200,20 @@ def feature_test(rows, seed=11):
 def run(conn, as_of):
     firsts, snaps, traded = load(conn)
     rows, incomplete, no_price = build_rows(firsts, snaps, traded)
+    real, _, _ = build_rows(firsts, snaps, traded, liquidity_aware=True)
+    liqs = sorted(r["entry_liquidity_usd"] for r in rows if r["entry_liquidity_usd"] is not None)
+    big = [r for r in real if (r["entry_liquidity_usd"] or 0) >= REALISTIC_MIN_LIQ]
     return {"as_of": as_of, "mode": "read_only_candidate_study",
             "tokens_discovered": len(firsts), "tokens_studied": len(rows),
             "excluded_incomplete_price_path": incomplete, "excluded_no_price": no_price,
+            "entry_liquidity_usd": {"median": _r(median(liqs), 0) if liqs else None,
+                                    "pct_below_1k": _r(100 * sum(l < 1000 for l in liqs) / len(liqs), 1) if liqs else None,
+                                    "pct_at_least_20k": _r(100 * sum(l >= REALISTIC_MIN_LIQ for l in liqs) / len(liqs), 1) if liqs else None},
             "gate_audit": gate_audit(rows), "feature_test": feature_test(rows),
+            "liquidity_aware": {"cost_model": "1% slippage + ~2x$100/pool-liquidity price impact per side (cap 50%)",
+                                "gate_audit": gate_audit(real), "feature_test": feature_test(real)},
+            "realistic_pools_only": {"min_entry_liquidity_usd": REALISTIC_MIN_LIQ, "all": _stats(big),
+                                     "feature_test": feature_test(big)},
             "notes": ["Hypothetical entry at each token's FIRST discovery with the live +20/-10/20min rule and live costs.",
                       "Sampled quotes (~30s); real fills on thin pools would likely be worse.",
                       "A feature appears under 'candidates' only if its train-chosen rule is profitable on holdout "

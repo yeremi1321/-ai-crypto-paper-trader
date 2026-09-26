@@ -38,6 +38,8 @@ def _r(x, n=2):
 
 NOTIONAL = 100.0
 REALISTIC_MIN_LIQ = 20000.0
+FORWARD_START = "2026-09-26T09:29:00"   # data after this was never used to form any hypothesis
+REGIME_FIELD = "sol_ret_60m_pct"
 
 
 def impact(liquidity_usd):
@@ -179,13 +181,17 @@ def feature_test(rows, seed=11):
         if len(tv) < max(10, MIN_FEATURE_COVERAGE * len(train)):
             continue
         thr = median(tv)
-        above = lambda r: r["feats"].get(f) is not None and r["feats"][f] > thr
-        below = lambda r: r["feats"].get(f) is not None and r["feats"][f] <= thr
+        # Ties at the median can empty one side (e.g. most scores are exactly 70); fall back to >= / <.
+        strict = any(v > thr for v in tv)
+        above = (lambda r: r["feats"].get(f) is not None and r["feats"][f] > thr) if strict else \
+                (lambda r: r["feats"].get(f) is not None and r["feats"][f] >= thr)
+        below = (lambda r: r["feats"].get(f) is not None and r["feats"][f] <= thr) if strict else \
+                (lambda r: r["feats"].get(f) is not None and r["feats"][f] < thr)
         ta, tb = _stats([r for r in train if above(r)]), _stats([r for r in train if below(r)])
         if not ta.get("n") or not tb.get("n"):
             continue
         keep = above if (ta["avg_net_return_pct"] > tb["avg_net_return_pct"]) else below
-        side = ">" if keep is above else "<="
+        side = (">" if strict else ">=") if keep is above else ("<=" if strict else "<")
         hk = _stats([r for r in hold if keep(r)])
         beats, positive = _bootstrap(hold, keep, rng)
         res = {"rule_chosen_on_train": f"keep {f} {side} {_r(thr, 6)}",
@@ -195,6 +201,30 @@ def feature_test(rows, seed=11):
         if hk.get("n") and (hk["avg_net_return_pct"] or -1) > 0 and (positive or 0) >= 90:
             out["candidates"].append(res["rule_chosen_on_train"])
     return out
+
+
+def _forward(real):
+    """Out-of-sample sections: only tokens first discovered after FORWARD_START, realistic costs."""
+    fwd = [r for r in real if r["seen_at"] >= FORWARD_START]
+    fwd_big = [r for r in fwd if (r["entry_liquidity_usd"] or 0) >= REALISTIC_MIN_LIQ]
+    reg = [r for r in fwd_big if r["feats"].get(REGIME_FIELD) is not None]
+
+    def by_regime(rows):
+        out = {}
+        for r in rows:
+            v = r["feats"][REGIME_FIELD]
+            out.setdefault("SOL_UP" if v > 0.5 else "SOL_DOWN" if v < -0.5 else "SOL_FLAT", []).append(r)
+        return {k: _stats(v) for k, v in sorted(out.items())}
+
+    older_pairs = [r for r in fwd_big if r["feats"].get("pair_created_at") is not None]
+    cut = median([r["feats"]["pair_created_at"] for r in older_pairs]) if older_pairs else None
+    return {"since": FORWARD_START, "cost_model": "liquidity-aware, pools >= $20k",
+            "all_tokens": _stats(fwd), "realistic_pools": _stats(fwd_big),
+            "pair_age_hypothesis": {"note": "pre-registered 09:29 UTC: older pairs do better",
+                                    "older_half": _stats([r for r in older_pairs if r["feats"]["pair_created_at"] <= cut]) if cut else {"n": 0},
+                                    "newer_half": _stats([r for r in older_pairs if r["feats"]["pair_created_at"] > cut]) if cut else {"n": 0}},
+            "sol_regime": {"tokens_with_regime": len(reg), "by_sol_60m_trend": by_regime(reg),
+                           "feature_test": feature_test(reg) if len(reg) >= 20 else {"skipped": f"only {len(reg)} tokens so far"}}}
 
 
 def run(conn, as_of):
@@ -214,6 +244,7 @@ def run(conn, as_of):
                                 "gate_audit": gate_audit(real), "feature_test": feature_test(real)},
             "realistic_pools_only": {"min_entry_liquidity_usd": REALISTIC_MIN_LIQ, "all": _stats(big),
                                      "feature_test": feature_test(big)},
+            "forward_test": _forward(real),
             "notes": ["Hypothetical entry at each token's FIRST discovery with the live +20/-10/20min rule and live costs.",
                       "Sampled quotes (~30s); real fills on thin pools would likely be worse.",
                       "A feature appears under 'candidates' only if its train-chosen rule is profitable on holdout "

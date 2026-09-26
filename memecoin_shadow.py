@@ -22,6 +22,13 @@ def fresh_reentry(conn,token,price,closed_at,pg,now):
        *(1+PAPER_FEE_RATE)/(1-PAPER_FEE_RATE)-1)
  prices=[float(v[0]) for v in history]
  return float(price)>max(prices) and float(price)>min(prices)*(1+cost)
+
+def stop_reclaimed(exit_reason,prior_entry_market_price,price):
+ """A stopped token must reclaim the failed trade's market entry price."""
+ if exit_reason!="STOP_10": return True
+ if not prior_entry_market_price or not price: return False
+ return float(price)>float(prior_entry_market_price)
+
 DEFAULTS={"min_liquidity_usd":30000.0,"min_makers":100,"max_top10_holder_pct":50.0,"max_dev_holder_pct":10.0,"min_volume_1h_usd":25000.0,"min_score":60.0}
 
 def safety_reasons(x,cfg=DEFAULTS):
@@ -56,6 +63,7 @@ def init_db(path=DB):
   c.execute("""CREATE TABLE IF NOT EXISTS meme_outcomes(candidate_id BIGINT PRIMARY KEY,token_address TEXT,pair_address TEXT,detected_at TEXT,entry_price DOUBLE PRECISION,last_price DOUBLE PRECISION,highest_price DOUBLE PRECISION,lowest_price DOUBLE PRECISION,mfe_pct DOUBLE PRECISION,mae_pct DOUBLE PRECISION,age_minutes DOUBLE PRECISION)""")
   c.execute("""CREATE TABLE IF NOT EXISTS meme_decision_ledger(id BIGSERIAL PRIMARY KEY,candidate_id BIGINT UNIQUE,recorded_at TEXT,version TEXT,token TEXT,token_address TEXT,pair_address TEXT,chain TEXT,venue TEXT,data_source TEXT,regime TEXT,liquidity_usd DOUBLE PRECISION,volume_1h_usd DOUBLE PRECISION,participation INTEGER,estimated_entry_slippage_pct DOUBLE PRECISION,estimated_exit_slippage_pct DOUBLE PRECISION,setup_type TEXT,entry_rule TEXT,risk_rule TEXT,score DOUBLE PRECISION,decision TEXT,vetoes TEXT,simulated_entry_price DOUBLE PRECISION,simulated_entry_fee DOUBLE PRECISION,notional_usd DOUBLE PRECISION,outcome_label TEXT,net_return_pct DOUBLE PRECISION,mfe_pct DOUBLE PRECISION,mae_pct DOUBLE PRECISION,time_in_trade_minutes DOUBLE PRECISION,ai_explanation TEXT,raw_json TEXT)""")
   c.execute("""CREATE TABLE IF NOT EXISTS meme_paper_trades(id BIGSERIAL PRIMARY KEY,candidate_id BIGINT UNIQUE,token TEXT,token_address TEXT,pair_address TEXT,opened_at TEXT,entry_market_price DOUBLE PRECISION,entry_price DOUBLE PRECISION,notional_usd DOUBLE PRECISION,quantity DOUBLE PRECISION,entry_fee DOUBLE PRECISION,status TEXT,highest_price DOUBLE PRECISION,lowest_price DOUBLE PRECISION,current_price DOUBLE PRECISION,current_return_pct DOUBLE PRECISION,mfe_pct DOUBLE PRECISION,mae_pct DOUBLE PRECISION,closed_at TEXT,exit_market_price DOUBLE PRECISION)""")
+  c.execute("ALTER TABLE meme_paper_trades ADD COLUMN IF NOT EXISTS exit_reason TEXT")
   c.commit(); return c
  c=sqlite3.connect(path)
  c.execute("""CREATE TABLE IF NOT EXISTS meme_candidates(id INTEGER PRIMARY KEY,seen_at TEXT,version TEXT,token TEXT,chain TEXT,score REAL,eligible INTEGER,blocked_reasons TEXT,raw_json TEXT)""")
@@ -74,6 +82,8 @@ def init_db(path=DB):
  outcome_label TEXT,net_return_pct REAL,mfe_pct REAL,mae_pct REAL,time_in_trade_minutes REAL,
  ai_explanation TEXT,raw_json TEXT)""")
  c.execute("""CREATE TABLE IF NOT EXISTS meme_paper_trades(id INTEGER PRIMARY KEY,candidate_id INTEGER UNIQUE,token TEXT,token_address TEXT,pair_address TEXT,opened_at TEXT,entry_market_price REAL,entry_price REAL,notional_usd REAL,quantity REAL,entry_fee REAL,status TEXT,highest_price REAL,lowest_price REAL,current_price REAL,current_return_pct REAL,mfe_pct REAL,mae_pct REAL,closed_at TEXT,exit_market_price REAL)""")
+ if "exit_reason" not in {r[1] for r in c.execute("PRAGMA table_info(meme_paper_trades)")}:
+  c.execute("ALTER TABLE meme_paper_trades ADD COLUMN exit_reason TEXT")
  c.commit(); return c
 def record(conn,x,result):
  now=datetime.now(timezone.utc).isoformat()
@@ -90,9 +100,11 @@ def record(conn,x,result):
   elif conn.execute(f"SELECT 1 FROM meme_paper_trades WHERE token_address={ph} AND status='OPEN' LIMIT 1",(x["token_address"],)).fetchone():
    entry_veto="TOKEN_ALREADY_OPEN"
   else:
-   recent=conn.execute(f"SELECT closed_at FROM meme_paper_trades WHERE token_address={ph} AND status='CLOSED' ORDER BY id DESC LIMIT 1",(x["token_address"],)).fetchone()
+   recent=conn.execute(f"SELECT closed_at,exit_reason,entry_market_price FROM meme_paper_trades WHERE token_address={ph} AND status='CLOSED' ORDER BY id DESC LIMIT 1",(x["token_address"],)).fetchone()
    if recent and not fresh_reentry(conn,x["token_address"],x["price_usd"],recent[0],pg,datetime.fromisoformat(now)):
     entry_veto="NO_FRESH_REENTRY_SETUP"
+   elif recent and not stop_reclaimed(recent[1],recent[2],x["price_usd"]):
+    entry_veto="STOP_NOT_RECLAIMED"
   entry_allowed=entry_veto is None
  sql="""INSERT INTO meme_candidates(seen_at,version,token,chain,score,eligible,blocked_reasons,raw_json,token_address,pair_address) VALUES(?,?,?,?,?,?,?,?,?,?)"""
  if pg: sql=sql.replace("?","%s")+" RETURNING id"

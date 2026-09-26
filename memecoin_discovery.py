@@ -8,6 +8,7 @@ import argparse, json, os, time
 from datetime import datetime, timezone
 import requests
 from memecoin_shadow import init_db, evaluate, record
+import attention
 
 DEX="https://api.dexscreener.com"
 GOPLUS="https://api.gopluslabs.io/api/v1/solana/token_security"
@@ -117,6 +118,7 @@ def scan(limit=30):
             pair=best_pair(p["tokenAddress"])
             if not pair: continue
             row=normalize(p,pair,goplus(p["tokenAddress"]))
+            row=attention.annotate(row,p,pair)  # record-only attention fields; never changes score or entry
             result=evaluate(row); record(conn,row,result); n+=1
             print(json.dumps({**result,"address":row["token_address"],"liquidity_usd":row["liquidity_usd"]}))
         except Exception as e:

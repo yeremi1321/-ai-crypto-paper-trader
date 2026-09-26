@@ -1,0 +1,192 @@
+"""Read-only study of EVERY discovered memecoin, not just the ones the bot traded. Never writes, never trades.
+
+Question: if the bot had bought each token the first time it was discovered, using the live paper
+rules (+20% target, -10% stop, 20-minute max hold, 1% slippage and 0.6% fee each side, sampled
+quotes), what would have happened? From that:
+
+  * GATE AUDIT - for each safety gate and the score threshold, how did blocked tokens do compared
+    with tokens that passed? (Are the gates protecting the bot, or filtering out winners?)
+  * FEATURE TEST - for each numeric field recorded at discovery, pick one threshold on TRAINING
+    tokens (earliest 70% by first discovery), then judge it on untouched HOLDOUT tokens with a
+    token bootstrap. Nothing is promoted automatically.
+
+One observation per token (its first discovery) so every row is independent.
+"""
+import bisect
+import json
+import random
+from datetime import datetime, timedelta
+from statistics import mean, median
+
+FEE = 0.006
+SLIP = 0.01
+TP, SL, HORIZON_S = 20.0, 10.0, 20 * 60
+END_TOLERANCE_S = 60
+TRAIN_FRACTION = 0.7
+BOOTSTRAP_SAMPLES = 1000
+MIN_FEATURE_COVERAGE = 0.5
+SKIP_FIELDS = {"price_usd", "token", "token_address", "pair_address", "chain", "dex", "url"}
+
+
+def _pct(a, b):
+    return ((b / a) - 1) * 100 if a else None
+
+
+def _r(x, n=2):
+    return None if x is None else round(float(x), n)
+
+
+def net_return_pct(entry_price, exit_market):
+    qty = 100 * (1 - FEE) / entry_price
+    return qty * exit_market * (1 - SLIP) * (1 - FEE) - 100
+
+
+def simulate_live(entry_price, path):
+    """Live paper rule on a sampled path [(secs, price)]. Returns (reason, net_return_pct, max_up_pct) or None."""
+    max_up = 0.0
+    for t, p in path:
+        if t > HORIZON_S + END_TOLERANCE_S:
+            break
+        ret = _pct(entry_price, p)
+        max_up = max(max_up, ret)
+        if ret <= -SL:
+            return "STOP", net_return_pct(entry_price, p), max_up
+        if ret >= TP:
+            return "TARGET", net_return_pct(entry_price, p), max_up
+        if t >= HORIZON_S:
+            return "TIME", net_return_pct(entry_price, p), max_up
+    if path and path[-1][0] >= HORIZON_S - END_TOLERANCE_S:
+        return "TIME", net_return_pct(entry_price, path[-1][1]), max_up
+    return None
+
+
+def load(conn):
+    """First discovery per token, plus price snapshots for those tokens. Three read-only queries."""
+    firsts = conn.execute("""SELECT id,seen_at,token_address,score,eligible,blocked_reasons,raw_json FROM meme_candidates
+        WHERE id IN (SELECT MIN(id) FROM meme_candidates WHERE token_address IS NOT NULL GROUP BY token_address)
+        ORDER BY seen_at""").fetchall()
+    try:
+        snaps = conn.execute("""SELECT token_address,observed_at,price FROM meme_price_snapshots
+            ORDER BY token_address,observed_at""").fetchall()
+    except Exception:
+        snaps = []
+    traded = {r[0] for r in conn.execute("SELECT DISTINCT token_address FROM meme_paper_trades") if r[0]}
+    return firsts, snaps, traded
+
+
+def build_rows(firsts, snaps, traded):
+    by_tok = {}
+    for tok, at, price in snaps:
+        d = by_tok.setdefault(tok, ([], []))
+        d[0].append(at); d[1].append(float(price))
+    rows = []; incomplete = no_price = 0
+    for cid, seen, addr, score, eligible, blocked, raw in firsts:
+        try:
+            x = json.loads(raw) if raw else {}
+        except Exception:
+            x = {}
+        price = x.get("price_usd")
+        if not price:
+            no_price += 1; continue
+        entry = float(price) * (1 + SLIP)
+        times, prices = by_tok.get(addr, ([], []))
+        s = datetime.fromisoformat(seen)
+        lo = bisect.bisect_right(times, seen)
+        hi = bisect.bisect_right(times, (s + timedelta(seconds=HORIZON_S + END_TOLERANCE_S)).isoformat())
+        path = [((datetime.fromisoformat(times[i]) - s).total_seconds(), prices[i]) for i in range(lo, hi)]
+        sim = simulate_live(entry, path)
+        if sim is None:
+            incomplete += 1; continue
+        reason, net, max_up = sim
+        try:
+            reasons = json.loads(blocked) if blocked else []
+        except Exception:
+            reasons = []
+        feats = {k: float(v) for k, v in x.items()
+                 if k not in SKIP_FIELDS and isinstance(v, (int, float)) and not isinstance(v, bool)}
+        feats["score"] = float(score) if score is not None else None
+        rows.append({"token_address": addr, "seen_at": seen, "eligible": bool(eligible), "blocked": reasons,
+                     "traded": addr in traded, "reason": reason, "net": net, "max_up": max_up, "feats": feats})
+    return rows, incomplete, no_price
+
+
+def _stats(rows):
+    if not rows:
+        return {"n": 0}
+    nets = [r["net"] for r in rows]
+    return {"n": len(rows), "win_rate": _r(100 * sum(n > 0 for n in nets) / len(nets), 1),
+            "avg_net_return_pct": _r(mean(nets)), "median_net_return_pct": _r(median(nets)),
+            "reached_plus20_pct": _r(100 * sum(r["max_up"] >= TP for r in rows) / len(rows), 1)}
+
+
+def gate_audit(rows):
+    reasons = sorted({b for r in rows for b in r["blocked"]})
+    out = {"all_tokens": _stats(rows), "passed_all_gates_and_score": _stats([r for r in rows if r["eligible"]]),
+           "passed_gates_but_score_below_threshold": _stats([r for r in rows if not r["blocked"] and not r["eligible"]]),
+           "blocked_by_any_gate": _stats([r for r in rows if r["blocked"]]),
+           "tokens_the_bot_actually_traded": _stats([r for r in rows if r["traded"]]), "by_gate": {}}
+    for g in reasons:
+        out["by_gate"][g] = {"blocked": _stats([r for r in rows if g in r["blocked"]]),
+                             "blocked_only_by_this_gate": _stats([r for r in rows if r["blocked"] == [g]])}
+    return out
+
+
+def _bootstrap(hold, keep, rng):
+    by_tok = {}
+    for r in hold:
+        by_tok.setdefault(r["token_address"], []).append(r)
+    toks = list(by_tok)
+    if not toks:
+        return None, None
+    beats = positive = 0
+    for _ in range(BOOTSTRAP_SAMPLES):
+        sample = [r for t in (rng.choice(toks) for _ in toks) for r in by_tok[t]]
+        kept = [r["net"] for r in sample if keep(r)]
+        base = mean(r["net"] for r in sample)
+        k = mean(kept) if kept else base
+        beats += k > base; positive += k > 0
+    return _r(100 * beats / BOOTSTRAP_SAMPLES, 1), _r(100 * positive / BOOTSTRAP_SAMPLES, 1)
+
+
+def feature_test(rows, seed=11):
+    ordered = sorted(rows, key=lambda r: r["seen_at"])
+    cut = int(len(ordered) * TRAIN_FRACTION)
+    train, hold = ordered[:cut], ordered[cut:]
+    names = sorted({k for r in rows for k in r["feats"]})
+    rng = random.Random(seed)
+    out = {"train_tokens": len(train), "holdout_tokens": len(hold),
+           "train_baseline": _stats(train), "holdout_baseline": _stats(hold), "features": {}, "candidates": []}
+    for f in names:
+        tv = [r["feats"][f] for r in train if r["feats"].get(f) is not None]
+        if len(tv) < max(10, MIN_FEATURE_COVERAGE * len(train)):
+            continue
+        thr = median(tv)
+        above = lambda r: r["feats"].get(f) is not None and r["feats"][f] > thr
+        below = lambda r: r["feats"].get(f) is not None and r["feats"][f] <= thr
+        ta, tb = _stats([r for r in train if above(r)]), _stats([r for r in train if below(r)])
+        if not ta.get("n") or not tb.get("n"):
+            continue
+        keep = above if (ta["avg_net_return_pct"] > tb["avg_net_return_pct"]) else below
+        side = ">" if keep is above else "<="
+        hk = _stats([r for r in hold if keep(r)])
+        beats, positive = _bootstrap(hold, keep, rng)
+        res = {"rule_chosen_on_train": f"keep {f} {side} {_r(thr, 6)}",
+               "train_kept": ta if keep is above else tb, "holdout_kept": hk,
+               "holdout_bootstrap_pct_beats_baseline": beats, "holdout_bootstrap_pct_positive": positive}
+        out["features"][f] = res
+        if hk.get("n") and (hk["avg_net_return_pct"] or -1) > 0 and (positive or 0) >= 90:
+            out["candidates"].append(res["rule_chosen_on_train"])
+    return out
+
+
+def run(conn, as_of):
+    firsts, snaps, traded = load(conn)
+    rows, incomplete, no_price = build_rows(firsts, snaps, traded)
+    return {"as_of": as_of, "mode": "read_only_candidate_study",
+            "tokens_discovered": len(firsts), "tokens_studied": len(rows),
+            "excluded_incomplete_price_path": incomplete, "excluded_no_price": no_price,
+            "gate_audit": gate_audit(rows), "feature_test": feature_test(rows),
+            "notes": ["Hypothetical entry at each token's FIRST discovery with the live +20/-10/20min rule and live costs.",
+                      "Sampled quotes (~30s); real fills on thin pools would likely be worse.",
+                      "A feature appears under 'candidates' only if its train-chosen rule is profitable on holdout "
+                      "in >=90% of token bootstrap samples. Even then: paper trial only."]}

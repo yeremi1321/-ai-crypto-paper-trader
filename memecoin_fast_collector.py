@@ -18,6 +18,7 @@ from memecoin_trade_analysis import run as analyze_paper_history
 import memecoin_entry_analysis
 import memecoin_exit_replay
 import memecoin_candidate_study
+import research_worker
 
 DISCOVERY_SECONDS=float(os.getenv("MEME_DISCOVERY_SECONDS","30"))
 REFRESH_SECONDS=float(os.getenv("MEME_REFRESH_SECONDS","30"))
@@ -174,7 +175,9 @@ def open_position_watcher(stop=None,interval=None):
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
         path=self.path.split("?",1)[0]
-        if path=="/paper-candidate-study":
+        if path in research_worker.PATHS:
+            payload,code=research_worker.get(path)
+        elif path=="/paper-candidate-study":
             try:
                 payload=candidate_study(); code=200
             except Exception as e:
@@ -219,5 +222,6 @@ if __name__=="__main__":
     except Exception as e:
         print(f"::warning::paper history analysis failed: {e}",flush=True)
     threading.Thread(target=run_paper_watcher,daemon=True,name="paper-two-second-watcher").start()
+    research_worker.start()
     print(f"fast memecoin collector: discovery={DISCOVERY_SECONDS}s refresh={REFRESH_SECONDS}s open_refresh={OPEN_REFRESH_SECONDS}s",flush=True)
     HTTPServer(("0.0.0.0",PORT),Health).serve_forever()

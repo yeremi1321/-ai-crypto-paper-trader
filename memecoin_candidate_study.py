@@ -41,6 +41,21 @@ REALISTIC_MIN_LIQ = 20000.0
 FORWARD_START = "2026-09-26T09:29:00"   # data after this was never used to form any hypothesis
 REGIME_FIELD = "sol_ret_60m_pct"
 
+# Pre-registered hypotheses. Each is written down with a FIXED rule before the data that judges it exists,
+# and is evaluated only on tokens first discovered after its registration time, with realistic costs,
+# in pools >= $20k. Never edit a rule after registration; add a new hypothesis instead.
+MIN_VERDICT_N = 30
+HYPOTHESES = [
+    {"name": "anti_frenzy_buy_ratio_5m",
+     "registered_at": "2026-09-26T20:30:00",
+     "statement": "Tokens where <=60% of the last 5 minutes' trades are buys at discovery beat the rest, and are profitable.",
+     "field": "attn_buy_ratio_5m", "op": "<=", "value": 0.6},
+    {"name": "sol_rising_60m",
+     "registered_at": "2026-09-26T09:44:00",
+     "statement": "Tokens discovered while SOL is up more than 0.5% over the last hour beat the rest, and are profitable.",
+     "field": "sol_ret_60m_pct", "op": ">", "value": 0.5},
+]
+
 
 def impact(liquidity_usd):
     """Approximate constant-product price impact of a $100 order: ~2*order/pool liquidity, capped at 50%."""
@@ -231,6 +246,30 @@ def _forward(real):
                           "feature_test": feature_test(attn, prefix="attn_") if len(attn) >= 20 else {"skipped": f"only {len(attn)} tokens so far"}}}
 
 
+def _preregistered(real, seed=23):
+    rng = random.Random(seed)
+    out = []
+    for h in HYPOTHESES:
+        pool = [r for r in real if r["seen_at"] >= h["registered_at"] and (r["entry_liquidity_usd"] or 0) >= REALISTIC_MIN_LIQ
+                and r["feats"].get(h["field"]) is not None]
+        v = h["value"]
+        keep = (lambda r, f=h["field"], v=v: r["feats"][f] <= v) if h["op"] == "<=" else (lambda r, f=h["field"], v=v: r["feats"][f] > v)
+        kept, rest = [r for r in pool if keep(r)], [r for r in pool if not keep(r)]
+        ks, rs = _stats(kept), _stats(rest)
+        _, positive = _bootstrap(pool, keep, rng) if pool else (None, None)
+        if len(kept) < MIN_VERDICT_N or len(rest) < MIN_VERDICT_N:
+            verdict = f"collecting: need {MIN_VERDICT_N}+ tokens on each side (have {len(kept)} / {len(rest)})"
+        elif ks["avg_net_return_pct"] > rs["avg_net_return_pct"] and ks["avg_net_return_pct"] > 0 and (positive or 0) >= 90:
+            verdict = "SUPPORTED: beats the rest and profitable in >=90% of bootstrap samples -> eligible for a paper trial"
+        elif ks["avg_net_return_pct"] <= rs["avg_net_return_pct"]:
+            verdict = "REJECTED: does not beat the rest"
+        else:
+            verdict = "NOT SUPPORTED: beats the rest but not reliably profitable"
+        out.append({**h, "tokens_evaluated": len(pool), "kept": ks, "rest": rs,
+                    "kept_bootstrap_pct_positive": positive, "verdict": verdict})
+    return out
+
+
 def run(conn, as_of):
     firsts, snaps, traded = load(conn)
     rows, incomplete, no_price = build_rows(firsts, snaps, traded)
@@ -248,6 +287,7 @@ def run(conn, as_of):
                                 "gate_audit": gate_audit(real), "feature_test": feature_test(real)},
             "realistic_pools_only": {"min_entry_liquidity_usd": REALISTIC_MIN_LIQ, "all": _stats(big),
                                      "feature_test": feature_test(big)},
+            "preregistered_hypotheses": _preregistered(real),
             "forward_test": _forward(real),
             "notes": ["Hypothetical entry at each token's FIRST discovery with the live +20/-10/20min rule and live costs.",
                       "Sampled quotes (~30s); real fills on thin pools would likely be worse.",

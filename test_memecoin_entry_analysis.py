@@ -87,26 +87,25 @@ def test_features_and_eras():
 
 
 def test_http_endpoints_are_read_only_and_cached():
+    """Pages are served from the background worker's cache; computing never happens on request or writes."""
+    import research_worker as rw
+    import memecoin_shadow
     with tempfile.TemporaryDirectory() as d:
-        path = str(Path(d) / "b.db"); _db(path)
-        calls = []
-        real_run = ea.run
-        def counting_run(conn, as_of):
-            calls.append(1); return real_run(conn, as_of)
-        fc._ANALYSIS.update(at=0.0, summary=None, trades=None)
-        with patch.object(fc, "init_db", lambda: init_db(path)), patch.object(fc.memecoin_entry_analysis, "run", counting_run):
-            server = HTTPServer(("127.0.0.1", 0), fc.Health)
-            t = threading.Thread(target=server.serve_forever, daemon=True); t.start()
-            base = f"http://127.0.0.1:{server.server_address[1]}"
-            before = Path(path).read_bytes()
-            s = json.load(urllib.request.urlopen(base + "/paper-analysis"))
-            tr = json.load(urllib.request.urlopen(base + "/paper-analysis-trades"))
-            server.shutdown()
-            after = Path(path).read_bytes()
-    assert s["mode"] == "read_only_paper_analysis" and s["total"]["n"] == 16
-    assert tr["columns"][0] == "id" and len(tr["rows"]) == 16
-    assert len(calls) == 1, "second request must be served from cache"
-    assert before == after, "analysis must not modify the database"
+        path = str(Path(d) / "e.db"); _db(path)
+        real_init = memecoin_shadow.init_db
+        rw._results.clear()
+        before = Path(path).read_bytes()
+        with patch.object(memecoin_shadow, "init_db", lambda p=None: real_init(path)):
+            jobs = rw.default_jobs()
+            list(rw.run_once({"analysis": jobs["analysis"]}))
+        after = Path(path).read_bytes()
+        server = HTTPServer(("127.0.0.1", 0), fc.Health)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        s = json.load(urllib.request.urlopen(base + "/paper-analysis")); tr = json.load(urllib.request.urlopen(base + "/paper-analysis-trades"))
+        server.shutdown()
+    assert before == after, "research must not modify the database"
+    assert s["mode"] == "read_only_paper_analysis" and s["total"]["n"] == 16 and len(tr["rows"]) == 16
 
 
 if __name__ == "__main__":

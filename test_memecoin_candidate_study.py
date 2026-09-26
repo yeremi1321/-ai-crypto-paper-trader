@@ -93,9 +93,24 @@ def test_endpoint_read_only_and_cached():
     assert r["mode"] == "read_only_candidate_study" and len(calls) == 1
 
 
+def test_liquidity_aware_costs():
+    assert cs.impact(2.67) == 0.5 and abs(cs.impact(100000) - 0.002) < 1e-12
+    flat = cs.simulate_live(1.01, [(30, 1.25, 60000)])[1]
+    thin = cs.simulate_live(1.01 * (1 + cs.impact(300)) , [(30, 1.25 * 1.0, 300)], lambda l: cs.SLIP + cs.impact(l))
+    assert thin is None or thin[1] < flat  # thin pool: target may not even trigger; if it does, it pays far more
+    with tempfile.TemporaryDirectory() as d:
+        path = str(Path(d) / "l.db"); _db(path)
+        c = init_db(path); out = cs.run(c, "now"); c.close()
+    assert out["entry_liquidity_usd"]["pct_at_least_20k"] == 80.0
+    assert out["realistic_pools_only"]["all"]["n"] == 32
+    la = out["liquidity_aware"]["gate_audit"]["all_tokens"]["avg_net_return_pct"]
+    assert la < out["gate_audit"]["all_tokens"]["avg_net_return_pct"]
+
+
 if __name__ == "__main__":
     test_live_rule_parity()
     test_gate_audit_and_first_observation_only()
     test_feature_edge_found_only_when_it_survives_holdout()
     test_endpoint_read_only_and_cached()
+    test_liquidity_aware_costs()
     print("candidate study tests passed")

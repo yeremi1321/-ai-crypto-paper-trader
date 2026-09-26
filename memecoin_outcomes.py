@@ -26,11 +26,15 @@ def ensure_snapshot_table(c):
                  ON meme_price_snapshots(token_address, observed_at)""")
     c.commit()
 
-def run():
+def run(only_open=False):
  c=init_db(); ensure_snapshot_table(c); now=datetime.now(timezone.utc); pg=c.__class__.__module__.startswith("psycopg")
  cutoff=(now-timedelta(minutes=30)).isoformat()
- q="select token_address from meme_outcomes where detected_at>=? union select token_address from meme_paper_trades where status='OPEN'"
- addresses={r[0] for r in c.execute(q.replace("?","%s") if pg else q,(cutoff,)) if r[0]}
+ if only_open:
+  q="select distinct token_address from meme_paper_trades where status='OPEN'"
+  addresses={r[0] for r in c.execute(q) if r[0]}
+ else:
+  q="select token_address from meme_outcomes where detected_at>=? union select token_address from meme_paper_trades where status='OPEN'"
+  addresses={r[0] for r in c.execute(q.replace("?","%s") if pg else q,(cutoff,)) if r[0]}
  updated=0; failed=0
  for a in addresses:
   try:
@@ -55,7 +59,7 @@ def run():
   except Exception as e:
    failed+=1; print(f"::warning::outcome update failed {a}: {e}")
   time.sleep(REQUEST_DELAY_SECONDS)
- print(f"memecoin outcome updates: {updated}; failed: {failed}; snapshots recorded: {updated}")
+ print(f"memecoin {'open-position' if only_open else 'outcome'} updates: {updated}; failed: {failed}; snapshots recorded: {updated}")
  c.close()
 
 if __name__=="__main__": run()

@@ -88,7 +88,7 @@ def normalize(profile,pair,sec):
     cannot_sell=status(sec,"cannot_sell")
     if cannot_sell is None and sec and isinstance(sec.get("b20_info"),dict): cannot_sell=status(sec["b20_info"],"cannot_sell")
     sellable=False if nontransfer is True or cannot_sell is True else (True if nontransfer is False or cannot_sell is False else (not truth(sec.get("cannot_sell_all")) if sec and "cannot_sell_all" in sec else False))
-    # Unknown security fields fail closed; current GoPlus Solana fields are parsed explicitly.
+    # Preserve unavailable security fields as unknown. Paper mode can observe them without falsely classifying unknown as unsafe.
     return {
       "token":(pair.get("baseToken") or {}).get("symbol") or profile.get("tokenAddress"),
       "token_address":profile.get("tokenAddress"),"chain":"solana",
@@ -99,11 +99,11 @@ def normalize(profile,pair,sec):
       "price_change_1h_pct":float(pc.get("h1") or 0),
       "market_cap":pair.get("marketCap"),"fdv":pair.get("fdv"),
       "pair_created_at":pair.get("pairCreatedAt"),
-      "top10_holder_pct":top10 if top10 is not None else (percent(sec.get("top_10_holder_rate")) if sec and sec.get("top_10_holder_rate") not in (None,"") else 100.0),
-      "dev_holder_pct":creator if creator is not None else 100.0,
-      "mint_authority_active":mint_active if mint_active is not None else True,"freeze_authority_active":freeze_active if freeze_active is not None else True,
-      "sellable":sellable,
-      "liquidity_locked":locked if locked is not None else False,
+      "top10_holder_pct":top10 if top10 is not None else (percent(sec.get("top_10_holder_rate")) if sec and sec.get("top_10_holder_rate") not in (None,"") else None),
+      "dev_holder_pct":creator,
+      "mint_authority_active":mint_active,"freeze_authority_active":freeze_active,
+      "sellable":sellable if sec else None,
+      "liquidity_locked":locked,
       "holder_growth_1h_pct":0.0,"higher_highs":float(pc.get("m5") or 0)>0 and float(pc.get("h1") or 0)>0,
       "narrative_momentum":bool((pair.get("boosts") or {}).get("active")),
       "security_source":"goplus" if sec else "unavailable",

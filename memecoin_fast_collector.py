@@ -15,6 +15,7 @@ from memecoin_paper import run as paper_run
 from memecoin_shadow import init_db
 from live_two_second_watcher import run as run_paper_watcher
 from memecoin_trade_analysis import run as analyze_paper_history
+import memecoin_entry_analysis
 
 DISCOVERY_SECONDS=float(os.getenv("MEME_DISCOVERY_SECONDS","30"))
 REFRESH_SECONDS=float(os.getenv("MEME_REFRESH_SECONDS","30"))
@@ -22,6 +23,9 @@ OPEN_REFRESH_SECONDS=10.0
 PORT=int(os.getenv("PORT","10000"))
 STATE={"started_at":datetime.now(timezone.utc).isoformat(),"cycles":0,"last_discovery":None,"last_refresh":None,"last_error":None,
        "last_open_refresh":None,"open_refresh_cycles":0,"last_open_error":None}
+ANALYSIS_CACHE_SECONDS=120.0
+_ANALYSIS={"at":0.0,"summary":None,"trades":None}
+_ANALYSIS_LOCK=threading.Lock()
 
 def db_stats():
     out={"db_connected":False,"observations":0,"eligible":0,"rejected":0,"unique_tokens":0,"snapshots":0,"paper_open":0,"paper_closed":0,"paper_wins":0,"paper_losses":0,"realized_pnl_usd":0.0}
@@ -85,6 +89,17 @@ def paper_summary():
     finally:
         c.close()
 
+def paper_analysis():
+    with _ANALYSIS_LOCK:
+        if _ANALYSIS["summary"] is None or time.monotonic()-_ANALYSIS["at"]>ANALYSIS_CACHE_SECONDS:
+            c=init_db()
+            try:
+                summary,trades=memecoin_entry_analysis.run(c,datetime.now(timezone.utc).isoformat())
+            finally:
+                c.close()
+            _ANALYSIS.update(at=time.monotonic(),summary=summary,trades=trades)
+        return _ANALYSIS["summary"],_ANALYSIS["trades"]
+
 def collector(stop=None):
     next_discovery=0.0; next_refresh=0.0
     while not (stop and stop.is_set()):
@@ -127,7 +142,15 @@ def open_position_watcher(stop=None,interval=None):
 
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path=="/paper-summary":
+        if self.path in ("/paper-analysis","/paper-analysis-trades"):
+            try:
+                summary,trades=paper_analysis()
+                payload=summary if self.path=="/paper-analysis" else trades
+                code=200
+            except Exception as e:
+                payload={"status":"unavailable","error":type(e).__name__}
+                code=503
+        elif self.path=="/paper-summary":
             try:
                 payload=paper_summary()
                 code=200

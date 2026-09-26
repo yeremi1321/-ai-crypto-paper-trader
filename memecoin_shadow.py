@@ -1,8 +1,10 @@
 """Research-only memecoin candidate, outcome, and simulated-trade storage."""
 import argparse,json,sqlite3,os
-from datetime import datetime,timezone
+from datetime import datetime,timezone,timedelta
 DB="memecoin_shadow.db"; VERSION="MEME_SHADOW_V2" # deploy-sync d545183
 PAPER_NOTIONAL_USD=100.0; PAPER_FEE_RATE=.006; PAPER_SLIPPAGE_RATE=.01
+MAX_OPEN_PAPER_POSITIONS=5
+PAPER_REENTRY_COOLDOWN=timedelta(hours=2)
 DEFAULTS={"min_liquidity_usd":30000.0,"min_makers":100,"max_top10_holder_pct":50.0,"max_dev_holder_pct":10.0,"min_volume_1h_usd":25000.0,"min_score":60.0}
 
 def safety_reasons(x,cfg=DEFAULTS):
@@ -59,16 +61,32 @@ def init_db(path=DB):
 def record(conn,x,result):
  now=datetime.now(timezone.utc).isoformat()
  pg=conn.__class__.__module__.startswith("psycopg")
+ # A repeated discovery observation is not a new position. Keep it in the
+ # research ledger while limiting simulated exposure and churn per token.
+ entry_allowed=bool(result["eligible"] and x.get("price_usd") and x.get("token_address"))
+ entry_veto=None
+ if entry_allowed:
+  ph="%s" if pg else "?"
+  open_count=conn.execute("SELECT COUNT(*) FROM meme_paper_trades WHERE status='OPEN'").fetchone()[0]
+  if open_count>=MAX_OPEN_PAPER_POSITIONS:
+   entry_veto="MAX_OPEN_POSITIONS"
+  elif conn.execute(f"SELECT 1 FROM meme_paper_trades WHERE token_address={ph} AND status='OPEN' LIMIT 1",(x["token_address"],)).fetchone():
+   entry_veto="TOKEN_ALREADY_OPEN"
+  else:
+   recent=conn.execute(f"SELECT opened_at FROM meme_paper_trades WHERE token_address={ph} ORDER BY id DESC LIMIT 1",(x["token_address"],)).fetchone()
+   if recent and datetime.now(timezone.utc)-datetime.fromisoformat(recent[0])<PAPER_REENTRY_COOLDOWN:
+    entry_veto="TOKEN_REENTRY_COOLDOWN"
+  entry_allowed=entry_veto is None
  sql="""INSERT INTO meme_candidates(seen_at,version,token,chain,score,eligible,blocked_reasons,raw_json,token_address,pair_address) VALUES(?,?,?,?,?,?,?,?,?,?)"""
  if pg: sql=sql.replace("?","%s")+" RETURNING id"
  cur=conn.execute(sql,(now,VERSION,x.get("token"),x.get("chain"),result["score"],int(result["eligible"]),json.dumps(result["blocked_reasons"]),json.dumps(x),x.get("token_address"),x.get("pair_address")))
  cid=cur.fetchone()[0] if pg else cur.lastrowid
- decision="PAPER_TRADE_CANDIDATE" if result["eligible"] else ("REJECT" if result["blocked_reasons"] else "WATCHLIST")
- vetoes=json.dumps(result["blocked_reasons"])
+ decision="PAPER_TRADE_CANDIDATE" if entry_allowed else ("PAPER_ENTRY_BLOCKED" if entry_veto else ("REJECT" if result["blocked_reasons"] else "WATCHLIST"))
+ vetoes=json.dumps(result["blocked_reasons"]+([entry_veto] if entry_veto else []))
  explanation=("Eligible: safety gates passed and score meets threshold." if result["eligible"]
               else "Rejected by deterministic gates: "+(",".join(result["blocked_reasons"]) or "score below threshold."))
  simulated_entry=None; simulated_fee=None
- if result["eligible"] and x.get("price_usd"):
+ if entry_allowed:
   simulated_entry=float(x["price_usd"])*(1+PAPER_SLIPPAGE_RATE)
   simulated_fee=PAPER_NOTIONAL_USD*PAPER_FEE_RATE
  ledger_sql="""INSERT INTO meme_decision_ledger(
@@ -84,12 +102,12 @@ def record(conn,x,result):
  float(x.get("volume_1h_usd",0)),int(x.get("makers",0)),PAPER_SLIPPAGE_RATE*100,PAPER_SLIPPAGE_RATE*100,
  "MOMENTUM_ACCELERATION","Research candidate after deterministic safety + score gates",
  "Research-only; no live execution; simulated costs enforced",result["score"],decision,vetoes,
- simulated_entry,simulated_fee,PAPER_NOTIONAL_USD if result["eligible"] else 0,
+  simulated_entry,simulated_fee,PAPER_NOTIONAL_USD if entry_allowed else 0,
  "PENDING",explanation,json.dumps(x)))
  if x.get("token_address") and x.get("price_usd"):
   p=float(x["price_usd"])
   conn.execute(("INSERT INTO meme_outcomes VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING" if pg else "INSERT OR IGNORE INTO meme_outcomes VALUES(?,?,?,?,?,?,?,?,?,?,?)"),(cid,x.get("token_address"),x.get("pair_address"),now,p,p,p,p,0,0,0))
-  if result["eligible"]:
+  if entry_allowed:
    ep=p*(1+PAPER_SLIPPAGE_RATE); fee=PAPER_NOTIONAL_USD*PAPER_FEE_RATE; qty=(PAPER_NOTIONAL_USD-fee)/ep
    conn.execute(("""INSERT INTO meme_paper_trades(candidate_id,token,token_address,pair_address,opened_at,entry_market_price,entry_price,notional_usd,quantity,entry_fee,status,highest_price,lowest_price,current_price,current_return_pct,mfe_pct,mae_pct) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""" if pg else """INSERT OR IGNORE INTO meme_paper_trades(candidate_id,token,token_address,pair_address,opened_at,entry_market_price,entry_price,notional_usd,quantity,entry_fee,status,highest_price,lowest_price,current_price,current_return_pct,mfe_pct,mae_pct) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""),(cid,x.get("token"),x.get("token_address"),x.get("pair_address"),now,p,ep,PAPER_NOTIONAL_USD,qty,fee,"OPEN",p,p,p,0,0,0))
  conn.commit()
@@ -101,6 +119,13 @@ def self_test():
  assert c.execute("select count(*) from meme_paper_trades").fetchone()[0]==1
  row=c.execute("select decision,outcome_label from meme_decision_ledger").fetchone()
  assert row==("PAPER_TRADE_CANDIDATE","PENDING")
+ record(c,x,evaluate(x))
+ assert c.execute("select count(*) from meme_paper_trades").fetchone()[0]==1
+ assert c.execute("select decision,vetoes from meme_decision_ledger order by id desc limit 1").fetchone()==("PAPER_ENTRY_BLOCKED",'["TOKEN_ALREADY_OPEN"]')
+ c.execute("UPDATE meme_paper_trades SET status='CLOSED'"); c.commit()
+ record(c,x,evaluate(x))
+ assert c.execute("select count(*) from meme_paper_trades").fetchone()[0]==1
+ assert c.execute("select decision,vetoes from meme_decision_ledger order by id desc limit 1").fetchone()==("PAPER_ENTRY_BLOCKED",'["TOKEN_REENTRY_COOLDOWN"]')
  bad=dict(x); bad["liquidity_usd"]=10; record(c,bad,evaluate(bad))
  assert c.execute("select count(*) from meme_decision_ledger where decision='REJECT'").fetchone()[0]==1
  print("memecoin shadow V2 self-test passed")

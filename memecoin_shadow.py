@@ -9,12 +9,12 @@ def safety_reasons(x,cfg=DEFAULTS):
  r=[]
  if float(x.get("liquidity_usd",0))<cfg["min_liquidity_usd"]: r.append("LOW_LIQUIDITY")
  if int(x.get("makers",0))<cfg["min_makers"]: r.append("LOW_PARTICIPATION")
- if float(x.get("top10_holder_pct",100))>cfg["max_top10_holder_pct"]: r.append("HOLDER_CONCENTRATION")
- if float(x.get("dev_holder_pct",100))>cfg["max_dev_holder_pct"]: r.append("DEV_CONCENTRATION")
- if x.get("mint_authority_active",True): r.append("MINT_AUTHORITY")
- if x.get("freeze_authority_active",True): r.append("FREEZE_AUTHORITY")
- if not x.get("sellable",False): r.append("SELLABILITY")
- if not x.get("liquidity_locked",False): r.append("LIQUIDITY_CONTROL")
+ if x.get("top10_holder_pct") is not None and float(x["top10_holder_pct"])>cfg["max_top10_holder_pct"]: r.append("HOLDER_CONCENTRATION")
+ if x.get("dev_holder_pct") is not None and float(x["dev_holder_pct"])>cfg["max_dev_holder_pct"]: r.append("DEV_CONCENTRATION")
+ if x.get("mint_authority_active") is True: r.append("MINT_AUTHORITY")
+ if x.get("freeze_authority_active") is True: r.append("FREEZE_AUTHORITY")
+ if x.get("sellable") is False: r.append("SELLABILITY")
+ if x.get("liquidity_locked") is False: r.append("LIQUIDITY_CONTROL")
  return r
 
 def score(x):

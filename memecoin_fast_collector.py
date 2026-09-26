@@ -1,7 +1,8 @@
 """Always-on adaptive memecoin research collector.
 
-Paper/research only. No real orders. Runs discovery every 30 seconds and refreshes
-recent candidates/open paper positions every 30 seconds. API calls remain rate-limited.
+Paper/research only. No real orders. Runs discovery and recent-candidate refresh
+every 30 seconds. An independent thread checks open paper positions every 10
+seconds, so slow discovery cannot delay stop/target/time exits.
 Exposes a tiny HTTP health endpoint so it can run as a Render web service.
 """
 import json, os, sqlite3, threading, time
@@ -19,7 +20,8 @@ DISCOVERY_SECONDS=float(os.getenv("MEME_DISCOVERY_SECONDS","30"))
 REFRESH_SECONDS=float(os.getenv("MEME_REFRESH_SECONDS","30"))
 OPEN_REFRESH_SECONDS=10.0
 PORT=int(os.getenv("PORT","10000"))
-STATE={"started_at":datetime.now(timezone.utc).isoformat(),"cycles":0,"last_discovery":None,"last_refresh":None,"last_error":None}
+STATE={"started_at":datetime.now(timezone.utc).isoformat(),"cycles":0,"last_discovery":None,"last_refresh":None,"last_error":None,
+       "last_open_refresh":None,"open_refresh_cycles":0,"last_open_error":None}
 
 def db_stats():
     out={"db_connected":False,"observations":0,"eligible":0,"rejected":0,"unique_tokens":0,"snapshots":0,"paper_open":0,"paper_closed":0,"paper_wins":0,"paper_losses":0,"realized_pnl_usd":0.0}
@@ -83,31 +85,45 @@ def paper_summary():
     finally:
         c.close()
 
-def collector():
-    next_discovery=0.0; next_refresh=0.0; next_open_refresh=0.0
-    while True:
-        now=time.monotonic()
+def collector(stop=None):
+    next_discovery=0.0; next_refresh=0.0
+    while not (stop and stop.is_set()):
         try:
+            now=time.monotonic()
             if now>=next_discovery:
+                next_discovery=now+DISCOVERY_SECONDS
                 scan(int(os.getenv("MEME_DISCOVERY_LIMIT","30")))
                 STATE["last_discovery"]=datetime.now(timezone.utc).isoformat()
-                next_discovery=now+DISCOVERY_SECONDS
+            now=time.monotonic()
             if now>=next_refresh:
-                update_outcomes()
-                paper_run()
-                STATE["last_refresh"]=datetime.now(timezone.utc).isoformat()
                 next_refresh=now+REFRESH_SECONDS
-                next_open_refresh=now+OPEN_REFRESH_SECONDS
-            elif now>=next_open_refresh:
-                update_outcomes(only_open=True)
-                paper_run()
-                next_open_refresh=now+OPEN_REFRESH_SECONDS
+                update_outcomes(exclude_open=True)
+                STATE["last_refresh"]=datetime.now(timezone.utc).isoformat()
             STATE["cycles"]+=1
             STATE["last_error"]=None
         except Exception as e:
             STATE["last_error"]=repr(e)
             print(f"::warning::fast collector cycle failed: {e}",flush=True)
-        time.sleep(max(1,min(5,DISCOVERY_SECONDS,REFRESH_SECONDS)))
+        time.sleep(1)
+
+def open_position_watcher(stop=None,interval=None):
+    """Refresh and close open paper positions independently of discovery."""
+    interval=OPEN_REFRESH_SECONDS if interval is None else interval
+    next_run=0.0
+    while not (stop and stop.is_set()):
+        now=time.monotonic()
+        if now>=next_run:
+            next_run=now+interval
+            try:
+                update_outcomes(only_open=True)
+                paper_run()
+                STATE["last_open_refresh"]=datetime.now(timezone.utc).isoformat()
+                STATE["open_refresh_cycles"]+=1
+                STATE["last_open_error"]=None
+            except Exception as e:
+                STATE["last_open_error"]=repr(e)
+                print(f"::warning::open-position refresh failed: {e}",flush=True)
+        time.sleep(max(0.0,min(1.0,next_run-time.monotonic())))
 
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -121,7 +137,7 @@ class Health(BaseHTTPRequestHandler):
         else:
             stats=db_stats()
             payload={"status":"ok" if stats.get("db_connected") else "degraded","mode":"paper_trading","database":"postgres" if os.getenv("DATABASE_URL") else "sqlite","database_connected":stats.get("db_connected",False),"discovery_seconds":DISCOVERY_SECONDS,
-                     "refresh_seconds":REFRESH_SECONDS,**STATE,**stats}
+                     "refresh_seconds":REFRESH_SECONDS,"open_refresh_seconds":OPEN_REFRESH_SECONDS,**STATE,**stats}
             code=200
         body=json.dumps(payload).encode()
         self.send_response(code); self.send_header("Content-Type","application/json")
@@ -131,11 +147,12 @@ class Health(BaseHTTPRequestHandler):
 if __name__=="__main__":
     if DISCOVERY_SECONDS<30 or REFRESH_SECONDS<30:
         raise SystemExit("Refusing intervals below 30 seconds to reduce upstream API/rate-limit risk.")
-    threading.Thread(target=collector,daemon=True).start()
+    threading.Thread(target=collector,daemon=True,name="meme-collector").start()
+    threading.Thread(target=open_position_watcher,daemon=True,name="meme-open-positions").start()
     try:
         analyze_paper_history()
     except Exception as e:
         print(f"::warning::paper history analysis failed: {e}",flush=True)
     threading.Thread(target=run_paper_watcher,daemon=True,name="paper-two-second-watcher").start()
-    print(f"fast memecoin collector: discovery={DISCOVERY_SECONDS}s refresh={REFRESH_SECONDS}s",flush=True)
+    print(f"fast memecoin collector: discovery={DISCOVERY_SECONDS}s refresh={REFRESH_SECONDS}s open_refresh={OPEN_REFRESH_SECONDS}s",flush=True)
     HTTPServer(("0.0.0.0",PORT),Health).serve_forever()

@@ -1,88 +1,85 @@
-import os, sqlite3
+"""Live, paper-only memecoin dashboard backed by the Render collector."""
+import os
+
 import pandas as pd
+import requests
 import streamlit as st
 
-DB="memecoin_shadow.db"
+SUMMARY_URL=os.getenv("MEME_PAPER_SUMMARY_URL",
+    "https://meme-fast-paper-trader.onrender.com/paper-summary")
+
 st.set_page_config(page_title="Memecoin Paper Trader",page_icon="🚀",layout="wide")
 st.title("🚀 Meme Command Center")
 st.caption("Fast memecoin paper-trading monitor • simulated execution only • no real-money orders")
 st.markdown("""<style>.block-container{padding-top:1.5rem;max-width:1500px}div[data-testid="stMetric"]{background:rgba(128,128,128,.08);border:1px solid rgba(128,128,128,.18);padding:14px;border-radius:14px}[data-testid="stDataFrame"]{border-radius:12px;overflow:hidden}</style>""",unsafe_allow_html=True)
 
+@st.cache_data(ttl=15,show_spinner=False)
+def live_summary():
+    response=requests.get(SUMMARY_URL,timeout=40)
+    response.raise_for_status()
+    payload=response.json()
+    if payload.get("mode")!="paper_trading" or not isinstance(payload.get("totals"),dict):
+        raise ValueError("Paper service returned an invalid summary")
+    return payload
 
-def exists(c,t):
- return c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(t,)).fetchone() is not None
+try:
+    data=live_summary()
+except (requests.RequestException,ValueError) as exc:
+    st.error("Live paper-trading data is temporarily unavailable. No saved database snapshot is shown as current data.")
+    st.caption(f"Connection: {type(exc).__name__}")
+    st.stop()
 
-if not os.path.exists(DB):
- st.warning("Waiting for memecoin_shadow.db to be created by the scheduled scanner.")
- st.stop()
+totals=data["totals"]
+closed_count=int(totals.get("paper_closed") or 0)
+win_count=int(totals.get("paper_wins") or 0)
+open_count=int(totals.get("paper_open") or 0)
+st.caption(f"Live Render paper database • updated {data.get('as_of','unknown')} • refresh the page for current data")
 
-c=sqlite3.connect(DB)
-if not exists(c,"meme_paper_trades"):
- st.info("Paper trader is ready; waiting for its table/data.")
- st.stop()
-trades=pd.read_sql_query("SELECT * FROM meme_paper_trades ORDER BY id DESC",c)
-candidate_count=c.execute("SELECT COUNT(*) FROM meme_candidates").fetchone()[0] if exists(c,"meme_candidates") else 0
-eligible_count=c.execute("SELECT COUNT(*) FROM meme_candidates WHERE eligible=1").fetchone()[0] if exists(c,"meme_candidates") else 0
-snapshot_count=c.execute("SELECT COUNT(*) FROM meme_price_snapshots").fetchone()[0] if exists(c,"meme_price_snapshots") else 0
-c.close()
-
-if trades.empty:
- st.success("🟢 Paper trader active — scanning for eligible setups")
- a,b,d=st.columns(3)
- a.metric("Candidate observations",candidate_count)
- b.metric("Eligible observations",eligible_count)
- d.metric("Price snapshots",snapshot_count)
- st.caption("No paper entry has qualified yet. This page will populate automatically when a setup passes every safety and entry gate.")
- st.subheader("Qualification pipeline")
- st.markdown("**DISCOVER → SAFETY CHECK → SCORE SETUP → EXECUTION CHECK → PAPER ENTRY**")
- st.info("Candidates may be rejected for liquidity, holder/dev concentration, liquidity control, sellability, security, or setup quality.")
- st.stop()
-
-for x in ["entry_price","current_price","current_return_pct","mfe_pct","mae_pct","net_pnl_usd","net_return_pct"]:
- if x in trades: trades[x]=pd.to_numeric(trades[x],errors="coerce")
-open_t=trades[trades.status=="OPEN"].copy()
-closed=trades[trades.status=="CLOSED"].copy()
-pnl=closed.net_pnl_usd.sum() if "net_pnl_usd" in closed else 0
-wins=int((closed.net_pnl_usd>0).sum()) if "net_pnl_usd" in closed else 0
-wr=100*wins/len(closed) if len(closed) else 0
 m1,m2,m3,m4,m5,m6=st.columns(6)
-m1.metric("Open positions",len(open_t))
-m2.metric("Closed trades",len(closed))
-m3.metric("Record",f"{wins}W / {len(closed)-wins}L")
-m4.metric("Win rate",f"{wr:.1f}%")
-m5.metric("Realized P/L",f"${pnl:+.2f}")
-m6.metric("Best trade",f"${closed.net_pnl_usd.max():+.2f}" if len(closed) and "net_pnl_usd" in closed else "—")
+m1.metric("Open positions",open_count)
+m2.metric("Closed trades",closed_count)
+m3.metric("Record",f"{win_count}W / {closed_count-win_count}L")
+m4.metric("Win rate",f"{100*win_count/closed_count:.1f}%" if closed_count else "—")
+m5.metric("Realized P/L",f"${float(totals.get('realized_pnl_usd') or 0):+.2f}")
+m6.metric("Best trade",f"${float(totals['best_trade']):+.2f}" if totals.get("best_trade") is not None else "—")
 st.caption("MEME_PAPER_V1 • $100 simulated positions • +20% target • -10% stop • 20-minute max hold • simulated fees/slippage")
 
+recent=pd.DataFrame(data.get("recent_trades") or [])
+open_positions=pd.DataFrame(data.get("open_positions") or [])
+curve=pd.DataFrame(data.get("closed_pnl_series") or [])
 tab1,tab2,tab3=st.tabs(["⚡ Live","📈 Performance","🧾 History"])
 
 with tab1:
- st.subheader("Open positions")
-if open_t.empty: st.caption("No open positions right now.")
-else:
- cols=[x for x in ["token","opened_at","entry_price","current_price","current_return_pct","mfe_pct","mae_pct"] if x in open_t]
- st.dataframe(open_t[cols],use_container_width=True,hide_index=True)
+    st.subheader("Open positions")
+    if open_positions.empty:
+        st.caption("No open positions right now.")
+    else:
+        st.dataframe(open_positions,use_container_width=True,hide_index=True)
 
 with tab2:
- st.subheader("Performance")
- if closed.empty: st.info("Performance charts unlock after paper trades close.")
- else:
-  hist=closed.sort_values("closed_at") if "closed_at" in closed else closed.iloc[::-1]
-  if "net_pnl_usd" in hist:
-   hist=hist.copy(); hist["Cumulative P/L"]=hist["net_pnl_usd"].fillna(0).cumsum()
-   st.line_chart(hist.set_index("closed_at")["Cumulative P/L"] if "closed_at" in hist else hist["Cumulative P/L"])
-  a,b,c2=st.columns(3)
-  a.metric("Avg return",f"{closed.net_return_pct.mean():+.2f}%" if "net_return_pct" in closed else "—")
-  b.metric("Avg MFE",f"{closed.mfe_pct.mean():+.2f}%" if "mfe_pct" in closed else "—")
-  c2.metric("Avg MAE",f"{closed.mae_pct.mean():+.2f}%" if "mae_pct" in closed else "—")
+    st.subheader("Performance")
+    if curve.empty:
+        st.info("Performance charts unlock after paper trades close.")
+    else:
+        curve["net_pnl_usd"]=pd.to_numeric(curve["net_pnl_usd"],errors="coerce").fillna(0)
+        curve["Cumulative P/L"]=curve["net_pnl_usd"].cumsum()
+        st.line_chart(curve.set_index("closed_at")["Cumulative P/L"])
+        a,b,c=st.columns(3)
+        for slot,label,key in ((a,"Avg return","avg_return"),(b,"Avg MFE","avg_mfe"),(c,"Avg MAE","avg_mae")):
+            value=totals.get(key)
+            slot.metric(label,f"{float(value):+.2f}%" if value is not None else "—")
 
 with tab3:
- st.subheader("Trade history")
-if closed.empty: st.caption("No closed paper trades yet.")
-else:
- cols=[x for x in ["token","opened_at","closed_at","entry_price","exit_price","exit_reason","net_return_pct","net_pnl_usd","mfe_pct","mae_pct"] if x in closed]
- st.dataframe(closed[cols].head(300),use_container_width=True,hide_index=True)
+    st.subheader("Recent closed trades")
+    if recent.empty or "status" not in recent:
+        st.caption("No trades yet.")
+    else:
+        closed=recent[recent.status=="CLOSED"]
+        cols=[x for x in ["token","opened_at","closed_at","entry_price","exit_price","exit_reason","net_return_pct","net_pnl_usd","mfe_pct","mae_pct"] if x in closed]
+        st.dataframe(closed[cols],use_container_width=True,hide_index=True)
+        st.caption("Showing the most recent 300 positions; totals and chart use all closed positions.")
 
 st.subheader("Recent activity")
-cols=[x for x in ["token","status","opened_at","closed_at","current_return_pct","net_return_pct","exit_reason"] if x in trades]
-st.dataframe(trades[cols].head(100),use_container_width=True,hide_index=True)
+if not recent.empty:
+    cols=[x for x in ["token","status","opened_at","closed_at","current_return_pct","net_return_pct","exit_reason"] if x in recent]
+    st.dataframe(recent[cols],use_container_width=True,hide_index=True)

@@ -1,5 +1,6 @@
 """Research-only memecoin candidate, outcome, and simulated-trade storage."""
 import argparse,json,sqlite3,os
+import market_regime
 from datetime import datetime,timezone,timedelta
 DB="memecoin_shadow.db"; VERSION="MEME_SHADOW_V2" # deploy-sync d545183
 PAPER_NOTIONAL_USD=100.0; PAPER_FEE_RATE=.006; PAPER_SLIPPAGE_RATE=.01
@@ -86,6 +87,7 @@ def init_db(path=DB):
   c.execute("ALTER TABLE meme_paper_trades ADD COLUMN exit_reason TEXT")
  c.commit(); return c
 def record(conn,x,result):
+ x=market_regime.annotate(x)  # record-only SOL trend fields; never blocks or changes an entry
  now=datetime.now(timezone.utc).isoformat()
  pg=conn.__class__.__module__.startswith("psycopg")
  # A repeated discovery observation is not a new position. Keep it in the

@@ -173,25 +173,26 @@ def open_position_watcher(stop=None,interval=None):
 
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path=="/paper-candidate-study":
+        path=self.path.split("?",1)[0]
+        if path=="/paper-candidate-study":
             try:
                 payload=candidate_study(); code=200
             except Exception as e:
                 payload={"status":"unavailable","error":type(e).__name__}; code=503
-        elif self.path=="/paper-exit-replay":
+        elif path=="/paper-exit-replay":
             try:
                 payload=exit_replay(); code=200
             except Exception as e:
                 payload={"status":"unavailable","error":type(e).__name__}; code=503
-        elif self.path in ("/paper-analysis","/paper-analysis-trades"):
+        elif path in ("/paper-analysis","/paper-analysis-trades"):
             try:
                 summary,trades=paper_analysis()
-                payload=summary if self.path=="/paper-analysis" else trades
+                payload=summary if path=="/paper-analysis" else trades
                 code=200
             except Exception as e:
                 payload={"status":"unavailable","error":type(e).__name__}
                 code=503
-        elif self.path=="/paper-summary":
+        elif path=="/paper-summary":
             try:
                 payload=paper_summary()
                 code=200

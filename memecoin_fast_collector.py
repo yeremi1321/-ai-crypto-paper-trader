@@ -44,6 +44,45 @@ def db_stats():
         out["stats_error"]=repr(e)
     return out
 
+def paper_summary():
+    """Small read-only response for the separate Streamlit dashboard."""
+    c=init_db()
+    try:
+        def rows(query):
+            cur=c.execute(query)
+            names=[col[0] for col in cur.description]
+            return [dict(zip(names,row)) for row in cur.fetchall()]
+        totals=rows("""SELECT COUNT(*) FILTER (WHERE status='OPEN') AS paper_open,
+            COUNT(*) FILTER (WHERE status='CLOSED') AS paper_closed,
+            COUNT(*) FILTER (WHERE status='CLOSED' AND net_pnl_usd>0) AS paper_wins,
+            COALESCE(SUM(net_pnl_usd) FILTER (WHERE status='CLOSED'),0) AS realized_pnl_usd,
+            MAX(net_pnl_usd) FILTER (WHERE status='CLOSED') AS best_trade,
+            AVG(net_return_pct) FILTER (WHERE status='CLOSED') AS avg_return,
+            AVG(mfe_pct) FILTER (WHERE status='CLOSED') AS avg_mfe,
+            AVG(mae_pct) FILTER (WHERE status='CLOSED') AS avg_mae
+            FROM meme_paper_trades""") if os.getenv("DATABASE_URL") else rows("""SELECT
+            SUM(CASE WHEN status='OPEN' THEN 1 ELSE 0 END) AS paper_open,
+            SUM(CASE WHEN status='CLOSED' THEN 1 ELSE 0 END) AS paper_closed,
+            SUM(CASE WHEN status='CLOSED' AND net_pnl_usd>0 THEN 1 ELSE 0 END) AS paper_wins,
+            COALESCE(SUM(CASE WHEN status='CLOSED' THEN net_pnl_usd ELSE 0 END),0) AS realized_pnl_usd,
+            MAX(CASE WHEN status='CLOSED' THEN net_pnl_usd END) AS best_trade,
+            AVG(CASE WHEN status='CLOSED' THEN net_return_pct END) AS avg_return,
+            AVG(CASE WHEN status='CLOSED' THEN mfe_pct END) AS avg_mfe,
+            AVG(CASE WHEN status='CLOSED' THEN mae_pct END) AS avg_mae
+            FROM meme_paper_trades""")
+        open_rows=rows("""SELECT token,opened_at,entry_price,current_price,current_return_pct,mfe_pct,mae_pct
+            FROM meme_paper_trades WHERE status='OPEN' ORDER BY id DESC LIMIT 5""")
+        recent=rows("""SELECT token,status,opened_at,closed_at,entry_price,current_price,
+            exit_price,exit_reason,current_return_pct,net_return_pct,net_pnl_usd,mfe_pct,mae_pct
+            FROM meme_paper_trades ORDER BY id DESC LIMIT 300""")
+        curve=rows("""SELECT closed_at,net_pnl_usd FROM meme_paper_trades
+            WHERE status='CLOSED' ORDER BY closed_at,id""")
+        return {"as_of":datetime.now(timezone.utc).isoformat(),"mode":"paper_trading",
+                "totals":totals[0],"open_positions":open_rows,"recent_trades":recent,
+                "closed_pnl_series":curve}
+    finally:
+        c.close()
+
 def collector():
     next_discovery=0.0; next_refresh=0.0; next_open_refresh=0.0
     while True:
@@ -72,10 +111,20 @@ def collector():
 
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
-        stats=db_stats()
-        body=json.dumps({"status":"ok" if stats.get("db_connected") else "degraded","mode":"paper_trading","database":"postgres" if os.getenv("DATABASE_URL") else "sqlite","database_connected":stats.get("db_connected",False),"discovery_seconds":DISCOVERY_SECONDS,
-                         "refresh_seconds":REFRESH_SECONDS,**STATE,**stats}).encode()
-        self.send_response(200); self.send_header("Content-Type","application/json")
+        if self.path=="/paper-summary":
+            try:
+                payload=paper_summary()
+                code=200
+            except Exception as e:
+                payload={"status":"unavailable","error":type(e).__name__}
+                code=503
+        else:
+            stats=db_stats()
+            payload={"status":"ok" if stats.get("db_connected") else "degraded","mode":"paper_trading","database":"postgres" if os.getenv("DATABASE_URL") else "sqlite","database_connected":stats.get("db_connected",False),"discovery_seconds":DISCOVERY_SECONDS,
+                     "refresh_seconds":REFRESH_SECONDS,**STATE,**stats}
+            code=200
+        body=json.dumps(payload).encode()
+        self.send_response(code); self.send_header("Content-Type","application/json")
         self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
     def log_message(self,fmt,*args): pass
 

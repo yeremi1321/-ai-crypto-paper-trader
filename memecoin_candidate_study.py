@@ -168,11 +168,11 @@ def _bootstrap(hold, keep, rng):
     return _r(100 * beats / BOOTSTRAP_SAMPLES, 1), _r(100 * positive / BOOTSTRAP_SAMPLES, 1)
 
 
-def feature_test(rows, seed=11):
+def feature_test(rows, seed=11, prefix=None):
     ordered = sorted(rows, key=lambda r: r["seen_at"])
     cut = int(len(ordered) * TRAIN_FRACTION)
     train, hold = ordered[:cut], ordered[cut:]
-    names = sorted({k for r in rows for k in r["feats"]})
+    names = sorted({k for r in rows for k in r["feats"] if prefix is None or k.startswith(prefix)})
     rng = random.Random(seed)
     out = {"train_tokens": len(train), "holdout_tokens": len(hold),
            "train_baseline": _stats(train), "holdout_baseline": _stats(hold), "features": {}, "candidates": []}
@@ -216,6 +216,7 @@ def _forward(real):
             out.setdefault("SOL_UP" if v > 0.5 else "SOL_DOWN" if v < -0.5 else "SOL_FLAT", []).append(r)
         return {k: _stats(v) for k, v in sorted(out.items())}
 
+    attn = [r for r in fwd_big if r["feats"].get("attn_tx_accel_5m") is not None]
     older_pairs = [r for r in fwd_big if r["feats"].get("pair_created_at") is not None]
     cut = median([r["feats"]["pair_created_at"] for r in older_pairs]) if older_pairs else None
     return {"since": FORWARD_START, "cost_model": "liquidity-aware, pools >= $20k",
@@ -224,7 +225,10 @@ def _forward(real):
                                     "older_half": _stats([r for r in older_pairs if r["feats"]["pair_created_at"] <= cut]) if cut else {"n": 0},
                                     "newer_half": _stats([r for r in older_pairs if r["feats"]["pair_created_at"] > cut]) if cut else {"n": 0}},
             "sol_regime": {"tokens_with_regime": len(reg), "by_sol_60m_trend": by_regime(reg),
-                           "feature_test": feature_test(reg) if len(reg) >= 20 else {"skipped": f"only {len(reg)} tokens so far"}}}
+                           "feature_test": feature_test(reg, prefix="sol_") if len(reg) >= 20 else {"skipped": f"only {len(reg)} tokens so far"}},
+            "attention": {"tokens_with_attention": len(attn),
+                          "note": "about 10 attention fields are tested at once; expect ~1 false 'candidate' by chance, so any hit needs a second forward confirmation",
+                          "feature_test": feature_test(attn, prefix="attn_") if len(attn) >= 20 else {"skipped": f"only {len(attn)} tokens so far"}}}
 
 
 def run(conn, as_of):

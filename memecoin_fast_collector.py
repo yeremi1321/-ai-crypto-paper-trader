@@ -17,6 +17,7 @@ from live_two_second_watcher import run as run_paper_watcher
 from memecoin_trade_analysis import run as analyze_paper_history
 import memecoin_entry_analysis
 import memecoin_exit_replay
+import memecoin_candidate_study
 
 DISCOVERY_SECONDS=float(os.getenv("MEME_DISCOVERY_SECONDS","30"))
 REFRESH_SECONDS=float(os.getenv("MEME_REFRESH_SECONDS","30"))
@@ -30,6 +31,8 @@ _ANALYSIS_LOCK=threading.Lock()
 REPLAY_CACHE_SECONDS=300.0
 _REPLAY={"at":0.0,"result":None}
 _REPLAY_LOCK=threading.Lock()
+_STUDY={"at":0.0,"result":None}
+_STUDY_LOCK=threading.Lock()
 
 def db_stats():
     out={"db_connected":False,"observations":0,"eligible":0,"rejected":0,"unique_tokens":0,"snapshots":0,"paper_open":0,"paper_closed":0,"paper_wins":0,"paper_losses":0,"realized_pnl_usd":0.0}
@@ -116,6 +119,18 @@ def exit_replay():
             _REPLAY.update(at=time.monotonic(),result=result)
         return _REPLAY["result"]
 
+def candidate_study():
+    """Read-only study of every discovered token, cached for five minutes."""
+    with _STUDY_LOCK:
+        if _STUDY["result"] is None or time.monotonic()-_STUDY["at"]>REPLAY_CACHE_SECONDS:
+            c=init_db()
+            try:
+                result=memecoin_candidate_study.run(c,datetime.now(timezone.utc).isoformat())
+            finally:
+                c.close()
+            _STUDY.update(at=time.monotonic(),result=result)
+        return _STUDY["result"]
+
 def collector(stop=None):
     next_discovery=0.0; next_refresh=0.0
     while not (stop and stop.is_set()):
@@ -158,7 +173,12 @@ def open_position_watcher(stop=None,interval=None):
 
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path=="/paper-exit-replay":
+        if self.path=="/paper-candidate-study":
+            try:
+                payload=candidate_study(); code=200
+            except Exception as e:
+                payload={"status":"unavailable","error":type(e).__name__}; code=503
+        elif self.path=="/paper-exit-replay":
             try:
                 payload=exit_replay(); code=200
             except Exception as e:

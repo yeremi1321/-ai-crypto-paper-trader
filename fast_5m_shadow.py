@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from scanner import PRODUCTS, candles, indicators
 
-DB = "research_shadow.db"
+DB = "fast_5m_shadow.db"
 VERSION = "FAST_5M_SHADOW_V1"
 
 

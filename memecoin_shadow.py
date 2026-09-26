@@ -3,7 +3,7 @@ import argparse,json,sqlite3,os
 from datetime import datetime,timezone
 DB="memecoin_shadow.db"; VERSION="MEME_SHADOW_V2"
 PAPER_NOTIONAL_USD=100.0; PAPER_FEE_RATE=.006; PAPER_SLIPPAGE_RATE=.01
-DEFAULTS={"min_liquidity_usd":50000.0,"min_makers":200,"max_top10_holder_pct":50.0,"max_dev_holder_pct":10.0,"min_volume_1h_usd":25000.0,"min_score":65.0}
+DEFAULTS={"min_liquidity_usd":30000.0,"min_makers":100,"max_top10_holder_pct":50.0,"max_dev_holder_pct":10.0,"min_volume_1h_usd":25000.0,"min_score":60.0}
 
 def safety_reasons(x,cfg=DEFAULTS):
  r=[]

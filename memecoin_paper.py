@@ -39,8 +39,9 @@ def close_positions(c, now=None):
   invested=float(qty)*float(entry)+float(entry_fee)
   net_ret=100*net_pnl/invested if invested else 0
   sql="""UPDATE meme_paper_trades SET status='CLOSED',closed_at=?,exit_market_price=?,exit_price=?,
-   exit_fee=?,net_pnl_usd=?,net_return_pct=?,exit_reason=?,strategy_version=? WHERE id=?"""
-  c.execute(sql.replace("?","%s") if pg else sql,(now.isoformat(),exit_market,exit_price,exit_fee,net_pnl,net_ret,reason,VERSION,i))
+   exit_fee=?,net_pnl_usd=?,net_return_pct=?,exit_reason=?,strategy_version=? WHERE id=? AND status='OPEN'"""
+  cur=c.execute(sql.replace("?","%s") if pg else sql,(now.isoformat(),exit_market,exit_price,exit_fee,net_pnl,net_ret,reason,VERSION,i))
+  if cur.rowcount==0: continue
   label="WIN" if net_pnl>0 else "LOSS"
   sql="""UPDATE meme_decision_ledger SET outcome_label=?,net_return_pct=?,mfe_pct=?,mae_pct=?,
    time_in_trade_minutes=? WHERE candidate_id=?"""

@@ -4,7 +4,24 @@ from datetime import datetime,timezone,timedelta
 DB="memecoin_shadow.db"; VERSION="MEME_SHADOW_V2" # deploy-sync d545183
 PAPER_NOTIONAL_USD=100.0; PAPER_FEE_RATE=.006; PAPER_SLIPPAGE_RATE=.01
 MAX_OPEN_PAPER_POSITIONS=5
-PAPER_REENTRY_COOLDOWN=timedelta(hours=2)
+REENTRY_LOOKBACK=timedelta(minutes=5)
+
+def fresh_reentry(conn,token,price,closed_at,pg,now):
+ """Allow a new leg after a close when price breaks recent observed highs.
+
+ The new upswing also has to exceed the paper round-trip cost from its
+ observed low. This allows a fresh move after a pullback below the last exit.
+ """
+ if not closed_at or not price: return False
+ since=max(datetime.fromisoformat(closed_at),now-REENTRY_LOOKBACK).isoformat()
+ sql="""SELECT price FROM meme_price_snapshots WHERE token_address=?
+         AND observed_at>=? AND observed_at<? ORDER BY observed_at DESC LIMIT 30"""
+ history=conn.execute(sql.replace("?","%s") if pg else sql,(token,since,now.isoformat())).fetchall()
+ if len(history)<2: return False
+ cost=((1+PAPER_SLIPPAGE_RATE)/(1-PAPER_SLIPPAGE_RATE)
+       *(1+PAPER_FEE_RATE)/(1-PAPER_FEE_RATE)-1)
+ prices=[float(v[0]) for v in history]
+ return float(price)>max(prices) and float(price)>min(prices)*(1+cost)
 DEFAULTS={"min_liquidity_usd":30000.0,"min_makers":100,"max_top10_holder_pct":50.0,"max_dev_holder_pct":10.0,"min_volume_1h_usd":25000.0,"min_score":60.0}
 
 def safety_reasons(x,cfg=DEFAULTS):
@@ -38,7 +55,7 @@ def init_db(path=DB):
   c.execute("""CREATE TABLE IF NOT EXISTS meme_candidates(id BIGSERIAL PRIMARY KEY,seen_at TEXT,version TEXT,token TEXT,chain TEXT,score DOUBLE PRECISION,eligible INTEGER,blocked_reasons TEXT,raw_json TEXT,token_address TEXT,pair_address TEXT)""")
   c.execute("""CREATE TABLE IF NOT EXISTS meme_outcomes(candidate_id BIGINT PRIMARY KEY,token_address TEXT,pair_address TEXT,detected_at TEXT,entry_price DOUBLE PRECISION,last_price DOUBLE PRECISION,highest_price DOUBLE PRECISION,lowest_price DOUBLE PRECISION,mfe_pct DOUBLE PRECISION,mae_pct DOUBLE PRECISION,age_minutes DOUBLE PRECISION)""")
   c.execute("""CREATE TABLE IF NOT EXISTS meme_decision_ledger(id BIGSERIAL PRIMARY KEY,candidate_id BIGINT UNIQUE,recorded_at TEXT,version TEXT,token TEXT,token_address TEXT,pair_address TEXT,chain TEXT,venue TEXT,data_source TEXT,regime TEXT,liquidity_usd DOUBLE PRECISION,volume_1h_usd DOUBLE PRECISION,participation INTEGER,estimated_entry_slippage_pct DOUBLE PRECISION,estimated_exit_slippage_pct DOUBLE PRECISION,setup_type TEXT,entry_rule TEXT,risk_rule TEXT,score DOUBLE PRECISION,decision TEXT,vetoes TEXT,simulated_entry_price DOUBLE PRECISION,simulated_entry_fee DOUBLE PRECISION,notional_usd DOUBLE PRECISION,outcome_label TEXT,net_return_pct DOUBLE PRECISION,mfe_pct DOUBLE PRECISION,mae_pct DOUBLE PRECISION,time_in_trade_minutes DOUBLE PRECISION,ai_explanation TEXT,raw_json TEXT)""")
-  c.execute("""CREATE TABLE IF NOT EXISTS meme_paper_trades(id BIGSERIAL PRIMARY KEY,candidate_id BIGINT UNIQUE,token TEXT,token_address TEXT,pair_address TEXT,opened_at TEXT,entry_market_price DOUBLE PRECISION,entry_price DOUBLE PRECISION,notional_usd DOUBLE PRECISION,quantity DOUBLE PRECISION,entry_fee DOUBLE PRECISION,status TEXT,highest_price DOUBLE PRECISION,lowest_price DOUBLE PRECISION,current_price DOUBLE PRECISION,current_return_pct DOUBLE PRECISION,mfe_pct DOUBLE PRECISION,mae_pct DOUBLE PRECISION)""")
+  c.execute("""CREATE TABLE IF NOT EXISTS meme_paper_trades(id BIGSERIAL PRIMARY KEY,candidate_id BIGINT UNIQUE,token TEXT,token_address TEXT,pair_address TEXT,opened_at TEXT,entry_market_price DOUBLE PRECISION,entry_price DOUBLE PRECISION,notional_usd DOUBLE PRECISION,quantity DOUBLE PRECISION,entry_fee DOUBLE PRECISION,status TEXT,highest_price DOUBLE PRECISION,lowest_price DOUBLE PRECISION,current_price DOUBLE PRECISION,current_return_pct DOUBLE PRECISION,mfe_pct DOUBLE PRECISION,mae_pct DOUBLE PRECISION,closed_at TEXT,exit_market_price DOUBLE PRECISION)""")
   c.commit(); return c
  c=sqlite3.connect(path)
  c.execute("""CREATE TABLE IF NOT EXISTS meme_candidates(id INTEGER PRIMARY KEY,seen_at TEXT,version TEXT,token TEXT,chain TEXT,score REAL,eligible INTEGER,blocked_reasons TEXT,raw_json TEXT)""")
@@ -56,7 +73,7 @@ def init_db(path=DB):
  simulated_entry_price REAL,simulated_entry_fee REAL,notional_usd REAL,
  outcome_label TEXT,net_return_pct REAL,mfe_pct REAL,mae_pct REAL,time_in_trade_minutes REAL,
  ai_explanation TEXT,raw_json TEXT)""")
- c.execute("""CREATE TABLE IF NOT EXISTS meme_paper_trades(id INTEGER PRIMARY KEY,candidate_id INTEGER UNIQUE,token TEXT,token_address TEXT,pair_address TEXT,opened_at TEXT,entry_market_price REAL,entry_price REAL,notional_usd REAL,quantity REAL,entry_fee REAL,status TEXT,highest_price REAL,lowest_price REAL,current_price REAL,current_return_pct REAL,mfe_pct REAL,mae_pct REAL)""")
+ c.execute("""CREATE TABLE IF NOT EXISTS meme_paper_trades(id INTEGER PRIMARY KEY,candidate_id INTEGER UNIQUE,token TEXT,token_address TEXT,pair_address TEXT,opened_at TEXT,entry_market_price REAL,entry_price REAL,notional_usd REAL,quantity REAL,entry_fee REAL,status TEXT,highest_price REAL,lowest_price REAL,current_price REAL,current_return_pct REAL,mfe_pct REAL,mae_pct REAL,closed_at TEXT,exit_market_price REAL)""")
  c.commit(); return c
 def record(conn,x,result):
  now=datetime.now(timezone.utc).isoformat()
@@ -73,9 +90,9 @@ def record(conn,x,result):
   elif conn.execute(f"SELECT 1 FROM meme_paper_trades WHERE token_address={ph} AND status='OPEN' LIMIT 1",(x["token_address"],)).fetchone():
    entry_veto="TOKEN_ALREADY_OPEN"
   else:
-   recent=conn.execute(f"SELECT opened_at FROM meme_paper_trades WHERE token_address={ph} ORDER BY id DESC LIMIT 1",(x["token_address"],)).fetchone()
-   if recent and datetime.now(timezone.utc)-datetime.fromisoformat(recent[0])<PAPER_REENTRY_COOLDOWN:
-    entry_veto="TOKEN_REENTRY_COOLDOWN"
+   recent=conn.execute(f"SELECT closed_at FROM meme_paper_trades WHERE token_address={ph} AND status='CLOSED' ORDER BY id DESC LIMIT 1",(x["token_address"],)).fetchone()
+   if recent and not fresh_reentry(conn,x["token_address"],x["price_usd"],recent[0],pg,datetime.fromisoformat(now)):
+    entry_veto="NO_FRESH_REENTRY_SETUP"
   entry_allowed=entry_veto is None
  sql="""INSERT INTO meme_candidates(seen_at,version,token,chain,score,eligible,blocked_reasons,raw_json,token_address,pair_address) VALUES(?,?,?,?,?,?,?,?,?,?)"""
  if pg: sql=sql.replace("?","%s")+" RETURNING id"
@@ -115,6 +132,8 @@ def record(conn,x,result):
 def self_test():
  x={"token":"TEST","token_address":"abc","pair_address":"pair","chain":"solana","price_usd":.01,"liquidity_usd":100000,"makers":500,"top10_holder_pct":30,"dev_holder_pct":3,"mint_authority_active":False,"freeze_authority_active":False,"sellable":True,"liquidity_locked":True,"volume_1h_usd":100000,"price_change_1h_pct":25,"volume_accel":4,"holder_growth_1h_pct":15,"higher_highs":True,"narrative_momentum":True}
  assert evaluate(x)["eligible"]; c=init_db(":memory:"); record(c,x,evaluate(x))
+ from memecoin_paper import migrate
+ migrate(c)
  assert c.execute("select count(*) from meme_outcomes").fetchone()[0]==1
  assert c.execute("select count(*) from meme_paper_trades").fetchone()[0]==1
  row=c.execute("select decision,outcome_label from meme_decision_ledger").fetchone()
@@ -122,10 +141,18 @@ def self_test():
  record(c,x,evaluate(x))
  assert c.execute("select count(*) from meme_paper_trades").fetchone()[0]==1
  assert c.execute("select decision,vetoes from meme_decision_ledger order by id desc limit 1").fetchone()==("PAPER_ENTRY_BLOCKED",'["TOKEN_ALREADY_OPEN"]')
- c.execute("UPDATE meme_paper_trades SET status='CLOSED'"); c.commit()
+ c.execute("UPDATE meme_paper_trades SET status='CLOSED',closed_at=?,exit_market_price=?",(datetime.now(timezone.utc).isoformat(),.02))
+ c.execute("CREATE TABLE meme_price_snapshots(observed_at TEXT,token_address TEXT,price REAL)")
+ c.commit()
  record(c,x,evaluate(x))
  assert c.execute("select count(*) from meme_paper_trades").fetchone()[0]==1
- assert c.execute("select decision,vetoes from meme_decision_ledger order by id desc limit 1").fetchone()==("PAPER_ENTRY_BLOCKED",'["TOKEN_REENTRY_COOLDOWN"]')
+ assert c.execute("select decision,vetoes from meme_decision_ledger order by id desc limit 1").fetchone()==("PAPER_ENTRY_BLOCKED",'["NO_FRESH_REENTRY_SETUP"]')
+ for p in (.0101,.0102):
+  c.execute("INSERT INTO meme_price_snapshots VALUES(?,?,?)",(datetime.now(timezone.utc).isoformat(),x["token_address"],p))
+ c.commit()
+ fresh=dict(x,price_usd=.0105)
+ record(c,fresh,evaluate(fresh))
+ assert c.execute("select count(*) from meme_paper_trades").fetchone()[0]==2
  bad=dict(x); bad["liquidity_usd"]=10; record(c,bad,evaluate(bad))
  assert c.execute("select count(*) from meme_decision_ledger where decision='REJECT'").fetchone()[0]==1
  print("memecoin shadow V2 self-test passed")

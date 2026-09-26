@@ -17,6 +17,7 @@ from memecoin_trade_analysis import run as analyze_paper_history
 
 DISCOVERY_SECONDS=float(os.getenv("MEME_DISCOVERY_SECONDS","30"))
 REFRESH_SECONDS=float(os.getenv("MEME_REFRESH_SECONDS","30"))
+OPEN_REFRESH_SECONDS=10.0
 PORT=int(os.getenv("PORT","10000"))
 STATE={"started_at":datetime.now(timezone.utc).isoformat(),"cycles":0,"last_discovery":None,"last_refresh":None,"last_error":None}
 
@@ -44,7 +45,7 @@ def db_stats():
     return out
 
 def collector():
-    next_discovery=0.0; next_refresh=0.0
+    next_discovery=0.0; next_refresh=0.0; next_open_refresh=0.0
     while True:
         now=time.monotonic()
         try:
@@ -57,6 +58,11 @@ def collector():
                 paper_run()
                 STATE["last_refresh"]=datetime.now(timezone.utc).isoformat()
                 next_refresh=now+REFRESH_SECONDS
+                next_open_refresh=now+OPEN_REFRESH_SECONDS
+            elif now>=next_open_refresh:
+                update_outcomes(only_open=True)
+                paper_run()
+                next_open_refresh=now+OPEN_REFRESH_SECONDS
             STATE["cycles"]+=1
             STATE["last_error"]=None
         except Exception as e:

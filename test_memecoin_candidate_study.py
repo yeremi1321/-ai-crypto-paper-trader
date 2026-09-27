@@ -77,20 +77,25 @@ def test_feature_edge_found_only_when_it_survives_holdout():
 
 
 def test_endpoint_read_only_and_cached():
+    """Pages are served from the background worker's cache; computing never happens on request or writes."""
+    import research_worker as rw
+    import memecoin_shadow
     with tempfile.TemporaryDirectory() as d:
         path = str(Path(d) / "e.db"); _db(path)
-        calls = []; real = cs.run
-        fc._STUDY.update(at=0.0, result=None)
-        with patch.object(fc, "init_db", lambda: init_db(path)), \
-             patch.object(fc.memecoin_candidate_study, "run", lambda c, a: (calls.append(1), real(c, a))[1]):
-            server = HTTPServer(("127.0.0.1", 0), fc.Health)
-            threading.Thread(target=server.serve_forever, daemon=True).start()
-            url = f"http://127.0.0.1:{server.server_address[1]}/paper-candidate-study"
-            before = Path(path).read_bytes()
-            r = json.load(urllib.request.urlopen(url)); json.load(urllib.request.urlopen(url))
-            server.shutdown()
-            assert Path(path).read_bytes() == before
-    assert r["mode"] == "read_only_candidate_study" and len(calls) == 1
+        real_init = memecoin_shadow.init_db
+        rw._results.clear()
+        before = Path(path).read_bytes()
+        with patch.object(memecoin_shadow, "init_db", lambda p=None: real_init(path)):
+            jobs = rw.default_jobs()
+            list(rw.run_once({"candidate_study": jobs["candidate_study"]}))
+        after = Path(path).read_bytes()
+        server = HTTPServer(("127.0.0.1", 0), fc.Health)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        r = json.load(urllib.request.urlopen(base + "/paper-candidate-study?v=1"))
+        server.shutdown()
+    assert before == after, "research must not modify the database"
+    assert r["mode"] == "read_only_candidate_study" and "_computed_at" in r
 
 
 def test_liquidity_aware_costs():

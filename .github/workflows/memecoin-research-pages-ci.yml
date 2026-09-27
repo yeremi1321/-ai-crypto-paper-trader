@@ -8,6 +8,7 @@ on:
       - "memecoin_entry_analysis.py"
       - "attention.py"
       - "market_regime.py"
+      - "memecoin_runner_study.py"
       - "memecoin_fast_collector.py"
       - "memecoin_shadow.py"
       - "memecoin_paper.py"
@@ -18,6 +19,7 @@ on:
       - "test_attention.py"
       - "test_market_regime.py"
       - "test_memecoin_stop_reentry.py"
+      - "test_memecoin_runner_study.py"
       - ".github/workflows/memecoin-research-pages-ci.yml"
   workflow_dispatch:
 jobs:
@@ -36,4 +38,5 @@ jobs:
       - run: python test_attention.py
       - run: python test_market_regime.py
       - run: python test_memecoin_stop_reentry.py
+      - run: python test_memecoin_runner_study.py
       - run: python memecoin_shadow.py --self-test

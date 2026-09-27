@@ -129,6 +129,33 @@ def test_reentry_policy_found_only_when_it_survives_holdout():
     assert bad["verdict"].startswith("not promotable"), bad["verdict"]      # skipping winners in holdout
 
 
+def _prereg_db(path, n_after, reentries_win_after):
+    """Tokens first traded BEFORE registration (re-entries win: must be ignored) and AFTER it."""
+    reg = datetime.fromisoformat(rs.HYPOTHESES[0]["registered_at"]).replace(tzinfo=timezone.utc)
+    after0 = int((reg - T0).total_seconds()) + 600
+    db = DB(path)
+    for i, (start, win) in enumerate([(j * 1000, True) for j in range(10)] +
+                                     [(after0 + j * 1000, reentries_win_after) for j in range(n_after)]):
+        tok = f"P{i:02d}"
+        db.trade(tok, start, start + 60, 1.0, 0.95, "STOP_10")
+        for k in (1, 2):
+            o = start + k * 120
+            db.trade(tok, o, o + 60, 1.0, 1.25 if win else 0.88, "TARGET_20" if win else "STOP_10")
+    db.close()
+
+
+def test_preregistered_no_reentry():
+    with tempfile.TemporaryDirectory() as d:
+        few = str(Path(d) / "f.db"); _prereg_db(few, 12, False); f = _run(few)["preregistered_hypotheses"][0]
+        yes = str(Path(d) / "y.db"); _prereg_db(yes, 40, False); y = _run(yes)["preregistered_hypotheses"][0]
+        no = str(Path(d) / "n.db"); _prereg_db(no, 40, True); n = _run(no)["preregistered_hypotheses"][0]
+    assert f["name"] == "no_reentry_first_trade_only"
+    assert f["tokens_evaluated"] == 12 and f["verdict"].startswith("collecting"), "tokens before registration are ignored"
+    assert y["tokens_evaluated"] == 40 and y["verdict"].startswith("SUPPORTED"), y["verdict"]
+    assert y["policy_result"]["pnl_per_token_usd"] > y["live_result"]["pnl_per_token_usd"]
+    assert n["verdict"].startswith("REJECTED"), n["verdict"]
+
+
 def test_endpoint_read_only_and_cached():
     import research_worker as rw
     import memecoin_shadow
@@ -155,5 +182,6 @@ if __name__ == "__main__":
     test_census_finds_runner_the_bot_lost_on()
     test_wider_stop_found_only_when_it_survives_holdout()
     test_reentry_policy_found_only_when_it_survives_holdout()
+    test_preregistered_no_reentry()
     test_endpoint_read_only_and_cached()
     print("runner study tests passed")

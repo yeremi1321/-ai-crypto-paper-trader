@@ -58,6 +58,12 @@ HYPOTHESES = [
      "registered_at": "2026-09-27T02:00:00",
      "statement": "In pools >= $20k, tokens with more than 2,400 one-hour traders (buys+sells) at discovery beat the rest, and are profitable.",
      "field": "makers", "op": ">", "value": 2400},
+    {"name": "young_pairs_30m",
+     "registered_at": "2026-09-27T08:15:00",
+     "statement": "In pools >= $20k, tokens whose pair is at most 30 minutes old at discovery beat the rest, and are profitable.",
+     "motivation": "newer half beat older half in the 09-26 forward test; 'pair_created_at >' feature candidate 09-27 07:33Z. "
+                   "30 min ~ median pair age of >=$20k pools in the scanner data.",
+     "field": "pair_age_min", "op": "<=", "value": 30},
 ]
 
 
@@ -144,6 +150,9 @@ def build_rows(firsts, snaps, traded, liquidity_aware=False):
         feats = {k: float(v) for k, v in x.items()
                  if k not in SKIP_FIELDS and isinstance(v, (int, float)) and not isinstance(v, bool)}
         feats["score"] = float(score) if score is not None else None
+        # Pair age at discovery; the raw pair_created_at timestamp mostly measures WHEN a token was seen.
+        feats["pair_age_min"] = (s.timestamp() * 1000 - feats["pair_created_at"]) / 60000 \
+            if feats.get("pair_created_at") else None
         rows.append({"token_address": addr, "seen_at": seen, "entry_liquidity_usd": entry_liq, "eligible": bool(eligible), "blocked": reasons,
                      "traded": addr in traded, "reason": reason, "net": net, "max_up": max_up, "feats": feats})
     return rows, incomplete, no_price

@@ -271,7 +271,7 @@ def _preregistered(real, seed=23):
         keep = (lambda r, f=h["field"], v=v: r["feats"][f] <= v) if h["op"] == "<=" else (lambda r, f=h["field"], v=v: r["feats"][f] > v)
         kept, rest = [r for r in pool if keep(r)], [r for r in pool if not keep(r)]
         ks, rs = _stats(kept), _stats(rest)
-        _, positive = _bootstrap(pool, keep, rng) if pool else (None, None)
+        beats_all, positive = _bootstrap(pool, keep, rng) if pool else (None, None)
         if len(kept) < MIN_VERDICT_N or len(rest) < MIN_VERDICT_N:
             verdict = f"collecting: need {MIN_VERDICT_N}+ tokens on each side (have {len(kept)} / {len(rest)})"
         elif ks["avg_net_return_pct"] > rs["avg_net_return_pct"] and ks["avg_net_return_pct"] > 0 and (positive or 0) >= 90:
@@ -280,8 +280,17 @@ def _preregistered(real, seed=23):
             verdict = "REJECTED: does not beat the rest"
         else:
             verdict = "NOT SUPPORTED: beats the rest but not reliably profitable"
+        # Reported alongside the registered verdict (which is never changed after registration): how often the kept
+        # tokens beat ALL tokens of the same period. The registered rule compares averages only.
+        if verdict.startswith("SUPPORTED") and (beats_all or 0) < 90:
+            reliability = f"caution: kept beat all tokens in only {beats_all}% of bootstrap samples; the edge over the rest may be noise"
+        elif verdict.startswith("SUPPORTED"):
+            reliability = f"kept beat all tokens in {beats_all}% of bootstrap samples"
+        else:
+            reliability = None
         out.append({**h, "tokens_evaluated": len(pool), "kept": ks, "rest": rs,
-                    "kept_bootstrap_pct_positive": positive, "verdict": verdict})
+                    "kept_bootstrap_pct_positive": positive, "kept_bootstrap_pct_beats_all": beats_all,
+                    "verdict": verdict, "reliability_note": reliability})
     return out
 
 

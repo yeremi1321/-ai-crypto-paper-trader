@@ -114,6 +114,39 @@ def test_preregistered_verdicts():
     json.dumps(yes)
 
 
+def _weak_edge_db(path, reg_time):
+    """Hot period: both sides win ~80%; kept is only one win ahead of the rest."""
+    c = ms.init_db(path); migrate(c)
+    c.execute("""CREATE TABLE IF NOT EXISTS meme_price_snapshots(id INTEGER PRIMARY KEY AUTOINCREMENT,observed_at TEXT NOT NULL,
+        token_address TEXT NOT NULL,pair_address TEXT,price REAL NOT NULL,liquidity_usd REAL)""")
+    start = datetime.fromisoformat(reg_time).replace(tzinfo=timezone.utc)
+    for i in range(80):
+        tok = f"W{i:03d}"; seen = start + timedelta(minutes=30 * i + 1)
+        calm, j = i % 2 == 0, i // 2
+        good = j % 5 != 0 if calm else (j % 5 != 0 and j != 1)
+        x = {"token": tok, "token_address": tok, "price_usd": 1.0, "liquidity_usd": 80000,
+             "attn_buy_ratio_5m": 0.5 if calm else 0.8}
+        c.execute("""INSERT INTO meme_candidates(seen_at,version,token,chain,score,eligible,blocked_reasons,raw_json,token_address)
+            VALUES(?,?,?,?,?,?,?,?,?)""", (seen.isoformat(), "V", tok, "solana", 70, 1, "[]", json.dumps(x), tok))
+        for s, p in ([(30, 1.1), (60, 1.25)] if good else [(30, 0.95), (60, 0.7)]):
+            c.execute("INSERT INTO meme_price_snapshots(observed_at,token_address,price,liquidity_usd) VALUES(?,?,?,?)",
+                      ((seen + timedelta(seconds=s)).isoformat(), tok, p, 80000))
+    c.commit(); return c
+
+
+def test_reliability_note_flags_weak_supported_verdicts():
+    reg = next(h["registered_at"] for h in cs.HYPOTHESES if h["name"] == "anti_frenzy_buy_ratio_5m")
+    with tempfile.TemporaryDirectory() as d:
+        c = _db(str(Path(d) / "s.db"), 80, reg, frenzy_wins=False); strong = cs.run(c, "now"); c.close()
+        c = _weak_edge_db(str(Path(d) / "w.db"), reg); weak = cs.run(c, "now"); c.close()
+    s, w = _verdict(strong, "anti_frenzy_buy_ratio_5m"), _verdict(weak, "anti_frenzy_buy_ratio_5m")
+    assert s["verdict"].startswith("SUPPORTED") and s["kept_bootstrap_pct_beats_all"] >= 90
+    assert not s["reliability_note"].startswith("caution")
+    assert w["verdict"].startswith("SUPPORTED"), "the registered rule itself is unchanged"
+    assert w["kept_bootstrap_pct_beats_all"] < 90 and w["reliability_note"].startswith("caution"), w
+    assert _verdict(strong, "sol_rising_60m")["reliability_note"] is None
+
+
 def test_young_pairs_uses_age_at_discovery():
     """pair_age_min = discovery time - pair creation; young pairs win after registration, old ones lose."""
     reg = next(h["registered_at"] for h in cs.HYPOTHESES if h["name"] == "young_pairs_30m")
@@ -145,5 +178,6 @@ if __name__ == "__main__":
     test_background_thread_serves_while_computing()
     test_http_route_uses_cache_and_never_computes_on_request()
     test_preregistered_verdicts()
+    test_reliability_note_flags_weak_supported_verdicts()
     test_young_pairs_uses_age_at_discovery()
     print("research worker + preregistration tests passed")

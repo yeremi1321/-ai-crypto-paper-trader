@@ -114,9 +114,36 @@ def test_preregistered_verdicts():
     json.dumps(yes)
 
 
+def test_young_pairs_uses_age_at_discovery():
+    """pair_age_min = discovery time - pair creation; young pairs win after registration, old ones lose."""
+    reg = next(h["registered_at"] for h in cs.HYPOTHESES if h["name"] == "young_pairs_30m")
+    start = datetime.fromisoformat(reg).replace(tzinfo=timezone.utc)
+    with tempfile.TemporaryDirectory() as d:
+        c = ms.init_db(str(Path(d) / "y.db")); migrate(c)
+        c.execute("""CREATE TABLE IF NOT EXISTS meme_price_snapshots(id INTEGER PRIMARY KEY AUTOINCREMENT,observed_at TEXT NOT NULL,
+            token_address TEXT NOT NULL,pair_address TEXT,price REAL NOT NULL,liquidity_usd REAL,volume_1h_usd REAL)""")
+        for i in range(-6, 70):
+            tok = f"Y{i + 6:03d}"; seen = start + timedelta(minutes=20 * i + 1)
+            young = i % 2 == 0
+            age_min = 10 if young else 120
+            good = young if i >= 0 else not young   # before registration the opposite holds; must be ignored
+            x = {"token": tok, "token_address": tok, "price_usd": 1.0, "liquidity_usd": 80000,
+                 "pair_created_at": (seen.timestamp() - age_min * 60) * 1000}
+            c.execute("""INSERT INTO meme_candidates(seen_at,version,token,chain,score,eligible,blocked_reasons,raw_json,token_address)
+                VALUES(?,?,?,?,?,?,?,?,?)""", (seen.isoformat(), "V", tok, "solana", 70, 1, "[]", json.dumps(x), tok))
+            for s, p in ([(30, 1.1), (60, 1.25)] if good else [(30, 0.95), (60, 0.7)]):
+                c.execute("INSERT INTO meme_price_snapshots(observed_at,token_address,price,liquidity_usd) VALUES(?,?,?,?)",
+                          ((seen + timedelta(seconds=s)).isoformat(), tok, p, 80000))
+        c.commit(); out = cs.run(c, "now"); c.close()
+    h = _verdict(out, "young_pairs_30m")
+    assert h["tokens_evaluated"] == 70, h["tokens_evaluated"]
+    assert h["kept"]["n"] == 35 and h["verdict"].startswith("SUPPORTED"), h["verdict"]
+
+
 if __name__ == "__main__":
     test_warming_up_then_instant_and_fail_safe()
     test_background_thread_serves_while_computing()
     test_http_route_uses_cache_and_never_computes_on_request()
     test_preregistered_verdicts()
+    test_young_pairs_uses_age_at_discovery()
     print("research worker + preregistration tests passed")

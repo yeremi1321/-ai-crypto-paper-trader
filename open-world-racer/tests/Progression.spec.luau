@@ -1,0 +1,26 @@
+local T = require("./TestLib")
+local Progression = require("../src/shared/Progression")
+
+T.test("winning pays more than placing, DNF pays nothing", function()
+	T.ok(Progression.payout("circuit", 1, 4) > Progression.payout("circuit", 2, 4))
+	T.ok(Progression.payout("circuit", 8, 8) > 0)
+	T.eq(Progression.payout("circuit", 1, 4, true), 0)
+end)
+
+T.test("solo races still pay", function()
+	T.ok(Progression.payout("sprint", 1, 1) > 0)
+end)
+
+T.test("rep rewards beating people", function()
+	T.ok(Progression.repGain(1, 6) > Progression.repGain(1, 1))
+	T.ok(Progression.repGain(2, 6) > Progression.repGain(5, 6))
+	T.eq(Progression.repGain(1, 6, true), 0)
+end)
+
+T.test("tiers and titles", function()
+	T.eq(Progression.tierFor(0), "Unknown")
+	T.eq(Progression.tierFor(400), "Known")
+	T.eq(Progression.tierFor(5000), "Legend")
+	T.eq(Progression.title({}, {}), "Newcomer")
+	T.eq(Progression.title({ circuit = 900, downtown = 200 }, { circuit = "Harbor Ring" }), "Respected of Harbor Ring")
+end)

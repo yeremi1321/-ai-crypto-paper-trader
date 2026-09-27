@@ -37,6 +37,18 @@ POLICIES = {
     "cooldown_30m_after_stop": ("cooldown_min", 30),
 }
 
+# Pre-registered hypotheses. Each is fixed before the data that judges it exists and is evaluated only on tokens
+# the bot FIRST traded after its registration time. Never edit a rule after registration; add a new one instead.
+MIN_VERDICT_TOKENS = 30
+HYPOTHESES = [
+    {"name": "no_reentry_first_trade_only",
+     "registered_at": "2026-09-27T06:30:00",
+     "motivation": "runner study 2026-09-27 06:06Z: first_trade_only chosen on train, beat live on holdout in 99.9% "
+                   "of bootstrap samples (34 holdout tokens)",
+     "statement": "Taking only the first trade on each token beats the live re-entry behaviour on P&L per token.",
+     "policy": "first_trade_only"},
+]
+
 
 def _pct(a, b):
     return ((b / a) - 1) * 100 if a and b is not None else None
@@ -169,6 +181,42 @@ def reentry(trades, first_seen):
     return judge(per_token, first_seen, list(POLICIES), LIVE_POLICY)
 
 
+def preregistered(trades, seed=29):
+    by_tok = _by_token(trades)
+    out = []
+    for h in HYPOTHESES:
+        toks = [a for a, ts in by_tok.items() if ts[0][4] >= h["registered_at"]]
+        per = {a: {n: sum(t[9] for t in keep_trades(by_tok[a], POLICIES[n])) for n in (h["policy"], LIVE_POLICY)}
+               for a in toks}
+
+        def side(name):
+            vals = [per[a][name] for a in toks]
+            return {"pnl_usd": _r(sum(vals)), "pnl_per_token_usd": _r(sum(vals) / len(vals)) if vals else None}
+        pol, live = side(h["policy"]), side(LIVE_POLICY)
+        rng = random.Random(seed)
+        beats = positive = done = 0
+        for _ in range(BOOTSTRAP_SAMPLES if toks else 0):
+            sample = [rng.choice(toks) for _ in toks]
+            c = sum(per[a][h["policy"]] for a in sample)
+            beats += c > sum(per[a][LIVE_POLICY] for a in sample)
+            positive += c > 0
+            done += 1
+        pct_beats = _r(100 * beats / done, 1) if done else None
+        if len(toks) < MIN_VERDICT_TOKENS:
+            verdict = f"collecting: need {MIN_VERDICT_TOKENS}+ tokens first traded after registration (have {len(toks)})"
+        elif pol["pnl_per_token_usd"] <= live["pnl_per_token_usd"]:
+            verdict = "REJECTED: does not beat the live behaviour"
+        elif pct_beats >= 90:
+            verdict = "SUPPORTED: beats live in >=90% of bootstrap samples -> eligible for a paper trial (needs owner OK)"
+        else:
+            verdict = "NOT SUPPORTED: ahead of live but not reliably"
+        out.append({**h, "tokens_evaluated": len(toks), "policy_result": pol, "live_result": live,
+                    "bootstrap_pct_beats_live": pct_beats,
+                    "bootstrap_pct_policy_positive": _r(100 * positive / done, 1) if done else None,
+                    "verdict": verdict})
+    return out
+
+
 def run(conn, as_of):
     trades, _ledger, snaps = load(conn)
     elig = [t for t in trades if _era(t[4]) in ONE_PER_TOKEN_ERAS and t[9] is not None]
@@ -180,6 +228,7 @@ def run(conn, as_of):
             "census": census(elig, snaps),
             "wider_stops": wider_stops(elig, snaps, first_seen),
             "reentry_policy": reentry(elig, first_seen),
+            "preregistered_hypotheses": preregistered(elig),
             "notes": ["Wider stops: sampled quotes (~10-30s); a stop fills at the next quote, so gaps are only partly modelled.",
                       "Re-entry policies remove trades the policy would have skipped; they cannot add the trades the bot "
                       "might have taken instead with the freed slot or at different times.",

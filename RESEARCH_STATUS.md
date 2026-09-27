@@ -37,3 +37,12 @@ is not evidence of an edge.
 This pause does not erase the ledger or rewrite simulated fees to make the
 strategy appear profitable. The scanner fails its scheduled run when every
 product fails, so a green workflow now means at least one product was scanned.
+
+## Separate memecoin paper cohort
+
+The memecoin ledger currently has 70 closed simulated trades, 23 wins, and
+-$1,289.42 net P/L. The scheduled memecoin discovery workflow now marks
+otherwise eligible candidates `RESEARCH_PAUSE` and continues recording their
+forward outcomes; it opens no new simulated positions. Existing position
+monitoring and exits remain active. This cohort has different prices, liquidity,
+slippage, and exit rules from V5 and must be validated separately.

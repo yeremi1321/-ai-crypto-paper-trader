@@ -578,13 +578,17 @@ with st.expander("Recent decisions and paper-trade activity", expanded=False):
         st.info("The activity timeline will fill in after the next scan.")
 
 
-st.subheader("Automatic Paper Trading")
+st.subheader("Paper Trading & Research")
+st.warning(
+    "New paper entries are paused while the strategy is under review. "
+    "Scans and shadow outcomes continue; existing positions still follow exit rules."
+)
 st.caption(
-    "Paper simulation: V5 confirmed entries or V6 early acceleration entries. "
+    "Historical paper simulation: V5 confirmed and V6 early acceleration entries. "
     "Early exits: 1.5% stop • 2.8% target • trail after 2% • 4-hour max. "
     "V5 exits: 3% stop • 4% target • 24-hour maximum hold • "
     "maximum 5 open trades / $500 exposure • "
-    "V5 needs 2 quality scans; early entries trigger on first acceleration • "
+    "V5 needed 2 quality scans; early entries triggered on first acceleration • "
     "loss/profit-aware weakening exit • "
     "2-hour re-entry cooldown • "
     "BTC plus 70% market trend filter for new entries • "
@@ -592,7 +596,7 @@ st.caption(
     "0.6% estimated fee and 0.1% slippage per side"
 )
 if paper_trades.empty:
-    st.info("Waiting for the first CONFIRMED setup to open a simulated trade.")
+    st.info("No paper trades recorded. Research scans continue while entries are paused.")
 else:
     open_trades = paper_trades[paper_trades.status == "OPEN"].copy()
     closed_trades = paper_trades[

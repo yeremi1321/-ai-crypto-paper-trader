@@ -156,6 +156,27 @@ def test_preregistered_no_reentry():
     assert n["verdict"].startswith("REJECTED"), n["verdict"]
 
 
+def test_preregistered_window_closes_at_trial_start():
+    """Once the no-re-entry trial is live, new tokens can't test the hypothesis and must not count."""
+    from memecoin_entry_analysis import _era
+    h = rs.HYPOTHESES[0]
+    end = datetime.fromisoformat(h["evaluated_until"]).replace(tzinfo=timezone.utc)
+    assert _era((end + timedelta(seconds=1)).isoformat()) == "E_no_reentry_trial"
+    assert _era((end - timedelta(seconds=1)).isoformat()) == "D_stop_reclaim_reentry"
+    with tempfile.TemporaryDirectory() as d:
+        path = str(Path(d) / "w.db"); _prereg_db(path, 40, False)
+        db = DB(path); db.cid = 10_000; late0 = int((end - T0).total_seconds()) + 60
+        for j in range(20):   # after the trial start: re-entries win, which would flip the verdict if counted
+            tok, start = f"L{j:02d}", late0 + j * 1000
+            db.trade(tok, start, start + 60, 1.0, 0.95, "STOP_10")
+            for k in (1, 2):
+                o = start + k * 120
+                db.trade(tok, o, o + 60, 1.0, 1.25, "TARGET_20")
+        db.close()
+        out = _run(path)["preregistered_hypotheses"][0]
+    assert out["tokens_evaluated"] == 40 and out["verdict"].startswith("SUPPORTED"), out
+
+
 def test_endpoint_read_only_and_cached():
     import research_worker as rw
     import memecoin_shadow
@@ -183,5 +204,6 @@ if __name__ == "__main__":
     test_wider_stop_found_only_when_it_survives_holdout()
     test_reentry_policy_found_only_when_it_survives_holdout()
     test_preregistered_no_reentry()
+    test_preregistered_window_closes_at_trial_start()
     test_endpoint_read_only_and_cached()
     print("runner study tests passed")

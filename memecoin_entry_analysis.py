@@ -21,6 +21,7 @@ ERAS = [
     ("2026-09-26T07:03:47", "B_one_per_token_30s_exits"),
     ("2026-09-26T08:04:10", "C_10s_exits"),
     ("2026-09-26T08:16:48", "D_stop_reclaim_reentry"),
+    ("2026-09-27T18:10:19", "E_no_reentry_trial"),
 ]
 PRE_WINDOW = timedelta(minutes=5)
 TRAIN_FRACTION = 0.7

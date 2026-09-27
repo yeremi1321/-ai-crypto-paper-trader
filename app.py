@@ -7,6 +7,7 @@ import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
+from dashboard_data import latest_scanner_db, open_scanner_db
 
 
 
@@ -213,7 +214,16 @@ def performance_summary(frame, group_column):
 
 
 
-conn = sqlite3.connect(DB)
+@st.cache_data(ttl=60, show_spinner=False)
+def committed_scanner_db():
+    return latest_scanner_db()
+
+
+try:
+    conn = open_scanner_db(committed_scanner_db())
+except Exception as exc:
+    st.warning(f"Could not refresh scanner data from GitHub ({exc}). Showing the bundled snapshot.")
+    conn = sqlite3.connect(DB)
 scans = pd.read_sql_query("SELECT * FROM scans ORDER BY id", conn)
 if table_exists(conn, "momentum_tracking"):
     state_events = pd.read_sql_query(

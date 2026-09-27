@@ -107,7 +107,12 @@ def record(conn,x,result):
     entry_veto="NO_FRESH_REENTRY_SETUP"
    elif recent and not stop_reclaimed(recent[1],recent[2],x["price_usd"]):
     entry_veto="STOP_NOT_RECLAIMED"
-  entry_allowed=entry_veto is None
+ entry_allowed=entry_allowed and entry_veto is None
+ # The scheduled discovery workflow pauses simulated portfolio entries while
+ # retaining candidate and forward-outcome records for research.
+ if entry_allowed and os.environ.get("MEME_PAPER_ENTRY_ENABLED", "1") == "0":
+  entry_veto="RESEARCH_PAUSE"
+  entry_allowed=False
  sql="""INSERT INTO meme_candidates(seen_at,version,token,chain,score,eligible,blocked_reasons,raw_json,token_address,pair_address) VALUES(?,?,?,?,?,?,?,?,?,?)"""
  if pg: sql=sql.replace("?","%s")+" RETURNING id"
  cur=conn.execute(sql,(now,VERSION,x.get("token"),x.get("chain"),result["score"],int(result["eligible"]),json.dumps(result["blocked_reasons"]),json.dumps(x),x.get("token_address"),x.get("pair_address")))

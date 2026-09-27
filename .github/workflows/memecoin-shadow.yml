@@ -38,6 +38,7 @@ jobs:
       - name: Discover and evaluate Solana memecoins
         env:
           GOPLUS_TOKEN: ${{ secrets.GOPLUS_TOKEN }}
+          MEME_PAPER_ENTRY_ENABLED: "0"
         run: python memecoin_discovery.py --limit 30
       - name: Commit shadow history
         run: |

@@ -54,6 +54,10 @@ HYPOTHESES = [
      "registered_at": "2026-09-26T09:44:00",
      "statement": "Tokens discovered while SOL is up more than 0.5% over the last hour beat the rest, and are profitable.",
      "field": "sol_ret_60m_pct", "op": ">", "value": 0.5},
+    {"name": "busy_tradeable_makers",
+     "registered_at": "2026-09-27T02:00:00",
+     "statement": "In pools >= $20k, tokens with more than 2,400 one-hour traders (buys+sells) at discovery beat the rest, and are profitable.",
+     "field": "makers", "op": ">", "value": 2400},
 ]
 
 
@@ -213,7 +217,9 @@ def feature_test(rows, seed=11, prefix=None):
                "train_kept": ta if keep is above else tb, "holdout_kept": hk,
                "holdout_bootstrap_pct_beats_baseline": beats, "holdout_bootstrap_pct_positive": positive}
         out["features"][f] = res
-        if hk.get("n") and (hk["avg_net_return_pct"] or -1) > 0 and (positive or 0) >= 90:
+        # A candidate must beat simply buying everything in the same period AND be profitable;
+        # "profitable" alone is meaningless when the whole holdout period was hot.
+        if hk.get("n") and (hk["avg_net_return_pct"] or -1) > 0 and (positive or 0) >= 90 and (beats or 0) >= 90:
             out["candidates"].append(res["rule_chosen_on_train"])
     return out
 

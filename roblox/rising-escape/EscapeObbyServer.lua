@@ -37,6 +37,19 @@ local MAX_SIDE_OFFSET = 10
 local COURSE_ORIGIN = Vector3.new(-70, 80, 160)
 local COURSE_SPACING = 90 -- distance between parallel party courses
 
+-- Look. Set either to false for the plain look.
+local VOLCANO_COURSE = true -- rock platforms, magma glow, canyon walls, embers
+local VOLCANO_WORLD = true -- smoky orange sky, dark lobby floor, background volcano
+
+local ROCK_COLORS = {
+	Color3.fromRGB(58, 50, 48),
+	Color3.fromRGB(74, 60, 54),
+	Color3.fromRGB(48, 44, 46),
+	Color3.fromRGB(88, 70, 60),
+}
+local MAGMA_COLOR = Color3.fromRGB(255, 110, 30)
+local LAVA_COLOR = Color3.fromRGB(255, 80, 20)
+
 ----------------------------------------------------------------------
 -- Remotes
 ----------------------------------------------------------------------
@@ -105,6 +118,109 @@ local rng = Random.new()
 local function lobbyCFrame()
 	local base = lobbySpawn.Position + Vector3.new(0, lobbySpawn.Size.Y / 2 + 3.5, 0)
 	return CFrame.new(base + Vector3.new(rng:NextNumber(-4, 4), 0, rng:NextNumber(-4, 4)))
+end
+
+-- Volcano world: only changes things while the game runs, never your saved place.
+local function setupVolcanoWorld()
+	local Lighting = game:GetService("Lighting")
+	Lighting.ClockTime = 17.8
+	Lighting.Ambient = Color3.fromRGB(70, 40, 35)
+	Lighting.OutdoorAmbient = Color3.fromRGB(130, 80, 65)
+	Lighting.ColorShift_Top = Color3.fromRGB(255, 140, 90)
+
+	local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
+	if not atmosphere then
+		atmosphere = Instance.new("Atmosphere")
+		atmosphere.Parent = Lighting
+	end
+	atmosphere.Density = 0.3
+	atmosphere.Offset = 0.2
+	atmosphere.Color = Color3.fromRGB(200, 120, 90)
+	atmosphere.Decay = Color3.fromRGB(95, 40, 30)
+	atmosphere.Glare = 0.3
+	atmosphere.Haze = 1.8
+
+	local baseplate = Workspace:FindFirstChild("Baseplate")
+	if baseplate and baseplate:IsA("BasePart") then
+		baseplate.Color = Color3.fromRGB(45, 36, 34)
+		baseplate.Material = Enum.Material.Basalt
+		for _, child in ipairs(baseplate:GetChildren()) do
+			if child:IsA("Texture") then
+				child.Transparency = 1
+			end
+		end
+	end
+
+	if Workspace:FindFirstChild("VolcanoBackdrop") then
+		return
+	end
+	-- A big stepped volcano behind the start of the courses.
+	local model = Instance.new("Model")
+	model.Name = "VolcanoBackdrop"
+	local base = Vector3.new(-290, 0, 230)
+	local layers, layerHeight = 10, 14
+	local bottomRadius, topRadius = 150, 45
+	local peakY = layers * layerHeight
+	for i = 0, layers - 1 do
+		local radius = bottomRadius + (topRadius - bottomRadius) * (i / (layers - 1))
+		local layer = Instance.new("Part")
+		layer.Name = "Slope"
+		layer.Shape = Enum.PartType.Cylinder
+		layer.Anchored = true
+		layer.Size = Vector3.new(layerHeight, radius * 2, radius * 2)
+		layer.CFrame = CFrame.new(base.X, base.Y + i * layerHeight + layerHeight / 2, base.Z) * CFrame.Angles(0, 0, math.pi / 2)
+		layer.Color = ROCK_COLORS[(i % #ROCK_COLORS) + 1]
+		layer.Material = Enum.Material.Basalt
+		layer.Parent = model
+	end
+	local crater = Instance.new("Part")
+	crater.Name = "CraterLava"
+	crater.Shape = Enum.PartType.Cylinder
+	crater.Anchored = true
+	crater.Size = Vector3.new(1, topRadius * 1.6, topRadius * 1.6)
+	crater.CFrame = CFrame.new(base.X, peakY + 0.4, base.Z) * CFrame.Angles(0, 0, math.pi / 2)
+	crater.Color = LAVA_COLOR
+	crater.Material = Enum.Material.Neon
+	crater.CanCollide = false
+	crater.Parent = model
+
+	local smoke = Instance.new("ParticleEmitter")
+	smoke.EmissionDirection = Enum.NormalId.Right -- the cylinder's top face after rotating
+	smoke.Color = ColorSequence.new(Color3.fromRGB(90, 80, 80), Color3.fromRGB(40, 35, 35))
+	smoke.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 20),
+		NumberSequenceKeypoint.new(1, 45),
+	})
+	smoke.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.3),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	smoke.Lifetime = NumberRange.new(8, 12)
+	smoke.Rate = 4
+	smoke.Speed = NumberRange.new(8, 14)
+	smoke.Parent = crater
+
+	-- Lava streams running down the slopes.
+	for i = 1, 5 do
+		local angle = (i / 5) * math.pi * 2 + rng:NextNumber(-0.3, 0.3)
+		local dir = Vector3.new(math.cos(angle), 0, math.sin(angle))
+		local startPoint = base + dir * (topRadius + 2) + Vector3.new(0, peakY, 0)
+		local endPoint = base + dir * (bottomRadius + 2) + Vector3.new(0, 1, 0)
+		local stream = Instance.new("Part")
+		stream.Name = "LavaStream"
+		stream.Anchored = true
+		stream.Size = Vector3.new(rng:NextNumber(5, 9), 1, (endPoint - startPoint).Magnitude)
+		stream.CFrame = CFrame.lookAt((startPoint + endPoint) / 2, endPoint)
+		stream.Color = MAGMA_COLOR
+		stream.Material = Enum.Material.Neon
+		stream.CanCollide = false
+		stream.Parent = model
+	end
+	model.Parent = Workspace
+end
+
+if VOLCANO_WORLD then
+	setupVolcanoWorld()
 end
 
 ----------------------------------------------------------------------
@@ -184,6 +300,8 @@ end
 ----------------------------------------------------------------------
 -- Course building
 ----------------------------------------------------------------------
+local addGlowRim, addEmbers, buildCanyon -- defined below makePart
+
 local function makePart(parent, name, size, cframe, color, material)
 	local part = Instance.new("Part")
 	part.Name = name
@@ -214,6 +332,71 @@ local function addLabel(part, text, color)
 	label.TextColor3 = color
 	label.TextStrokeTransparency = 0.3
 	label.Parent = billboard
+end
+
+local function noCollide(part)
+	part.CanCollide = false
+	part.CanTouch = false
+	part.CanQuery = false
+	part.CastShadow = false
+	return part
+end
+
+-- Thin glowing slab just under a platform, so its edges look red-hot.
+-- It never collides, so it doesn't change the jumps.
+addGlowRim = function(folder, pad)
+	local rim = makePart(
+		folder,
+		pad.Name .. "Glow",
+		Vector3.new(pad.Size.X + 0.6, 0.5, pad.Size.Z + 0.6),
+		pad.CFrame * CFrame.new(0, -pad.Size.Y / 2 - 0.1, 0),
+		MAGMA_COLOR,
+		Enum.Material.Neon
+	)
+	noCollide(rim)
+end
+
+-- Sparks drifting up from the lava surface.
+addEmbers = function(lava)
+	local embers = Instance.new("ParticleEmitter")
+	embers.Name = "Embers"
+	embers.EmissionDirection = Enum.NormalId.Top
+	embers.Color = ColorSequence.new(Color3.fromRGB(255, 210, 90), Color3.fromRGB(255, 60, 20))
+	embers.LightEmission = 1
+	embers.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.5),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	embers.Lifetime = NumberRange.new(1.5, 3)
+	embers.Rate = 25
+	embers.Speed = NumberRange.new(4, 9)
+	embers.SpreadAngle = Vector2.new(20, 20)
+	embers.Parent = lava
+end
+
+-- Tall rock walls on both sides of the course with glowing lavafalls.
+-- They sit well outside jumping range of every platform.
+buildCanyon = function(folder, minX, maxX, centerZ, bottomY, topY)
+	local length = maxX - minX
+	local height = topY - bottomY
+	local midX = (minX + maxX) / 2
+	local midY = (bottomY + topY) / 2
+	for _, side in ipairs({ -1, 1 }) do
+		local z = centerZ + side * (MAX_SIDE_OFFSET + 18)
+		makePart(folder, "CanyonWall", Vector3.new(length, height, 4), CFrame.new(midX, midY, z), ROCK_COLORS[1], Enum.Material.Basalt)
+		for i = 1, 3 do
+			local x = minX + length * i / 4 + rng:NextNumber(-8, 8)
+			local fall = makePart(
+				folder,
+				"Lavafall",
+				Vector3.new(rng:NextNumber(3, 6), height, 0.4),
+				CFrame.new(x, midY, z - side * 2.2),
+				MAGMA_COLOR,
+				Enum.Material.Neon
+			)
+			noCollide(fall)
+		end
+	end
 end
 
 local function claimSlot()
@@ -249,6 +432,11 @@ local function buildCourse(party)
 	-- Start pad with six spawn spots and a gate that opens on GO.
 	local startSize = Vector3.new(14, 1, 14)
 	local startPad = makePart(folder, "Start", startSize, CFrame.new(origin), Color3.fromRGB(120, 120, 130))
+	if VOLCANO_COURSE then
+		startPad.Color = ROCK_COLORS[4]
+		startPad.Material = Enum.Material.Basalt
+		addGlowRim(folder, startPad)
+	end
 	local startTop = origin.Y + startSize.Y / 2
 	round.startTop = startTop
 	round.checkpoints[0] = { cframe = facingForward(Vector3.new(origin.X - 3, startTop + 4, origin.Z)), top = startTop }
@@ -270,6 +458,9 @@ local function buildCourse(party)
 		Enum.Material.ForceField
 	)
 	gate.Transparency = 0.4
+	if VOLCANO_COURSE then
+		gate.Color = MAGMA_COLOR
+	end
 	round.gate = gate
 
 	-- Stages 1..12. The path wanders sideways and climbs; new every round.
@@ -300,11 +491,16 @@ local function buildCourse(party)
 			color, material, name = Color3.fromRGB(255, 200, 40), Enum.Material.Neon, "Finish"
 		elseif isCheckpoint then
 			color, material, name = Color3.fromRGB(60, 220, 90), Enum.Material.Neon, "Checkpoint" .. stage
+		elseif VOLCANO_COURSE then
+			color, material, name = ROCK_COLORS[rng:NextInteger(1, #ROCK_COLORS)], Enum.Material.Basalt, "Stage" .. stage
 		else
 			color = Color3.fromHSV((stage * 0.08) % 1, 0.45, 0.95)
 			name = "Stage" .. stage
 		end
 		local pad = makePart(folder, name, size, CFrame.new(center), color, material)
+		if VOLCANO_COURSE and not isFinish and not isCheckpoint then
+			addGlowRim(folder, pad)
+		end
 		pad:SetAttribute("Stage", stage)
 		round.pads[stage] = pad
 
@@ -347,6 +543,12 @@ local function buildCourse(party)
 	lava.CanQuery = false
 	lava.Transparency = 0.15
 	round.lava = lava
+
+	if VOLCANO_COURSE then
+		lava.Color = LAVA_COLOR
+		addEmbers(lava)
+		buildCanyon(folder, minX, maxX, origin.Z, startTop - 70, startTop + 60)
+	end
 
 	folder.Parent = coursesFolder
 	return round

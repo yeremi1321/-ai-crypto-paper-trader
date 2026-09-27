@@ -34,3 +34,14 @@ Nothing else needs to be created by hand: the server script makes its own
 
 All tuning values (timer, lava speed, gap sizes) are at the top of
 `EscapeObbyServer.lua`.
+
+## Volcano theme
+
+On by default. Courses use dark rock platforms with glowing magma edges between
+rock canyon walls with lavafalls, and embers rise from the lava. The world gets a
+smoky orange sky, a dark rock lobby floor and a big volcano in the background.
+Checkpoints stay green and the finish stays gold so they are easy to spot.
+
+These changes are made by the script while the game runs, so your saved place
+is not altered. To switch them off, set `VOLCANO_COURSE` or `VOLCANO_WORLD` to
+`false` near the top of `EscapeObbyServer.lua`.

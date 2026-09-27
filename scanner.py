@@ -15,6 +15,9 @@ import requests
 DB = "paper_trader_v4.db"
 STRATEGY_VERSION = "V5"
 EARLY_STRATEGY_VERSION = "V6_EARLY"
+# The latest held-out research had no profitable parameter set. Continue to
+# collect scans and shadow outcomes, but pause new simulated portfolio entries.
+PAPER_ENTRY_ENABLED = False
 PRODUCTS = [
     "BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD", "SHIB-USD", "AVAX-USD",
     "LINK-USD", "ADA-USD", "XRP-USD", "LTC-USD", "BCH-USD",
@@ -733,8 +736,19 @@ def open_paper_trade(
 
 def consider_early_paper_entry(
     conn, now, product, score, market_price, regime_allows,
+    btc_aligned, market_breadth, regime_detail,
 ):
     """Open on the first early acceleration with the existing risk limits."""
+    if not PAPER_ENTRY_ENABLED:
+        start_signal_outcome(
+            conn, now, product, "EARLY_SHADOW", score, market_price,
+            btc_aligned, market_breadth, regime_detail,
+        )
+        record_entry_skip(
+            conn, now.isoformat(), product, score, market_price,
+            "RESEARCH_PAUSE", "Early paper entries paused; shadow outcome recorded",
+        )
+        return None
     if not regime_allows:
         return None
     if daily_realized_pnl(conn, now) <= -PAPER_DAILY_LOSS_LIMIT_USD:
@@ -779,6 +793,22 @@ def consider_paper_entry(
             update_paper_control(
                 conn, product, now.isoformat(), confirmation_count=0
             )
+        return None
+
+    if not PAPER_ENTRY_ENABLED:
+        if confirmation_count:
+            update_paper_control(
+                conn, product, now.isoformat(), confirmation_count=0
+            )
+        start_signal_outcome(
+            conn, now, product, "BLOCKED", score, market_price,
+            btc_aligned, market_breadth,
+            "Research pause: no profitable held-out parameter set",
+        )
+        record_entry_skip(
+            conn, now.isoformat(), product, score, market_price,
+            "RESEARCH_PAUSE", "V5 paper entries paused; shadow outcome recorded",
+        )
         return None
 
 
@@ -1096,6 +1126,7 @@ now = datetime.now(timezone.utc)
 seen_at = now.isoformat()
 scan_id = now.strftime("%Y%m%dT%H%M%SZ")
 alerts = []
+successful_scans = 0
 regime_allows_entries, regime_detail, btc_aligned, market_breadth = market_regime(conn)
 conn.execute(
     """INSERT INTO market_regime_log(
@@ -1155,7 +1186,8 @@ for product in PRODUCTS:
         ):
             early_alert = consider_early_paper_entry(
                 conn, now, product, result[2], result[1],
-                regime_allows_entries,
+                regime_allows_entries, btc_aligned, market_breadth,
+                regime_detail,
             )
             if early_alert:
                 alerts.append(early_alert)
@@ -1392,6 +1424,7 @@ for product in PRODUCTS:
                ) VALUES(?,?,?,?,?,?,?,?,?)""",
             (scan_id, seen_at, *result),
         )
+        successful_scans += 1
         print(result[0], result[2], result[3])
 
 
@@ -1404,6 +1437,12 @@ for product in PRODUCTS:
 
     except Exception as exc:
         print("ERROR", product, exc)
+
+
+if successful_scans == 0:
+    conn.rollback()
+    conn.close()
+    raise RuntimeError("All products failed; no completed scan was recorded")
 
 
 if alerts and os.environ.get("NTFY_DISABLED") != "1":

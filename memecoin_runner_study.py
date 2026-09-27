@@ -46,7 +46,9 @@ HYPOTHESES = [
      "motivation": "runner study 2026-09-27 06:06Z: first_trade_only chosen on train, beat live on holdout in 99.9% "
                    "of bootstrap samples (34 holdout tokens)",
      "statement": "Taking only the first trade on each token beats the live re-entry behaviour on P&L per token.",
-     "policy": "first_trade_only"},
+     "policy": "first_trade_only",
+     # The no-re-entry paper trial went live here; after it, live == first trade only, so later tokens can't test this.
+     "evaluated_until": "2026-09-27T18:10:19"},
 ]
 
 
@@ -185,7 +187,8 @@ def preregistered(trades, seed=29):
     by_tok = _by_token(trades)
     out = []
     for h in HYPOTHESES:
-        toks = [a for a, ts in by_tok.items() if ts[0][4] >= h["registered_at"]]
+        toks = [a for a, ts in by_tok.items() if ts[0][4] >= h["registered_at"]
+                and ("evaluated_until" not in h or ts[0][4] < h["evaluated_until"])]
         per = {a: {n: sum(t[9] for t in keep_trades(by_tok[a], POLICIES[n])) for n in (h["policy"], LIVE_POLICY)}
                for a in toks}
 

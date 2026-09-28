@@ -1,0 +1,580 @@
+"""Self-learning memecoin outcome predictor. Paper/research only: never trades, never blocks an entry.
+
+Loop, for every discovered token:
+  1. PREDICT  - at discovery, estimate the chance that buying now under the live paper rules
+                (+20% target, -10% stop, 20-minute max hold, 1% slippage + 0.6% fee each side)
+                ends as a net WIN, plus the expected net return. The prediction is stored before
+                the outcome exists, so it can never peek at the future.
+  2. RESOLVE  - once the recorded price path decides the trade (target, stop, or time), store what
+                actually happened next to what was predicted.
+  3. LEARN    - update an online logistic model from that outcome (predict-then-learn, so every
+                recorded score is honest out-of-sample), and write a short "lesson" for confident
+                misses naming the signals that misled it.
+  4. REPORT   - calibration, learning curve, how its picks would have done versus the bot's own
+                paper trades, and data-driven suggestions for what to change. Nothing is promoted
+                into the live rules automatically.
+
+Repeated discoveries of the same token within one trade horizon are skipped (they are the same bet),
+unless the bot actually opened a paper trade on that observation.
+"""
+import argparse
+import heapq
+import json
+import math
+from datetime import datetime, timedelta, timezone
+
+from memecoin_candidate_study import FEE, SLIP, TP, SL, HORIZON_S, END_TOLERANCE_S, net_return_pct, _pct
+
+VERSION = "MEME_PREDICTOR_V1"
+DB = "memecoin_shadow.db"
+GRACE_S = 10 * 60             # a path still undecided this long after the horizon is unresolvable
+BACKFILL_DAYS = 7              # a fresh model first replays this much history, oldest first
+CHUNK = timedelta(hours=6)     # candidates handled per step while catching up on history
+WARMUP = 50                    # resolved outcomes before the predictor states an opinion
+LEARNING_RATE = 0.1
+L2 = 1e-3
+PRIOR_WIN_RATE = 0.25
+CONFIDENT_MISS = 0.5           # |predicted - actual| at or above this writes a lesson
+Z_CLIP = 5.0
+TRADED = "PAPER_TRADE_CANDIDATE"
+
+
+def _f(x, k):
+    v = x.get(k)
+    if v is None or isinstance(v, str) and not v.strip():
+        return None
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
+def _slog(v):
+    return None if v is None else math.copysign(math.log1p(abs(v)), v)
+
+
+def features(x, eligible=None):
+    """Numeric signals known at discovery. Missing fields are left out and treated as average."""
+    out = {}
+
+    def put(name, v):
+        if v is not None:
+            out[name] = float(v)
+
+    liq, vol, cap = _f(x, "liquidity_usd"), _f(x, "volume_1h_usd"), _f(x, "market_cap") or _f(x, "fdv")
+    put("log_liquidity", _slog(liq))
+    put("log_volume_1h", _slog(vol))
+    put("log_makers", _slog(_f(x, "makers")))
+    put("log_market_cap", _slog(cap))
+    put("volume_accel", _slog(min(_f(x, "volume_accel") or 0, 50)) if _f(x, "volume_accel") is not None else None)
+    put("price_change_1h", _slog(_f(x, "price_change_1h_pct")))
+    put("turnover", _slog(vol / liq) if vol is not None and liq else None)
+    put("liquidity_to_cap", min(liq / cap, 5) if liq is not None and cap else None)
+    created, observed = _f(x, "pair_created_at"), x.get("observed_at")
+    if created and observed:
+        try:
+            age_h = (datetime.fromisoformat(observed).timestamp() * 1000 - created) / 3.6e6
+            put("log_pair_age_h", math.log1p(max(age_h, 0)))
+        except ValueError:
+            pass
+    for k in ("sol_ret_15m_pct", "sol_ret_60m_pct", "sol_ret_240m_pct", "top10_holder_pct", "dev_holder_pct",
+              "attn_boosts_active", "attn_social_count", "attn_has_twitter", "attn_has_telegram",
+              "attn_has_website", "attn_tx_accel_5m", "attn_volume_accel_5m", "attn_buy_ratio_5m",
+              "attn_buy_ratio_1h"):
+        put(k.replace("_pct", ""), _f(x, k))
+    put("log_boost_amount", _slog(_f(x, "attn_boost_top_amount")))
+    put("log_txns_5m", _slog(_f(x, "attn_txns_5m")))
+    for k in ("higher_highs", "narrative_momentum", "mint_authority_active", "freeze_authority_active"):
+        if isinstance(x.get(k), bool):
+            out[k] = float(x[k])
+    out["security_unknown"] = float(x.get("security_source") != "goplus")
+    if eligible is not None:
+        out["passed_bot_gates"] = float(bool(eligible))
+    return out
+
+
+def _sigmoid(z):
+    return 1 / (1 + math.exp(-max(-35.0, min(35.0, z))))
+
+
+class Model:
+    """Online logistic regression on running-standardized features, AdaGrad steps, L2 shrinkage."""
+
+    def __init__(self, state=None):
+        s = state or {}
+        self.w = dict(s.get("w", {}))
+        self.bias = s.get("bias", math.log(PRIOR_WIN_RATE / (1 - PRIOR_WIN_RATE)))
+        self.g2 = dict(s.get("g2", {}))
+        self.stats = {k: list(v) for k, v in s.get("stats", {}).items()}  # name -> [count, mean, M2]
+        self.n = s.get("n", 0)
+        self.wins = s.get("wins", 0)
+        self.win_sum = s.get("win_sum", 0.0)
+        self.loss_sum = s.get("loss_sum", 0.0)
+        self.cursor_id = s.get("cursor_id", 0)
+
+    def state(self):
+        return {"w": self.w, "bias": self.bias, "g2": self.g2, "stats": self.stats, "n": self.n,
+                "wins": self.wins, "win_sum": self.win_sum, "loss_sum": self.loss_sum,
+                "cursor_id": self.cursor_id}
+
+    def _z(self, feats):
+        z = {}
+        for k, v in feats.items():
+            cnt, mean, m2 = self.stats.get(k, (0, 0.0, 0.0))
+            if cnt < 2:
+                continue
+            sd = math.sqrt(m2 / (cnt - 1)) or 1.0
+            z[k] = max(-Z_CLIP, min(Z_CLIP, (v - mean) / sd))
+        return z
+
+    def predict(self, feats):
+        """(probability of a net win, {feature: logit contribution})."""
+        contrib = {k: self.w.get(k, 0.0) * v for k, v in self._z(feats).items()}
+        return _sigmoid(self.bias + sum(contrib.values())), contrib
+
+    def avg_win(self):
+        return self.win_sum / self.wins if self.wins else TP - 2 * 100 * (SLIP + FEE)
+
+    def avg_loss(self):
+        losses = self.n - self.wins
+        return self.loss_sum / losses if losses else -SL - 2 * 100 * (SLIP + FEE)
+
+    def expected_return(self, p):
+        return p * self.avg_win() + (1 - p) * self.avg_loss()
+
+    def learn(self, feats, won, net):
+        for k, v in feats.items():  # Welford running mean/variance
+            cnt, mean, m2 = self.stats.get(k, (0, 0.0, 0.0))
+            cnt += 1
+            d = v - mean
+            mean += d / cnt
+            self.stats[k] = [cnt, mean, m2 + d * (v - mean)]
+        p, _ = self.predict(feats)
+        err = p - (1.0 if won else 0.0)
+        for k, z in self._z(feats).items():
+            g = err * z + L2 * self.w.get(k, 0.0)
+            self.g2[k] = self.g2.get(k, 0.0) + g * g
+            self.w[k] = self.w.get(k, 0.0) - LEARNING_RATE * g / math.sqrt(self.g2[k] + 1e-8)
+        self.g2["__bias__"] = self.g2.get("__bias__", 0.0) + err * err
+        self.bias -= LEARNING_RATE * err / math.sqrt(self.g2["__bias__"] + 1e-8)
+        self.n += 1
+        if won:
+            self.wins += 1
+            self.win_sum += net
+        else:
+            self.loss_sum += net
+
+
+def outcome(entry, path, window_closed):
+    """Live paper rule on [(secs, price)], same semantics as memecoin_candidate_study.simulate_live.
+
+    Returns (reason, net_return_pct, max_up_pct, decided_at_secs) or None while undecided. The
+    'last quote near the horizon' fallback only applies once no later quote can still arrive."""
+    max_up = 0.0
+    for t, p in path:
+        if t > HORIZON_S + END_TOLERANCE_S:
+            break
+        ret = _pct(entry, p)
+        max_up = max(max_up, ret)
+        if ret <= -SL:
+            return "STOP", net_return_pct(entry, p), max_up, t
+        if ret >= TP:
+            return "TARGET", net_return_pct(entry, p), max_up, t
+        if t >= HORIZON_S:
+            return "TIME", net_return_pct(entry, p), max_up, t
+    inside = [s for s in path if s[0] <= HORIZON_S + END_TOLERANCE_S]
+    if window_closed and inside and inside[-1][0] >= HORIZON_S - END_TOLERANCE_S:
+        t, p = inside[-1]
+        return "TIME", net_return_pct(entry, p), max_up, t
+    return None
+
+
+def lesson(p, won, reason, net, contrib, top=2):
+    """One sentence naming what misled a confident miss."""
+    if abs(p - (1.0 if won else 0.0)) < CONFIDENT_MISS:
+        return None
+    wrong = sorted(((v, k) for k, v in contrib.items() if (v > 0) != won and v), key=lambda t: -abs(t[0]))[:top]
+    blame = ", ".join(f"{k} ({v:+.2f})" for v, k in wrong) or "the base rate alone"
+    said = "win" if not won else "lose"
+    return (f"Predicted {p:.0%} win but it ended {reason} ({net:+.1f}%). Pushed toward '{said}' mostly by {blame}; "
+            f"those weights were corrected by this outcome.")
+
+
+# ---------------------------------------------------------------- storage
+
+def _pg(c):
+    return c.__class__.__module__.startswith("psycopg")
+
+
+def _q(c, sql):
+    return sql.replace("?", "%s") if _pg(c) else sql
+
+
+def init(c):
+    real = "DOUBLE PRECISION" if _pg(c) else "REAL"
+    key = "BIGSERIAL PRIMARY KEY" if _pg(c) else "INTEGER PRIMARY KEY"
+    c.execute(f"""CREATE TABLE IF NOT EXISTS meme_predictions(id {key},candidate_id BIGINT UNIQUE,token TEXT,
+        token_address TEXT,predicted_at TEXT,model_version TEXT,model_updates INTEGER,entry_price {real},
+        p_win {real},expected_net_return_pct {real},would_trade INTEGER,bot_decision TEXT,features_json TEXT,
+        status TEXT,resolved_at TEXT,actual_reason TEXT,actual_net_return_pct {real},actual_max_up_pct {real},
+        won INTEGER,brier {real},lesson TEXT)""")
+    c.execute("CREATE INDEX IF NOT EXISTS meme_predictions_status ON meme_predictions(status, predicted_at)")
+    c.execute("CREATE TABLE IF NOT EXISTS meme_predictor_state(id INTEGER PRIMARY KEY,updated_at TEXT,state_json TEXT)")
+    c.commit()
+    try:  # resolution reads snapshots by time window
+        c.execute("CREATE INDEX IF NOT EXISTS meme_snapshots_time ON meme_price_snapshots(observed_at)")
+        c.commit()
+    except Exception:
+        c.rollback()  # snapshot table not created yet
+
+
+def load_model(c):
+    row = c.execute("SELECT state_json FROM meme_predictor_state WHERE id=1").fetchone()
+    return Model(json.loads(row[0]) if row else None)
+
+
+def save_model(c, model, now):
+    args = (now, json.dumps(model.state()))
+    if c.execute(_q(c, "UPDATE meme_predictor_state SET updated_at=?,state_json=? WHERE id=1"), args).rowcount == 0:
+        c.execute(_q(c, "INSERT INTO meme_predictor_state(id,updated_at,state_json) VALUES(1,?,?)"), args)
+
+
+def _utc(s):
+    d = datetime.fromisoformat(s)
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def step(c, now=None):
+    """Resolve and learn from matured predictions, then predict new discoveries. Returns a small summary.
+
+    While catching up on history, each call handles one CHUNK of candidates and treats the end of that
+    chunk as 'now', so the model only ever learns from outcomes that were known at prediction time."""
+    now = now or datetime.now(timezone.utc)
+    init(c)
+    model = load_model(c)
+    since_default = (now - timedelta(days=BACKFILL_DAYS)).isoformat()
+    cands = c.execute(_q(c, """SELECT m.id,m.seen_at,m.token,m.token_address,m.eligible,m.raw_json,l.decision
+        FROM meme_candidates m LEFT JOIN meme_decision_ledger l ON l.candidate_id=m.id
+        WHERE m.id>? AND m.seen_at>=? AND m.seen_at<=? AND m.token_address IS NOT NULL ORDER BY m.id"""),
+                      (model.cursor_id, since_default, now.isoformat())).fetchall()
+    caught_up = True
+    if cands:
+        limit = (_utc(cands[0][1]) + CHUNK).isoformat()
+        chunk = [r for r in cands if r[1] <= limit]
+        caught_up = len(chunk) == len(cands)
+        cands = chunk
+    as_of = now if caught_up else _utc(cands[-1][1])
+    pending = c.execute(_q(c, """SELECT id,candidate_id,token_address,predicted_at,entry_price,p_win,features_json
+        FROM meme_predictions WHERE status='PENDING' AND predicted_at<=?"""), (as_of.isoformat(),)).fetchall()
+    starts = [r[3] for r in pending] + [r[1] for r in cands]
+    if not starts:
+        save_model(c, model, now.isoformat()); c.commit()
+        return {"predicted": 0, "resolved": 0, "unresolvable": 0, "model_updates": model.n, "caught_up": True}
+    try:
+        snaps = c.execute(_q(c, """SELECT token_address,observed_at,price FROM meme_price_snapshots
+            WHERE observed_at>=? AND observed_at<=? ORDER BY observed_at"""), (min(starts), as_of.isoformat())).fetchall()
+    except Exception:
+        c.rollback()
+        snaps = []
+    by_tok = {}
+    for tok, at, price in snaps:
+        if price:
+            by_tok.setdefault(tok, []).append((at, float(price)))
+
+    def resolve_at(token, start, entry):
+        s = _utc(start)
+        path = [((_utc(at) - s).total_seconds(), p) for at, p in by_tok.get(token, ()) if at > start]
+        closed = (as_of - s).total_seconds() >= HORIZON_S + END_TOLERANCE_S
+        return outcome(entry, path, closed), (as_of - s).total_seconds() > HORIZON_S + GRACE_S
+
+    # Last prediction time per token, to skip repeated observations of the same bet.
+    recent = {tok: at for tok, at in c.execute(_q(c, """SELECT token_address,MAX(predicted_at) FROM meme_predictions
+        WHERE predicted_at>=? GROUP BY token_address"""), ((_utc(min(starts)) - timedelta(seconds=HORIZON_S)).isoformat(),))}
+    queue = []  # (decided_at_iso, seq, item) - outcomes become learnable at the moment they were decided
+    seq = 0
+    updates, dead = [], []
+
+    def schedule(item):
+        nonlocal seq
+        res, expired = resolve_at(item["token_address"], item["predicted_at"], item["entry_price"])
+        if res:
+            decided = (_utc(item["predicted_at"]) + timedelta(seconds=res[3])).isoformat()
+            heapq.heappush(queue, (decided, seq, item, res)); seq += 1
+        elif expired:
+            dead.append(item)
+
+    def drain(until):
+        while queue and queue[0][0] <= until:
+            decided, _, item, (reason, net, max_up, _) = heapq.heappop(queue)
+            won = net > 0
+            _, contrib = model.predict(item["features"])  # what the model believed just before this outcome
+            item_p = item["p_win"]
+            model.learn(item["features"], won, net)
+            updates.append((item, decided, reason, net, max_up, won, (item_p - won) ** 2,
+                            lesson(item_p, won, reason, net, contrib)))
+
+    for pid, cid, tok, at, entry, p, fj in pending:
+        schedule({"id": pid, "candidate_id": cid, "token_address": tok, "predicted_at": at,
+                  "entry_price": entry, "p_win": p, "features": json.loads(fj or "{}")})
+    inserts = []
+    for cid, seen, token, tok, eligible, raw, decision in cands:
+        drain(seen)
+        model.cursor_id = cid
+        try:
+            x = json.loads(raw) if raw else {}
+        except ValueError:
+            x = {}
+        price = _f(x, "price_usd")
+        if not price:
+            continue
+        last = recent.get(tok)
+        if decision != TRADED and last and (_utc(seen) - _utc(last)).total_seconds() < HORIZON_S:
+            continue
+        recent[tok] = seen
+        feats = features(x, eligible)
+        p, _ = model.predict(feats)
+        er = model.expected_return(p)
+        item = {"id": None, "candidate_id": cid, "token_address": tok, "predicted_at": seen,
+                "entry_price": price * (1 + SLIP), "p_win": p, "features": feats}
+        inserts.append((cid, token, tok, seen, VERSION, model.n, item["entry_price"], p, er,
+                        int(model.n >= WARMUP and er > 0), decision, json.dumps(feats)))
+        schedule(item)
+    drain(as_of.isoformat())
+
+    cur = c.cursor()
+    if inserts:
+        cur.executemany(_q(c, """INSERT INTO meme_predictions(candidate_id,token,token_address,predicted_at,model_version,
+            model_updates,entry_price,p_win,expected_net_return_pct,would_trade,bot_decision,features_json,status)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'PENDING')""" + (" ON CONFLICT DO NOTHING" if _pg(c) else "")), inserts)
+    done = [(decided, reason, net, max_up, int(won), brier, les, item["candidate_id"])
+            for item, decided, reason, net, max_up, won, brier, les in updates]
+    if done:
+        cur.executemany(_q(c, """UPDATE meme_predictions SET status='RESOLVED',resolved_at=?,actual_reason=?,
+            actual_net_return_pct=?,actual_max_up_pct=?,won=?,brier=?,lesson=? WHERE candidate_id=?"""), done)
+    if dead:
+        cur.executemany(_q(c, "UPDATE meme_predictions SET status='UNRESOLVABLE',resolved_at=? WHERE candidate_id=?"),
+                        [(as_of.isoformat(), item["candidate_id"]) for item in dead])
+    save_model(c, model, now.isoformat())
+    c.commit()
+    return {"predicted": len(inserts), "resolved": len(done), "unresolvable": len(dead),
+            "model_updates": model.n, "caught_up": caught_up}
+
+
+def catch_up(c, now=None, max_steps=500):
+    now = now or datetime.now(timezone.utc)
+    total = {"predicted": 0, "resolved": 0, "unresolvable": 0}
+    for _ in range(max_steps):
+        r = step(c, now)
+        for k in total:
+            total[k] += r[k]
+        if r["caught_up"]:
+            break
+    return {**total, "model_updates": r["model_updates"], "caught_up": r["caught_up"]}
+
+
+# ---------------------------------------------------------------- report
+
+def _brier(rows, p_of=lambda r: r["p_win"]):
+    return sum((p_of(r) - r["won"]) ** 2 for r in rows) / len(rows) if rows else None
+
+
+def _auc(rows):
+    pos = [r["p_win"] for r in rows if r["won"]]
+    neg = [r["p_win"] for r in rows if not r["won"]]
+    if not pos or not neg:
+        return None
+    ranked = sorted([(p, 1) for p in pos] + [(p, 0) for p in neg])
+    rank_sum, i = 0.0, 0
+    while i < len(ranked):  # average ranks over ties
+        j = i
+        while j < len(ranked) and ranked[j][0] == ranked[i][0]:
+            j += 1
+        rank_sum += (i + j + 1) / 2 * sum(1 for k in range(i, j) if ranked[k][1])
+        i = j
+    return (rank_sum - len(pos) * (len(pos) + 1) / 2) / (len(pos) * len(neg))
+
+
+def _policy(rows):
+    if not rows:
+        return {"n": 0}
+    nets = [r["actual_net_return_pct"] for r in rows]
+    return {"n": len(rows), "win_rate_pct": round(100 * sum(r["won"] for r in rows) / len(rows), 1),
+            "avg_net_return_pct": round(sum(nets) / len(nets), 2),
+            "total_pnl_usd_at_100": round(sum(nets), 2)}
+
+
+def _r(x, n=4):
+    return None if x is None else round(x, n)
+
+
+def report(c, recent_n=25):
+    init(c)
+    cols = ["candidate_id", "token", "predicted_at", "model_updates", "p_win", "expected_net_return_pct",
+            "would_trade", "bot_decision", "status", "resolved_at", "actual_reason", "actual_net_return_pct",
+            "actual_max_up_pct", "won", "brier", "lesson"]
+    rows = [dict(zip(cols, r)) for r in c.execute(f"SELECT {','.join(cols)} FROM meme_predictions ORDER BY predicted_at,id")]
+    model = load_model(c)
+    res = [r for r in rows if r["status"] == "RESOLVED"]
+    scored = [r for r in res if r["model_updates"] >= WARMUP]  # judge only predictions made after warm-up
+    out = {"version": VERSION, "as_of": datetime.now(timezone.utc).isoformat(), "mode": "paper_research",
+           "rule": f"win = net > 0 under +{TP:.0f}% target / -{SL:.0f}% stop / {HORIZON_S // 60}m hold, "
+                   f"{SLIP:.0%} slippage + {FEE:.1%} fee each side",
+           "counts": {"predictions": len(rows), "resolved": len(res),
+                      "pending": sum(r["status"] == "PENDING" for r in rows),
+                      "unresolvable": sum(r["status"] == "UNRESOLVABLE" for r in rows),
+                      "model_updates": model.n, "scored_after_warmup": len(scored)},
+           "model": {"learned_win_rate_pct": round(100 * model.wins / model.n, 1) if model.n else None,
+                     "avg_win_net_pct": round(model.avg_win(), 2), "avg_loss_net_pct": round(model.avg_loss(), 2),
+                     "top_positive_signals": [], "top_negative_signals": []}}
+    ranked = sorted(model.w.items(), key=lambda kv: kv[1])
+    out["model"]["top_positive_signals"] = [{"feature": k, "weight": round(v, 3)} for k, v in ranked[::-1][:6] if v > 0]
+    out["model"]["top_negative_signals"] = [{"feature": k, "weight": round(v, 3)} for k, v in ranked[:6] if v < 0]
+
+    # Accuracy: prequential scores vs an honest baseline that also only knew the past (running win rate).
+    wins_so_far = 0
+    for i, r in enumerate(res):
+        r["baseline_p"] = (wins_so_far + PRIOR_WIN_RATE * 10) / (i + 10)
+        wins_so_far += r["won"]
+    b, b0 = _brier(scored), _brier(scored, lambda r: r["baseline_p"])
+    out["accuracy"] = {"brier": _r(b), "baseline_brier": _r(b0),
+                       "skill_vs_baseline_pct": _r(100 * (1 - b / b0), 1) if b is not None and b0 else None,
+                       "auc": _r(_auc(scored), 3),
+                       "hit_rate_at_50pct": _r(sum((r["p_win"] >= .5) == bool(r["won"]) for r in scored) / len(scored), 3)
+                       if scored else None}
+    windows = []
+    size = max(25, len(scored) // 6) if scored else 0
+    for i in range(0, len(scored), size or 1):
+        w = scored[i:i + size]
+        if len(w) >= 10:
+            bw, bw0 = _brier(w), _brier(w, lambda r: r["baseline_p"])
+            windows.append({"from": w[0]["predicted_at"], "n": len(w), "brier": _r(bw),
+                            "skill_vs_baseline_pct": _r(100 * (1 - bw / bw0), 1) if bw0 else None, "auc": _r(_auc(w), 3)})
+    out["learning_curve"] = windows
+    buckets = []
+    for lo in (0, .1, .2, .3, .4, .5, .7):
+        hi = {0: .1, .1: .2, .2: .3, .3: .4, .4: .5, .5: .7, .7: 1.01}[lo]
+        w = [r for r in scored if lo <= r["p_win"] < hi]
+        if w:
+            buckets.append({"predicted": f"{lo:.0%}-{min(hi, 1):.0%}", "n": len(w),
+                            "avg_predicted_pct": round(100 * sum(r["p_win"] for r in w) / len(w), 1),
+                            "actual_win_pct": round(100 * sum(r["won"] for r in w) / len(w), 1)})
+    out["calibration"] = buckets
+
+    picks = [r for r in scored if r["would_trade"]]
+    bot = [r for r in scored if r["bot_decision"] == TRADED]
+    out["policies"] = {"buy_every_discovery": _policy(scored), "predictor_picks": _policy(picks),
+                       "bot_paper_entries": _policy(bot),
+                       "bot_entries_predictor_would_skip": _policy([r for r in bot if not r["would_trade"]]),
+                       "bot_entries_predictor_agreed": _policy([r for r in bot if r["would_trade"]]),
+                       "predictor_picks_bot_rejected": _policy([r for r in picks if r["bot_decision"] != TRADED])}
+    out["suggestions"] = suggestions(out, model)
+    out["recent_lessons"] = [{"token": r["token"], "at": r["resolved_at"], "lesson": r["lesson"]}
+                             for r in res[::-1] if r["lesson"]][:10]
+    out["recent_predictions"] = [{k: (_r(r[k], 3) if isinstance(r[k], float) else r[k]) for k in
+                                  ("token", "predicted_at", "p_win", "expected_net_return_pct", "would_trade",
+                                   "bot_decision", "status", "actual_reason", "actual_net_return_pct", "won")}
+                                 for r in rows[::-1][:recent_n]]
+    return out
+
+
+def suggestions(rep, model):
+    """Plain-language next steps drawn only from resolved, post-warm-up predictions."""
+    s, acc, pol = [], rep["accuracy"], rep["policies"]
+    n = rep["counts"]["scored_after_warmup"]
+    if n < 100:
+        s.append(f"Still learning: {n} scored outcomes so far. Treat everything below as provisional until ~100+.")
+    if acc["skill_vs_baseline_pct"] is not None:
+        if acc["skill_vs_baseline_pct"] <= 0:
+            s.append("Predictions are not yet beating the plain running win rate. The recorded features may not "
+                     "carry enough signal; new inputs (holder growth, order flow, social velocity) are the next lever.")
+        else:
+            s.append(f"Predictions beat the running win rate by {acc['skill_vs_baseline_pct']}% (Brier skill).")
+    curve = rep["learning_curve"]
+    if len(curve) >= 3 and all(w["skill_vs_baseline_pct"] is not None for w in (curve[0], curve[-1])):
+        trend = curve[-1]["skill_vs_baseline_pct"] - curve[0]["skill_vs_baseline_pct"]
+        s.append(f"Skill {'improved' if trend > 0 else 'declined'} by {abs(trend):.1f} points from the first to the "
+                 f"latest window{'' if trend > 0 else ' - the market may have shifted; recent outcomes carry the most weight'}.")
+    skip, agree = pol["bot_entries_predictor_would_skip"], pol["bot_entries_predictor_agreed"]
+    if skip["n"] >= 5 and agree["n"] >= 5:
+        diff = agree["avg_net_return_pct"] - skip["avg_net_return_pct"]
+        if diff > 0:
+            s.append(f"Bot entries the predictor liked averaged {agree['avg_net_return_pct']:+.1f}% vs "
+                     f"{skip['avg_net_return_pct']:+.1f}% for ones it would skip ({skip['n']} trades). Candidate rule "
+                     f"to test forward: only enter when expected return > 0.")
+        else:
+            s.append("Filtering bot entries by the predictor would not have helped yet; keep it record-only.")
+    elif skip["n"] >= 5:
+        s.append(f"The predictor would have skipped {skip['n']} bot entries, which averaged "
+                 f"{skip['avg_net_return_pct']:+.1f}%.")
+    rejected = pol["predictor_picks_bot_rejected"]
+    if rejected["n"] >= 10 and rejected["avg_net_return_pct"] > 0:
+        s.append(f"{rejected['n']} tokens the bot's gates rejected were predictor picks averaging "
+                 f"{rejected['avg_net_return_pct']:+.1f}%: review which gate blocked them.")
+    worst = max(rep["calibration"], key=lambda b: abs(b["avg_predicted_pct"] - b["actual_win_pct"]) if b["n"] >= 10 else 0,
+                default=None)
+    if worst and worst["n"] >= 10 and abs(worst["avg_predicted_pct"] - worst["actual_win_pct"]) >= 10:
+        way = "overconfident" if worst["avg_predicted_pct"] > worst["actual_win_pct"] else "underconfident"
+        s.append(f"Most {way} around {worst['predicted']} predictions: said {worst['avg_predicted_pct']}%, "
+                 f"got {worst['actual_win_pct']}% (n={worst['n']}).")
+    if rep["model"]["top_positive_signals"]:
+        top = rep["model"]["top_positive_signals"][0]["feature"]
+        s.append(f"Strongest learned win signal: {top}. Strongest warning sign: "
+                 f"{(rep['model']['top_negative_signals'] or [{'feature': 'none yet'}])[0]['feature']}.")
+    return s
+
+
+# ---------------------------------------------------------------- CLI
+
+def self_test():
+    from memecoin_shadow import init_db
+    c = init_db(":memory:")
+    c.execute("CREATE TABLE meme_price_snapshots(id INTEGER PRIMARY KEY,observed_at TEXT,token_address TEXT,"
+              "pair_address TEXT,price REAL,liquidity_usd REAL,volume_1h_usd REAL)")
+    t0 = datetime.now(timezone.utc) - timedelta(hours=3)
+    for i in range(120):
+        seen = t0 + timedelta(minutes=i)
+        good = i % 3 == 0
+        x = {"token": f"T{i}", "token_address": f"a{i}", "price_usd": 1.0, "liquidity_usd": 50000,
+             "volume_accel": 5.0 if good else 0.3, "observed_at": seen.isoformat()}
+        c.execute("INSERT INTO meme_candidates(id,seen_at,token,eligible,raw_json,token_address) VALUES(?,?,?,?,?,?)",
+                  (i + 1, seen.isoformat(), x["token"], 1, json.dumps(x), x["token_address"]))
+        c.execute("INSERT INTO meme_price_snapshots(observed_at,token_address,price) VALUES(?,?,?)",
+                  ((seen + timedelta(minutes=5)).isoformat(), x["token_address"], 1.4 if good else 0.8))
+    c.commit()
+    r = catch_up(c)
+    assert r["caught_up"] and r["resolved"] == 120, r
+    rep = report(c)
+    assert rep["counts"]["resolved"] == 120
+    assert rep["model"]["top_positive_signals"][0]["feature"] == "volume_accel", rep["model"]
+    assert rep["accuracy"]["auc"] > .9, rep["accuracy"]
+    assert step(c)["predicted"] == 0
+    c.close()
+    print("memecoin predictor self-test passed")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--db", default=DB)
+    ap.add_argument("--report", action="store_true", help="print the full JSON report")
+    ap.add_argument("--self-test", action="store_true")
+    a = ap.parse_args()
+    if a.self_test:
+        return self_test()
+    from memecoin_shadow import init_db
+    c = init_db(a.db)  # the default path uses PostgreSQL when DATABASE_URL is set
+    try:
+        print({"meme_predictor_step": catch_up(c)})
+        rep = report(c)
+        if a.report:
+            print(json.dumps(rep, indent=1))
+        else:
+            print({"counts": rep["counts"], "accuracy": rep["accuracy"]})
+            for line in rep["suggestions"]:
+                print("-", line)
+    finally:
+        c.close()
+
+
+if __name__ == "__main__":
+    main()

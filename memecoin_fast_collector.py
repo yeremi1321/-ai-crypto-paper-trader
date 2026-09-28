@@ -18,13 +18,15 @@ from memecoin_trade_analysis import run as analyze_paper_history
 import memecoin_entry_analysis
 import memecoin_exit_replay
 import memecoin_candidate_study
+import memecoin_predictor
 
 DISCOVERY_SECONDS=float(os.getenv("MEME_DISCOVERY_SECONDS","30"))
 REFRESH_SECONDS=float(os.getenv("MEME_REFRESH_SECONDS","30"))
 OPEN_REFRESH_SECONDS=10.0
 PORT=int(os.getenv("PORT","10000"))
 STATE={"started_at":datetime.now(timezone.utc).isoformat(),"cycles":0,"last_discovery":None,"last_refresh":None,"last_error":None,
-       "last_open_refresh":None,"open_refresh_cycles":0,"last_open_error":None}
+       "last_open_refresh":None,"open_refresh_cycles":0,"last_open_error":None,
+       "last_prediction":None,"last_prediction_error":None}
 ANALYSIS_CACHE_SECONDS=120.0
 _ANALYSIS={"at":0.0,"summary":None,"trades":None}
 _ANALYSIS_LOCK=threading.Lock()
@@ -33,6 +35,8 @@ _REPLAY={"at":0.0,"result":None}
 _REPLAY_LOCK=threading.Lock()
 _STUDY={"at":0.0,"result":None}
 _STUDY_LOCK=threading.Lock()
+_PREDICT={"at":0.0,"result":None}
+_PREDICT_LOCK=threading.Lock()
 
 def db_stats():
     out={"db_connected":False,"observations":0,"eligible":0,"rejected":0,"unique_tokens":0,"snapshots":0,"paper_open":0,"paper_closed":0,"paper_wins":0,"paper_losses":0,"realized_pnl_usd":0.0}
@@ -131,6 +135,29 @@ def candidate_study():
             _STUDY.update(at=time.monotonic(),result=result)
         return _STUDY["result"]
 
+def prediction_report():
+    """Read-only predictor report, cached for two minutes."""
+    with _PREDICT_LOCK:
+        if _PREDICT["result"] is None or time.monotonic()-_PREDICT["at"]>ANALYSIS_CACHE_SECONDS:
+            c=init_db()
+            try:
+                result=memecoin_predictor.report(c)
+            finally:
+                c.close()
+            _PREDICT.update(at=time.monotonic(),result=result)
+        return _PREDICT["result"]
+
+def predict_and_learn():
+    """Record predictions for new discoveries and learn from matured outcomes. Never trades."""
+    c=init_db()
+    try:
+        result=memecoin_predictor.step(c)
+    finally:
+        c.close()
+    STATE["last_prediction"]=datetime.now(timezone.utc).isoformat()
+    STATE["last_prediction_error"]=None
+    return result
+
 def collector(stop=None):
     next_discovery=0.0; next_refresh=0.0
     while not (stop and stop.is_set()):
@@ -145,6 +172,11 @@ def collector(stop=None):
                 next_refresh=now+REFRESH_SECONDS
                 update_outcomes(exclude_open=True)
                 STATE["last_refresh"]=datetime.now(timezone.utc).isoformat()
+                try:
+                    predict_and_learn()
+                except Exception as e:
+                    STATE["last_prediction_error"]=repr(e)
+                    print(f"::warning::predictor step failed: {e}",flush=True)
             STATE["cycles"]+=1
             STATE["last_error"]=None
         except Exception as e:
@@ -174,7 +206,12 @@ def open_position_watcher(stop=None,interval=None):
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
         path=self.path.split("?",1)[0]
-        if path=="/paper-candidate-study":
+        if path=="/paper-predictions":
+            try:
+                payload=prediction_report(); code=200
+            except Exception as e:
+                payload={"status":"unavailable","error":type(e).__name__}; code=503
+        elif path=="/paper-candidate-study":
             try:
                 payload=candidate_study(); code=200
             except Exception as e:

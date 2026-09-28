@@ -51,3 +51,21 @@ runs weekly. Research output is stored separately in `research_shadow.db` and
 ## Important
 GitHub scheduled workflows can be delayed and can be disabled after long inactivity on public repositories.
 This is a research collector, not an execution engine or guaranteed real-time alerting service.
+
+## Memecoin predictor (predict → observe → learn)
+`memecoin_predictor.py` is record-only: it never places or blocks a paper trade.
+- **Predict:** at discovery it stores the chance that buying now under the live paper
+  rules (+20% target, −10% stop, 20-minute hold, 1% slippage + 0.6% fee each side)
+  ends as a net win, the expected net return, and whether it would take the trade.
+- **Observe:** once recorded prices decide the trade, the actual result is stored beside
+  the prediction (`meme_predictions`).
+- **Learn:** an online logistic model updates from each outcome only after it happened,
+  so every score is out-of-sample. Confident misses get a one-line lesson naming the
+  signals that misled it. Model state lives in `meme_predictor_state`.
+- **Report:** `python memecoin_predictor.py --report`, the collector's
+  `/paper-predictions` endpoint, and the dashboard's 🔮 Predictions tab show accuracy
+  vs. the running win rate, a learning curve, calibration, how its picks compare with
+  the bot's paper entries, learned signals, and suggestions. Nothing is promoted into
+  the live rules automatically.
+
+A fresh model first replays the last 7 days of discoveries oldest-first, in 6-hour steps.

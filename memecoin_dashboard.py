@@ -7,6 +7,7 @@ import streamlit as st
 
 SUMMARY_URL=os.getenv("MEME_PAPER_SUMMARY_URL",
     "https://meme-fast-paper-trader.onrender.com/paper-summary")
+PREDICTIONS_URL=os.getenv("MEME_PREDICTIONS_URL",SUMMARY_URL.rsplit("/",1)[0]+"/paper-predictions")
 
 st.set_page_config(page_title="Memecoin Paper Trader",page_icon="🚀",layout="wide")
 st.title("🚀 Meme Command Center")
@@ -20,6 +21,15 @@ def live_summary():
     payload=response.json()
     if payload.get("mode")!="paper_trading" or not isinstance(payload.get("totals"),dict):
         raise ValueError("Paper service returned an invalid summary")
+    return payload
+
+@st.cache_data(ttl=60,show_spinner=False)
+def prediction_report():
+    response=requests.get(PREDICTIONS_URL,timeout=40)
+    response.raise_for_status()
+    payload=response.json()
+    if payload.get("mode")!="paper_research":
+        raise ValueError("Predictor returned an invalid report")
     return payload
 
 try:
@@ -47,7 +57,7 @@ st.caption("MEME_PAPER_V1 • $100 simulated positions • +20% target • -10% 
 recent=pd.DataFrame(data.get("recent_trades") or [])
 open_positions=pd.DataFrame(data.get("open_positions") or [])
 curve=pd.DataFrame(data.get("closed_pnl_series") or [])
-tab1,tab2,tab3=st.tabs(["⚡ Live","📈 Performance","🧾 History"])
+tab1,tab2,tab3,tab4=st.tabs(["⚡ Live","📈 Performance","🧾 History","🔮 Predictions"])
 
 with tab1:
     st.subheader("Open positions")
@@ -78,6 +88,53 @@ with tab3:
         cols=[x for x in ["token","opened_at","closed_at","entry_price","exit_price","exit_reason","net_return_pct","net_pnl_usd","mfe_pct","mae_pct"] if x in closed]
         st.dataframe(closed[cols],use_container_width=True,hide_index=True)
         st.caption("Showing the most recent 300 positions; totals and chart use all closed positions.")
+
+with tab4:
+    st.subheader("Predict → observe → learn")
+    try:
+        pred=prediction_report()
+    except (requests.RequestException,ValueError) as exc:
+        pred=None
+        st.info("Predictor report is not available yet.")
+        st.caption(f"Connection: {type(exc).__name__}")
+    if pred:
+        counts,acc=pred["counts"],pred["accuracy"]
+        st.caption(f"{pred['version']} • {pred['rule']} • record-only, never changes paper entries")
+        p1,p2,p3,p4,p5=st.columns(5)
+        p1.metric("Predictions",counts["predictions"])
+        p2.metric("Learned from",counts["model_updates"])
+        p3.metric("Pending",counts["pending"])
+        p4.metric("Skill vs base rate",f"{acc['skill_vs_baseline_pct']:+.1f}%" if acc.get("skill_vs_baseline_pct") is not None else "—")
+        p5.metric("AUC",f"{acc['auc']:.2f}" if acc.get("auc") is not None else "—")
+        st.markdown("**What it thinks it can do better**")
+        for line in pred.get("suggestions") or ["Waiting for outcomes."]:
+            st.markdown(f"- {line}")
+        left,right=st.columns(2)
+        with left:
+            st.markdown("**Would its picks have beaten the bot?**")
+            pol=pd.DataFrame([{"policy":k.replace("_"," "),**v} for k,v in pred["policies"].items()])
+            st.dataframe(pol,use_container_width=True,hide_index=True)
+            curve=pd.DataFrame(pred.get("learning_curve") or [])
+            if not curve.empty:
+                st.markdown("**Learning curve (skill per time window)**")
+                st.line_chart(curve.set_index("from")["skill_vs_baseline_pct"])
+        with right:
+            st.markdown("**Calibration: said vs actual win %**")
+            cal=pd.DataFrame(pred.get("calibration") or [])
+            if not cal.empty:
+                st.dataframe(cal,use_container_width=True,hide_index=True)
+            signals=pd.DataFrame(pred["model"].get("top_positive_signals",[])+pred["model"].get("top_negative_signals",[]))
+            if not signals.empty:
+                st.markdown("**Learned signals (weight > 0 favours a win)**")
+                st.dataframe(signals,use_container_width=True,hide_index=True)
+        st.markdown("**Recent lessons from confident misses**")
+        lessons=pd.DataFrame(pred.get("recent_lessons") or [])
+        if lessons.empty:
+            st.caption("No confident misses yet.")
+        else:
+            st.dataframe(lessons,use_container_width=True,hide_index=True)
+        st.markdown("**Latest predictions**")
+        st.dataframe(pd.DataFrame(pred.get("recent_predictions") or []),use_container_width=True,hide_index=True)
 
 st.subheader("Recent activity")
 if not recent.empty:

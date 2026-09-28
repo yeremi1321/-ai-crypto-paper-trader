@@ -39,6 +39,9 @@ jobs:
         env:
           GOPLUS_TOKEN: ${{ secrets.GOPLUS_TOKEN }}
         run: python memecoin_discovery.py --limit 30
+      - name: Predict new discoveries and learn from outcomes
+        continue-on-error: true
+        run: python memecoin_predictor.py
       - name: Commit shadow history
         run: |
           git config user.name "memecoin-shadow-scanner"

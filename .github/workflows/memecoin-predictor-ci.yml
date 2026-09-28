@@ -1,0 +1,23 @@
+name: Memecoin Predictor Checks
+on:
+  pull_request:
+    paths:
+      - "memecoin_predictor.py"
+      - "test_memecoin_predictor.py"
+      - "memecoin_candidate_study.py"
+      - "memecoin_fast_collector.py"
+      - "memecoin_dashboard.py"
+      - "research_worker.py"
+      - ".github/workflows/memecoin-predictor-ci.yml"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest
+      - run: python -m py_compile memecoin_predictor.py memecoin_fast_collector.py memecoin_dashboard.py research_worker.py
+      - run: python memecoin_predictor.py --self-test
+      - run: python -m pytest -q test_memecoin_predictor.py test_memecoin_candidate_study.py

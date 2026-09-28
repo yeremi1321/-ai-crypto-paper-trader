@@ -29,6 +29,9 @@ jobs:
         run: python memecoin_outcomes.py
       - name: Update memecoin paper positions
         run: python memecoin_paper.py
+      - name: Predict new discoveries and learn from outcomes
+        continue-on-error: true
+        run: python memecoin_predictor.py
       - name: Commit snapshot history
         run: |
           git config user.name "memecoin-snapshot-collector"

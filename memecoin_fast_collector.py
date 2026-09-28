@@ -18,6 +18,7 @@ from memecoin_trade_analysis import run as analyze_paper_history
 import memecoin_entry_analysis
 import memecoin_exit_replay
 import memecoin_candidate_study
+import memecoin_predictor
 import research_worker
 
 DISCOVERY_SECONDS=float(os.getenv("MEME_DISCOVERY_SECONDS","30"))
@@ -25,7 +26,8 @@ REFRESH_SECONDS=float(os.getenv("MEME_REFRESH_SECONDS","30"))
 OPEN_REFRESH_SECONDS=10.0
 PORT=int(os.getenv("PORT","10000"))
 STATE={"started_at":datetime.now(timezone.utc).isoformat(),"cycles":0,"last_discovery":None,"last_refresh":None,"last_error":None,
-       "last_open_refresh":None,"open_refresh_cycles":0,"last_open_error":None}
+       "last_open_refresh":None,"open_refresh_cycles":0,"last_open_error":None,
+       "last_prediction":None,"last_prediction_error":None}
 ANALYSIS_CACHE_SECONDS=120.0
 _ANALYSIS={"at":0.0,"summary":None,"trades":None}
 _ANALYSIS_LOCK=threading.Lock()
@@ -132,6 +134,17 @@ def candidate_study():
             _STUDY.update(at=time.monotonic(),result=result)
         return _STUDY["result"]
 
+def predict_and_learn():
+    """Record predictions for new discoveries and learn from matured outcomes. Never trades."""
+    c=init_db()
+    try:
+        result=memecoin_predictor.step(c)
+    finally:
+        c.close()
+    STATE["last_prediction"]=datetime.now(timezone.utc).isoformat()
+    STATE["last_prediction_error"]=None
+    return result
+
 def collector(stop=None):
     next_discovery=0.0; next_refresh=0.0
     while not (stop and stop.is_set()):
@@ -146,6 +159,11 @@ def collector(stop=None):
                 next_refresh=now+REFRESH_SECONDS
                 update_outcomes(exclude_open=True)
                 STATE["last_refresh"]=datetime.now(timezone.utc).isoformat()
+                try:
+                    predict_and_learn()
+                except Exception as e:
+                    STATE["last_prediction_error"]=repr(e)
+                    print(f"::warning::predictor step failed: {e}",flush=True)
             STATE["cycles"]+=1
             STATE["last_error"]=None
         except Exception as e:

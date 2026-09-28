@@ -5,7 +5,7 @@ this worker recomputes every study on a timer in one background thread and the p
 finished result instantly. Jobs run one at a time, spaced out, to keep load on the service and database low.
 
 Paths served: /paper-analysis, /paper-analysis-trades, /paper-exit-replay, /paper-candidate-study,
-/paper-runner-study
+/paper-runner-study, /paper-predictions
 """
 import threading
 import time
@@ -28,6 +28,7 @@ def default_jobs():
     """name -> callable returning {path: payload}. Imports are lazy so tests can inject their own jobs."""
     from memecoin_shadow import init_db
     import memecoin_entry_analysis, memecoin_exit_replay, memecoin_candidate_study, memecoin_runner_study
+    import memecoin_predictor
 
     def with_conn(fn):
         def run():
@@ -47,11 +48,12 @@ def default_jobs():
         "exit_replay": with_conn(lambda c: {"/paper-exit-replay": memecoin_exit_replay.run(c, _now())}),
         "candidate_study": with_conn(lambda c: {"/paper-candidate-study": memecoin_candidate_study.run(c, _now())}),
         "runner_study": with_conn(lambda c: {"/paper-runner-study": memecoin_runner_study.run(c, _now())}),
+        "predictions": with_conn(lambda c: {"/paper-predictions": memecoin_predictor.report(c)}),
     }
 
 
 PATHS = {"/paper-analysis", "/paper-analysis-trades", "/paper-exit-replay", "/paper-candidate-study",
-         "/paper-runner-study"}
+         "/paper-runner-study", "/paper-predictions"}
 
 
 def run_once(jobs):

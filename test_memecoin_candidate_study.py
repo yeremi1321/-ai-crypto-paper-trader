@@ -77,20 +77,25 @@ def test_feature_edge_found_only_when_it_survives_holdout():
 
 
 def test_endpoint_read_only_and_cached():
+    """Pages are served from the background worker's cache; computing never happens on request or writes."""
+    import research_worker as rw
+    import memecoin_shadow
     with tempfile.TemporaryDirectory() as d:
         path = str(Path(d) / "e.db"); _db(path)
-        calls = []; real = cs.run
-        fc._STUDY.update(at=0.0, result=None)
-        with patch.object(fc, "init_db", lambda: init_db(path)), \
-             patch.object(fc.memecoin_candidate_study, "run", lambda c, a: (calls.append(1), real(c, a))[1]):
-            server = HTTPServer(("127.0.0.1", 0), fc.Health)
-            threading.Thread(target=server.serve_forever, daemon=True).start()
-            url = f"http://127.0.0.1:{server.server_address[1]}/paper-candidate-study"
-            before = Path(path).read_bytes()
-            r = json.load(urllib.request.urlopen(url)); json.load(urllib.request.urlopen(url))
-            server.shutdown()
-            assert Path(path).read_bytes() == before
-    assert r["mode"] == "read_only_candidate_study" and len(calls) == 1
+        real_init = memecoin_shadow.init_db
+        rw._results.clear()
+        before = Path(path).read_bytes()
+        with patch.object(memecoin_shadow, "init_db", lambda p=None: real_init(path)):
+            jobs = rw.default_jobs()
+            list(rw.run_once({"candidate_study": jobs["candidate_study"]}))
+        after = Path(path).read_bytes()
+        server = HTTPServer(("127.0.0.1", 0), fc.Health)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        r = json.load(urllib.request.urlopen(base + "/paper-candidate-study?v=1"))
+        server.shutdown()
+    assert before == after, "research must not modify the database"
+    assert r["mode"] == "read_only_candidate_study" and "_computed_at" in r
 
 
 def test_liquidity_aware_costs():
@@ -107,10 +112,34 @@ def test_liquidity_aware_costs():
     assert la < out["gate_audit"]["all_tokens"]["avg_net_return_pct"]
 
 
+def test_hot_period_alone_is_not_a_candidate():
+    """If every holdout token wins (a hot market), a feature that doesn't beat the baseline is not a candidate."""
+    with tempfile.TemporaryDirectory() as d:
+        path = str(Path(d) / "hot.db")
+        c = init_db(path); migrate(c)
+        c.execute("""CREATE TABLE IF NOT EXISTS meme_price_snapshots(id INTEGER PRIMARY KEY AUTOINCREMENT,observed_at TEXT NOT NULL,
+            token_address TEXT NOT NULL,pair_address TEXT,price REAL NOT NULL,liquidity_usd REAL,volume_1h_usd REAL)""")
+        n = 40; cut = int(n * cs.TRAIN_FRACTION)
+        for i in range(n):
+            tok = f"H{i:02d}"; start = i * 3000
+            good = (i % 2 == 1) if i < cut else True      # holdout: everything wins
+            x = {"token": tok, "token_address": tok, "price_usd": 1.0, "liquidity_usd": 60000,
+                 "noise": 1.0 if i % 2 else 0.0}
+            c.execute("""INSERT INTO meme_candidates(seen_at,version,token,chain,score,eligible,blocked_reasons,raw_json,token_address)
+                VALUES(?,?,?,?,?,?,?,?,?)""", (iso(start), "V", tok, "solana", 70, 1, "[]", json.dumps(x), tok))
+            for s_, p_ in ([(30, 1.1), (60, 1.25)] if good else [(30, 0.95), (60, 0.70)]):
+                c.execute("INSERT INTO meme_price_snapshots(observed_at,token_address,price) VALUES(?,?,?)", (iso(start + s_), tok, p_))
+        c.commit(); out = cs.run(c, "now"); c.close()
+    ft = out["feature_test"]
+    assert ft["features"]["noise"]["holdout_kept"]["avg_net_return_pct"] > 0      # looks "profitable"...
+    assert not any("noise" in x for x in ft["candidates"])                          # ...but is not a candidate
+
+
 if __name__ == "__main__":
     test_live_rule_parity()
     test_gate_audit_and_first_observation_only()
     test_feature_edge_found_only_when_it_survives_holdout()
     test_endpoint_read_only_and_cached()
     test_liquidity_aware_costs()
+    test_hot_period_alone_is_not_a_candidate()
     print("candidate study tests passed")

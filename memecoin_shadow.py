@@ -6,6 +6,11 @@ DB="memecoin_shadow.db"; VERSION="MEME_SHADOW_V2" # deploy-sync d545183
 PAPER_NOTIONAL_USD=100.0; PAPER_FEE_RATE=.006; PAPER_SLIPPAGE_RATE=.01
 MAX_OPEN_PAPER_POSITIONS=5
 REENTRY_LOOKBACK=timedelta(minutes=5)
+# Paper trial (owner-approved 2026-09-27): take only the first trade on each token.
+# Pre-registered no_reentry_first_trade_only was SUPPORTED on tokens first traded after 06:30Z
+# (-$14.85/token vs -$23.77 live, beat live in 99.8% of bootstrap samples). Set True to roll back
+# to the stop-reclaim re-entry rules below.
+ALLOW_REENTRY=False
 
 def fresh_reentry(conn,token,price,closed_at,pg,now):
  """Allow a new leg after a close when price breaks recent observed highs.
@@ -103,11 +108,18 @@ def record(conn,x,result):
    entry_veto="TOKEN_ALREADY_OPEN"
   else:
    recent=conn.execute(f"SELECT closed_at,exit_reason,entry_market_price FROM meme_paper_trades WHERE token_address={ph} AND status='CLOSED' ORDER BY id DESC LIMIT 1",(x["token_address"],)).fetchone()
-   if recent and not fresh_reentry(conn,x["token_address"],x["price_usd"],recent[0],pg,datetime.fromisoformat(now)):
+   if recent and not ALLOW_REENTRY:
+    entry_veto="NO_REENTRY_TRIAL"
+   elif recent and not fresh_reentry(conn,x["token_address"],x["price_usd"],recent[0],pg,datetime.fromisoformat(now)):
     entry_veto="NO_FRESH_REENTRY_SETUP"
    elif recent and not stop_reclaimed(recent[1],recent[2],x["price_usd"]):
     entry_veto="STOP_NOT_RECLAIMED"
-  entry_allowed=entry_veto is None
+ entry_allowed=entry_allowed and entry_veto is None
+ # The scheduled discovery workflow pauses simulated portfolio entries while
+ # retaining candidate and forward-outcome records for research.
+ if entry_allowed and os.environ.get("MEME_PAPER_ENTRY_ENABLED", "1") == "0":
+  entry_veto="RESEARCH_PAUSE"
+  entry_allowed=False
  sql="""INSERT INTO meme_candidates(seen_at,version,token,chain,score,eligible,blocked_reasons,raw_json,token_address,pair_address) VALUES(?,?,?,?,?,?,?,?,?,?)"""
  if pg: sql=sql.replace("?","%s")+" RETURNING id"
  cur=conn.execute(sql,(now,VERSION,x.get("token"),x.get("chain"),result["score"],int(result["eligible"]),json.dumps(result["blocked_reasons"]),json.dumps(x),x.get("token_address"),x.get("pair_address")))
@@ -158,14 +170,15 @@ def self_test():
  c.execute("UPDATE meme_paper_trades SET status='CLOSED',closed_at=?,exit_market_price=?",(datetime.now(timezone.utc).isoformat(),.02))
  c.execute("CREATE TABLE meme_price_snapshots(observed_at TEXT,token_address TEXT,price REAL)")
  c.commit()
- record(c,x,evaluate(x))
- assert c.execute("select count(*) from meme_paper_trades").fetchone()[0]==1
- assert c.execute("select decision,vetoes from meme_decision_ledger order by id desc limit 1").fetchone()==("PAPER_ENTRY_BLOCKED",'["NO_FRESH_REENTRY_SETUP"]')
  for p in (.0101,.0102):
   c.execute("INSERT INTO meme_price_snapshots VALUES(?,?,?)",(datetime.now(timezone.utc).isoformat(),x["token_address"],p))
  c.commit()
  fresh=dict(x,price_usd=.0105)
- record(c,fresh,evaluate(fresh))
+ record(c,fresh,evaluate(fresh))  # no-re-entry trial: even a fresh breakout is not re-bought
+ assert c.execute("select count(*) from meme_paper_trades").fetchone()[0]==1
+ assert c.execute("select decision,vetoes from meme_decision_ledger order by id desc limit 1").fetchone()==("PAPER_ENTRY_BLOCKED",'["NO_REENTRY_TRIAL"]')
+ other=dict(x,token_address="other",pair_address="pair2")
+ record(c,other,evaluate(other))  # a token never traded before still enters
  assert c.execute("select count(*) from meme_paper_trades").fetchone()[0]==2
  bad=dict(x); bad["liquidity_usd"]=10; record(c,bad,evaluate(bad))
  assert c.execute("select count(*) from meme_decision_ledger where decision='REJECT'").fetchone()[0]==1

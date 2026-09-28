@@ -1,0 +1,42 @@
+name: Memecoin Research Pages Checks
+on:
+  pull_request:
+    paths:
+      - "research_worker.py"
+      - "memecoin_candidate_study.py"
+      - "memecoin_exit_replay.py"
+      - "memecoin_entry_analysis.py"
+      - "attention.py"
+      - "market_regime.py"
+      - "memecoin_runner_study.py"
+      - "memecoin_fast_collector.py"
+      - "memecoin_shadow.py"
+      - "memecoin_paper.py"
+      - "test_research_worker.py"
+      - "test_memecoin_candidate_study.py"
+      - "test_memecoin_exit_replay.py"
+      - "test_memecoin_entry_analysis.py"
+      - "test_attention.py"
+      - "test_market_regime.py"
+      - "test_memecoin_stop_reentry.py"
+      - "test_memecoin_runner_study.py"
+      - ".github/workflows/memecoin-research-pages-ci.yml"
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python test_research_worker.py
+      - run: python test_memecoin_candidate_study.py
+      - run: python test_memecoin_exit_replay.py
+      - run: python test_memecoin_entry_analysis.py
+      - run: python test_attention.py
+      - run: python test_market_regime.py
+      - run: python test_memecoin_stop_reentry.py
+      - run: python test_memecoin_runner_study.py
+      - run: python memecoin_shadow.py --self-test

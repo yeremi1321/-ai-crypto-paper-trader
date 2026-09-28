@@ -28,6 +28,9 @@ paper test without deleting the original 22-trade baseline.
   daily realized-loss cutoff.
 - V4 trades remain visible as the baseline; V5 win rate, P/L, expectancy, and
   drawdown are reported separately.
+- New simulated portfolio entries are paused after negative held-out research.
+  The scanner continues collecting signals and shadow outcomes; see
+  `RESEARCH_STATUS.md` for the evidence and restart criteria.
 - Real-money trading is not included.
 
 ## Install

@@ -41,6 +41,31 @@ REALISTIC_MIN_LIQ = 20000.0
 FORWARD_START = "2026-09-26T09:29:00"   # data after this was never used to form any hypothesis
 REGIME_FIELD = "sol_ret_60m_pct"
 
+# Pre-registered hypotheses. Each is written down with a FIXED rule before the data that judges it exists,
+# and is evaluated only on tokens first discovered after its registration time, with realistic costs,
+# in pools >= $20k. Never edit a rule after registration; add a new hypothesis instead.
+MIN_VERDICT_N = 30
+HYPOTHESES = [
+    {"name": "anti_frenzy_buy_ratio_5m",
+     "registered_at": "2026-09-26T20:30:00",
+     "statement": "Tokens where <=60% of the last 5 minutes' trades are buys at discovery beat the rest, and are profitable.",
+     "field": "attn_buy_ratio_5m", "op": "<=", "value": 0.6},
+    {"name": "sol_rising_60m",
+     "registered_at": "2026-09-26T09:44:00",
+     "statement": "Tokens discovered while SOL is up more than 0.5% over the last hour beat the rest, and are profitable.",
+     "field": "sol_ret_60m_pct", "op": ">", "value": 0.5},
+    {"name": "busy_tradeable_makers",
+     "registered_at": "2026-09-27T02:00:00",
+     "statement": "In pools >= $20k, tokens with more than 2,400 one-hour traders (buys+sells) at discovery beat the rest, and are profitable.",
+     "field": "makers", "op": ">", "value": 2400},
+    {"name": "young_pairs_30m",
+     "registered_at": "2026-09-27T08:15:00",
+     "statement": "In pools >= $20k, tokens whose pair is at most 30 minutes old at discovery beat the rest, and are profitable.",
+     "motivation": "newer half beat older half in the 09-26 forward test; 'pair_created_at >' feature candidate 09-27 07:33Z. "
+                   "30 min ~ median pair age of >=$20k pools in the scanner data.",
+     "field": "pair_age_min", "op": "<=", "value": 30},
+]
+
 
 def impact(liquidity_usd):
     """Approximate constant-product price impact of a $100 order: ~2*order/pool liquidity, capped at 50%."""
@@ -125,6 +150,9 @@ def build_rows(firsts, snaps, traded, liquidity_aware=False):
         feats = {k: float(v) for k, v in x.items()
                  if k not in SKIP_FIELDS and isinstance(v, (int, float)) and not isinstance(v, bool)}
         feats["score"] = float(score) if score is not None else None
+        # Pair age at discovery; the raw pair_created_at timestamp mostly measures WHEN a token was seen.
+        feats["pair_age_min"] = (s.timestamp() * 1000 - feats["pair_created_at"]) / 60000 \
+            if feats.get("pair_created_at") else None
         rows.append({"token_address": addr, "seen_at": seen, "entry_liquidity_usd": entry_liq, "eligible": bool(eligible), "blocked": reasons,
                      "traded": addr in traded, "reason": reason, "net": net, "max_up": max_up, "feats": feats})
     return rows, incomplete, no_price
@@ -198,7 +226,9 @@ def feature_test(rows, seed=11, prefix=None):
                "train_kept": ta if keep is above else tb, "holdout_kept": hk,
                "holdout_bootstrap_pct_beats_baseline": beats, "holdout_bootstrap_pct_positive": positive}
         out["features"][f] = res
-        if hk.get("n") and (hk["avg_net_return_pct"] or -1) > 0 and (positive or 0) >= 90:
+        # A candidate must beat simply buying everything in the same period AND be profitable;
+        # "profitable" alone is meaningless when the whole holdout period was hot.
+        if hk.get("n") and (hk["avg_net_return_pct"] or -1) > 0 and (positive or 0) >= 90 and (beats or 0) >= 90:
             out["candidates"].append(res["rule_chosen_on_train"])
     return out
 
@@ -231,6 +261,39 @@ def _forward(real):
                           "feature_test": feature_test(attn, prefix="attn_") if len(attn) >= 20 else {"skipped": f"only {len(attn)} tokens so far"}}}
 
 
+def _preregistered(real, seed=23):
+    rng = random.Random(seed)
+    out = []
+    for h in HYPOTHESES:
+        pool = [r for r in real if r["seen_at"] >= h["registered_at"] and (r["entry_liquidity_usd"] or 0) >= REALISTIC_MIN_LIQ
+                and r["feats"].get(h["field"]) is not None]
+        v = h["value"]
+        keep = (lambda r, f=h["field"], v=v: r["feats"][f] <= v) if h["op"] == "<=" else (lambda r, f=h["field"], v=v: r["feats"][f] > v)
+        kept, rest = [r for r in pool if keep(r)], [r for r in pool if not keep(r)]
+        ks, rs = _stats(kept), _stats(rest)
+        beats_all, positive = _bootstrap(pool, keep, rng) if pool else (None, None)
+        if len(kept) < MIN_VERDICT_N or len(rest) < MIN_VERDICT_N:
+            verdict = f"collecting: need {MIN_VERDICT_N}+ tokens on each side (have {len(kept)} / {len(rest)})"
+        elif ks["avg_net_return_pct"] > rs["avg_net_return_pct"] and ks["avg_net_return_pct"] > 0 and (positive or 0) >= 90:
+            verdict = "SUPPORTED: beats the rest and profitable in >=90% of bootstrap samples -> eligible for a paper trial"
+        elif ks["avg_net_return_pct"] <= rs["avg_net_return_pct"]:
+            verdict = "REJECTED: does not beat the rest"
+        else:
+            verdict = "NOT SUPPORTED: beats the rest but not reliably profitable"
+        # Reported alongside the registered verdict (which is never changed after registration): how often the kept
+        # tokens beat ALL tokens of the same period. The registered rule compares averages only.
+        if verdict.startswith("SUPPORTED") and (beats_all or 0) < 90:
+            reliability = f"caution: kept beat all tokens in only {beats_all}% of bootstrap samples; the edge over the rest may be noise"
+        elif verdict.startswith("SUPPORTED"):
+            reliability = f"kept beat all tokens in {beats_all}% of bootstrap samples"
+        else:
+            reliability = None
+        out.append({**h, "tokens_evaluated": len(pool), "kept": ks, "rest": rs,
+                    "kept_bootstrap_pct_positive": positive, "kept_bootstrap_pct_beats_all": beats_all,
+                    "verdict": verdict, "reliability_note": reliability})
+    return out
+
+
 def run(conn, as_of):
     firsts, snaps, traded = load(conn)
     rows, incomplete, no_price = build_rows(firsts, snaps, traded)
@@ -248,6 +311,7 @@ def run(conn, as_of):
                                 "gate_audit": gate_audit(real), "feature_test": feature_test(real)},
             "realistic_pools_only": {"min_entry_liquidity_usd": REALISTIC_MIN_LIQ, "all": _stats(big),
                                      "feature_test": feature_test(big)},
+            "preregistered_hypotheses": _preregistered(real),
             "forward_test": _forward(real),
             "notes": ["Hypothetical entry at each token's FIRST discovery with the live +20/-10/20min rule and live costs.",
                       "Sampled quotes (~30s); real fills on thin pools would likely be worse.",

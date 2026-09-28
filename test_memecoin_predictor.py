@@ -104,3 +104,9 @@ def test_learns_a_real_signal_and_reports():
     assert rep["accuracy"]["skill_vs_baseline_pct"] > 0
     assert rep["policies"]["predictor_picks"]["win_rate_pct"] > rep["policies"]["buy_every_discovery"]["win_rate_pct"]
     assert rep["suggestions"]
+
+
+def test_report_served_by_background_research_worker():
+    import research_worker as rw
+    assert "/paper-predictions" in rw.PATHS
+    assert "predictions" in rw.default_jobs()

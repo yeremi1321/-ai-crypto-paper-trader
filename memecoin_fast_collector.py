@@ -19,6 +19,7 @@ import memecoin_entry_analysis
 import memecoin_exit_replay
 import memecoin_candidate_study
 import memecoin_predictor
+import research_worker
 
 DISCOVERY_SECONDS=float(os.getenv("MEME_DISCOVERY_SECONDS","30"))
 REFRESH_SECONDS=float(os.getenv("MEME_REFRESH_SECONDS","30"))
@@ -35,8 +36,6 @@ _REPLAY={"at":0.0,"result":None}
 _REPLAY_LOCK=threading.Lock()
 _STUDY={"at":0.0,"result":None}
 _STUDY_LOCK=threading.Lock()
-_PREDICT={"at":0.0,"result":None}
-_PREDICT_LOCK=threading.Lock()
 
 def db_stats():
     out={"db_connected":False,"observations":0,"eligible":0,"rejected":0,"unique_tokens":0,"snapshots":0,"paper_open":0,"paper_closed":0,"paper_wins":0,"paper_losses":0,"realized_pnl_usd":0.0}
@@ -135,18 +134,6 @@ def candidate_study():
             _STUDY.update(at=time.monotonic(),result=result)
         return _STUDY["result"]
 
-def prediction_report():
-    """Read-only predictor report, cached for two minutes."""
-    with _PREDICT_LOCK:
-        if _PREDICT["result"] is None or time.monotonic()-_PREDICT["at"]>ANALYSIS_CACHE_SECONDS:
-            c=init_db()
-            try:
-                result=memecoin_predictor.report(c)
-            finally:
-                c.close()
-            _PREDICT.update(at=time.monotonic(),result=result)
-        return _PREDICT["result"]
-
 def predict_and_learn():
     """Record predictions for new discoveries and learn from matured outcomes. Never trades."""
     c=init_db()
@@ -206,11 +193,8 @@ def open_position_watcher(stop=None,interval=None):
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
         path=self.path.split("?",1)[0]
-        if path=="/paper-predictions":
-            try:
-                payload=prediction_report(); code=200
-            except Exception as e:
-                payload={"status":"unavailable","error":type(e).__name__}; code=503
+        if path in research_worker.PATHS:
+            payload,code=research_worker.get(path)
         elif path=="/paper-candidate-study":
             try:
                 payload=candidate_study(); code=200
@@ -256,5 +240,6 @@ if __name__=="__main__":
     except Exception as e:
         print(f"::warning::paper history analysis failed: {e}",flush=True)
     threading.Thread(target=run_paper_watcher,daemon=True,name="paper-two-second-watcher").start()
+    research_worker.start()
     print(f"fast memecoin collector: discovery={DISCOVERY_SECONDS}s refresh={REFRESH_SECONDS}s open_refresh={OPEN_REFRESH_SECONDS}s",flush=True)
     HTTPServer(("0.0.0.0",PORT),Health).serve_forever()

@@ -7,6 +7,7 @@ import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
+from dashboard_data import latest_scanner_db, open_scanner_db
 
 
 
@@ -213,7 +214,16 @@ def performance_summary(frame, group_column):
 
 
 
-conn = sqlite3.connect(DB)
+@st.cache_data(ttl=60, show_spinner=False)
+def committed_scanner_db():
+    return latest_scanner_db()
+
+
+try:
+    conn = open_scanner_db(committed_scanner_db())
+except Exception as exc:
+    st.warning(f"Could not refresh scanner data from GitHub ({exc}). Showing the bundled snapshot.")
+    conn = sqlite3.connect(DB)
 scans = pd.read_sql_query("SELECT * FROM scans ORDER BY id", conn)
 if table_exists(conn, "momentum_tracking"):
     state_events = pd.read_sql_query(
@@ -568,13 +578,17 @@ with st.expander("Recent decisions and paper-trade activity", expanded=False):
         st.info("The activity timeline will fill in after the next scan.")
 
 
-st.subheader("Automatic Paper Trading")
+st.subheader("Paper Trading & Research")
+st.warning(
+    "New paper entries are paused while the strategy is under review. "
+    "Scans and shadow outcomes continue; existing positions still follow exit rules."
+)
 st.caption(
-    "Paper simulation: V5 confirmed entries or V6 early acceleration entries. "
+    "Historical paper simulation: V5 confirmed and V6 early acceleration entries. "
     "Early exits: 1.5% stop • 2.8% target • trail after 2% • 4-hour max. "
     "V5 exits: 3% stop • 4% target • 24-hour maximum hold • "
     "maximum 5 open trades / $500 exposure • "
-    "V5 needs 2 quality scans; early entries trigger on first acceleration • "
+    "V5 needed 2 quality scans; early entries triggered on first acceleration • "
     "loss/profit-aware weakening exit • "
     "2-hour re-entry cooldown • "
     "BTC plus 70% market trend filter for new entries • "
@@ -582,7 +596,7 @@ st.caption(
     "0.6% estimated fee and 0.1% slippage per side"
 )
 if paper_trades.empty:
-    st.info("Waiting for the first CONFIRMED setup to open a simulated trade.")
+    st.info("No paper trades recorded. Research scans continue while entries are paused.")
 else:
     open_trades = paper_trades[paper_trades.status == "OPEN"].copy()
     closed_trades = paper_trades[

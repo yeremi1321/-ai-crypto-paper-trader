@@ -2,6 +2,7 @@
 import json
 import math
 import random
+import random
 from datetime import datetime, timedelta, timezone
 
 import memecoin_candidate_study as study
@@ -152,3 +153,34 @@ def test_v1_history_is_upgraded_without_look_ahead():
     assert abs(ps[0] - mp.PRIOR_SEVERE_RATE) < 1e-9  # the first prediction knew nothing yet
     assert c.execute("SELECT COUNT(*) FROM meme_predictions WHERE severe_loss=1").fetchone()[0] == 20
     assert mp.load_model(c).severe.n == 80  # upgrade runs once
+
+
+def _paper(c, cid, opened, net):
+    c.execute("INSERT INTO meme_paper_trades(candidate_id,opened_at,status,net_return_pct) VALUES(?,?,?,?)",
+              (cid, opened, "CLOSED", net))
+
+
+def _pred(c, cid, at, p_sev):
+    c.execute("INSERT INTO meme_predictions(candidate_id,predicted_at,p_win,p_severe_loss,status) VALUES(?,?,?,?,?)",
+              (cid, at, .3, p_sev, "RESOLVED"))
+
+
+def test_forward_test_only_uses_trades_after_registration_and_judges_them():
+    import memecoin_paper
+    c = db(); mp.init(c); memecoin_paper.migrate(c)
+    reg = datetime.fromisoformat(mp.HYPOTHESES[0]["registered_at"])
+    before = (reg - timedelta(hours=1)).isoformat()
+    _pred(c, 1, before, .9); _paper(c, 1, before, -50)    # pre-registration: must be ignored
+    rng = random.Random(1)
+    for i in range(60):
+        at = (reg + timedelta(minutes=i)).isoformat()
+        risky = i % 4 == 0
+        _pred(c, i + 2, at, .5 if risky else .1)
+        _paper(c, i + 2, at, -35 + rng.uniform(-3, 3) if risky else rng.uniform(-8, 8))
+    c.commit()
+    h = mp.preregistered(c)[0]
+    assert h["every_entry"]["trades"] == 60 and h["skipped"]["trades"] == 15
+    assert h["verdict"].startswith("SUPPORTED"), h
+    c2 = db(); mp.init(c2); memecoin_paper.migrate(c2)
+    _pred(c2, 1, reg.isoformat(), .5); _paper(c2, 1, reg.isoformat(), -30); c2.commit()
+    assert mp.preregistered(c2)[0]["verdict"].startswith("collecting")

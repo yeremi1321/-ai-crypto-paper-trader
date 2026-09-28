@@ -16,4 +16,5 @@ return {
 	Challenge = "Challenge", -- (targetUserId)
 	ChallengeReply = "ChallengeReply", -- (fromUserId, accepted)
 	RespawnCar = "RespawnCar", -- ()
+	Dev = "Dev", -- (command) Studio only: test shortcuts, ignored on live servers
 }

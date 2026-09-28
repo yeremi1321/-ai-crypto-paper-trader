@@ -73,11 +73,25 @@ local function challengeNearest()
 	end
 end
 
+-- Studio-only test keys (the server ignores them on live servers).
+local DEV_KEYS = {
+	[Enum.KeyCode.F6] = "dusk",
+	[Enum.KeyCode.F7] = "meet",
+	[Enum.KeyCode.F8] = "flash",
+	[Enum.KeyCode.F9] = "cash",
+}
+local isStudio = RunService:IsStudio()
+if isStudio then
+	Hud.notify("Studio test keys: F6 dusk, F7 midnight meet, F8 flash race, F9 +$50k", "info")
+end
+
 UserInputService.InputBegan:Connect(function(input, processed)
 	if processed then
 		return
 	end
-	if input.KeyCode == Enum.KeyCode.C or input.KeyCode == Enum.KeyCode.DPadUp then
+	if isStudio and DEV_KEYS[input.KeyCode] then
+		Remotes.Dev:FireServer(DEV_KEYS[input.KeyCode])
+	elseif input.KeyCode == Enum.KeyCode.C or input.KeyCode == Enum.KeyCode.DPadUp then
 		challengeNearest()
 	elseif Hud.hasInvite() and input.KeyCode == Enum.KeyCode.Y then
 		Hud.answerInvite(true)
@@ -86,14 +100,28 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	end
 end)
 
+-- Touch screens get on-screen buttons for everything that isn't steering.
+-- (The default Roblox thumbstick already drives the VehicleSeat.)
+if UserInputService.TouchEnabled then
+	Hud.setTouchControls({
+		handbrake = DriveController.setHandbrake,
+		reset = function()
+			Remotes.RespawnCar:FireServer()
+		end,
+		challenge = challengeNearest,
+	})
+end
+
 RunService.RenderStepped:Connect(function(dt)
 	local car = DriveController.currentCar()
 	local engine = Ambience.updateCars(dt, car)
 	if car and car.PrimaryPart then
 		local vel = car.PrimaryPart.AssemblyLinearVelocity
 		local mph = math.floor(Vector3.new(vel.X, 0, vel.Z).Magnitude * STUDS_TO_MPH + 0.5)
+		Hud.setDriving(true)
 		Hud.setSpeedo(true, mph, engine and engine.gear, car:GetAttribute("Class"), car:GetAttribute("Rating"), car:GetAttribute("CarName"))
 	else
+		Hud.setDriving(false)
 		Hud.setSpeedo(false)
 	end
 	Hud.updateRace()

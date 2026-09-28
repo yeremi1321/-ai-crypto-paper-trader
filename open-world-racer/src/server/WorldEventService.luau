@@ -20,6 +20,10 @@ local WorldEventService = {}
 local MEET_GATHER_SECONDS = 120 -- time to show off builds before the featured race (meet window is ~150s)
 local MEET_RADIUS = 80
 
+-- Studio-only shortcut: shifts the world clock so testers can jump to dusk or
+-- the midnight meet instead of waiting. Always 0 in live servers.
+local timeOffset = 0
+
 local lastFlashKey: string? = nil
 local lastMeetKey: string? = nil
 local lastState = ""
@@ -31,6 +35,12 @@ local function spotById(list: { any }, id: string): any
 		end
 	end
 	return nil
+end
+
+-- `t` is world time (real time + offset); anything a player counts down to
+-- must be converted back to real server time.
+local function toReal(worldT: number): number
+	return worldT - timeOffset
 end
 
 local function worldState(t: number)
@@ -54,7 +64,7 @@ local function worldState(t: number)
 		state.flash = {
 			name = spot.name,
 			event = WorldMap.Events[flash.eventId].name,
-			closesAt = flash.closesAt,
+			closesAt = toReal(flash.closesAt),
 			pos = { x = spot.pos.x, z = spot.pos.z },
 		}
 	end
@@ -66,7 +76,8 @@ local function worldState(t: number)
 end
 
 local function step()
-	local t = Workspace:GetServerTimeNow()
+	local realNow = Workspace:GetServerTimeNow()
+	local t = realNow + timeOffset
 	local state, flash, meet = worldState(t)
 
 	Lighting.ClockTime = state.clock
@@ -82,7 +93,7 @@ local function step()
 				eventId = flash.eventId,
 				kind = "flash",
 				zone = spot.pos,
-				startsAt = flash.closesAt,
+				startsAt = toReal(flash.closesAt),
 				name = `Flash: {spot.name}`,
 			})
 			for _, player in Players:GetPlayers() do
@@ -102,7 +113,7 @@ local function step()
 				kind = "midnight",
 				zone = spot.pos,
 				zoneRadius = MEET_RADIUS,
-				startsAt = t + MEET_GATHER_SECONDS,
+				startsAt = realNow + MEET_GATHER_SECONDS,
 				leadIn = true,
 				name = `Midnight Meet: {WorldMap.Events[meet.featuredEventId].name}`,
 			})
@@ -119,6 +130,30 @@ local function step()
 	if encoded ~= lastState then
 		lastState = encoded
 		ReplicatedStorage:SetAttribute("WorldState", encoded)
+	end
+end
+
+-- Studio testing: jump the world clock forward to the next time it reads `hour`.
+function WorldEventService.skipToHour(hour: number)
+	local t = Workspace:GetServerTimeNow() + timeOffset
+	local ahead = (hour - WorldClock.clockTime(t)) % 24
+	timeOffset += ahead / 24 * WorldClock.DayLength + 1
+end
+
+-- Studio testing: open a flash race right now at a random spot.
+function WorldEventService.flashNow()
+	local spot = WorldMap.FlashSpots[math.random(1, #WorldMap.FlashSpots)]
+	local realNow = Workspace:GetServerTimeNow()
+	RaceService.openSpecial({
+		key = `flash:dev:{realNow}`,
+		eventId = spot.eventId,
+		kind = "flash",
+		zone = spot.pos,
+		startsAt = realNow + 60,
+		name = `Flash: {spot.name}`,
+	})
+	for _, player in Players:GetPlayers() do
+		Net.Notify:FireClient(player, `[Dev] Flash race at {spot.name}, starts in 60s.`, "flash")
 	end
 end
 

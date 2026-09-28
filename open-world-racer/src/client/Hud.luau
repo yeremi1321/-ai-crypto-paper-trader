@@ -283,7 +283,7 @@ function Hud.hasInvite(): boolean
 end
 
 -- Controls hint --------------------------------------------------------------
-label({
+local hint = label({
 	AnchorPoint = Vector2.new(0, 1),
 	Position = UDim2.new(0, 12, 1, -12),
 	Size = UDim2.new(0, 520, 0, 18),
@@ -294,5 +294,44 @@ label({
 	Text = "WASD drive  -  Shift handbrake  -  R reset car  -  C challenge nearby driver  -  E at shops",
 	Parent = gui,
 })
+
+-- Touch controls -------------------------------------------------------------
+local touchPanel: Frame? = nil
+
+type TouchActions = { handbrake: (boolean) -> (), reset: () -> (), challenge: () -> () }
+
+function Hud.setTouchControls(actions: TouchActions)
+	hint.Visible = false
+	-- Stack the speedometer's column: buttons sit just above it on the right.
+	local panel = Instance.new("Frame")
+	panel.BackgroundTransparency = 1
+	panel.AnchorPoint = Vector2.new(1, 1)
+	panel.Position = UDim2.new(1, -16, 1, -122)
+	panel.Size = UDim2.new(0, 190, 0, 150)
+	panel.Visible = false
+	panel.Parent = gui
+	touchPanel = panel
+
+	local brake = button(panel, "DRIFT", UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 0, 70), Color3.fromRGB(170, 60, 40), function() end)
+	brake.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.Touch then
+			actions.handbrake(true)
+		end
+	end)
+	brake.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.Touch then
+			actions.handbrake(false)
+		end
+	end)
+	button(panel, "RESET", UDim2.new(0, 0, 0, 80), UDim2.new(0.5, -4, 0, 60), Color3.fromRGB(60, 60, 70), actions.reset)
+	button(panel, "RACE", UDim2.new(0.5, 4, 0, 80), UDim2.new(0.5, -4, 0, 60), Color3.fromRGB(40, 110, 200), actions.challenge)
+end
+
+-- Touch buttons only show while driving.
+function Hud.setDriving(driving: boolean)
+	if touchPanel then
+		touchPanel.Visible = driving
+	end
+end
 
 return Hud

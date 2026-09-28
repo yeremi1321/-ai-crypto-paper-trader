@@ -33,6 +33,10 @@ supports for ModuleScripts. Server and client code use instance requires.
 | Accept / pass a challenge | Y / N | |
 | Use a shop | E at the shop pad | |
 
+On phones and tablets, the default thumbstick drives the car, and DRIFT / RESET / RACE
+buttons appear while you're driving. In Studio, F6–F9 are test shortcuts (skip to dusk,
+skip to the midnight meet, open a flash race, add cash). See `CLAUDE.md`.
+
 ## The map
 
 ```
@@ -95,6 +99,7 @@ open-world-racer/
     RaceService             lobbies, races, challenges, record signs
     WorldEventService       lighting, weather, flash races, midnight meet
     DiscoveryService        speed traps, drift zones, stashes, scenic roads
+    DevService              Studio-only test shortcuts
   src/client/
     Main.client             wiring
     DriveController         drives the car (the driver owns its physics)

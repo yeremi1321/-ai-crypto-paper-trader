@@ -27,7 +27,20 @@ on its own.
 2. Install Lune for tests: `cargo install lune --locked`, or a release binary.
 3. In this folder, run `rojo serve`. Open a new Baseplate place in Studio and connect with the Rojo plugin.
 4. In Studio, go to Game Settings → Security and turn on "Enable Studio Access to API Services" so saving works.
-5. Press Play. Check the Output window for errors from `[DataService]`, `[RaceService]`, `[WorldEventService]` and `[DiscoveryService]`.
+5. Press Play. Look for `[OpenWorldRacer] server ready` in the Output window. If it's missing,
+   the first red error above it is what broke the boot. Also watch for errors from
+   `[DataService]`, `[RaceService]`, `[WorldEventService]` and `[DiscoveryService]`.
+
+### Studio test keys
+
+These only work in Studio. The server ignores them on live servers (`DevService`).
+
+| Key | Does |
+| --- | --- |
+| F6 | Skip the world clock to dusk, when the midnight meet clue appears |
+| F7 | Skip to 23:30, when the midnight meet opens |
+| F8 | Open a flash race right now (starts in 60s) |
+| F9 | Add $50,000 for testing shops |
 
 ## Finish list, in priority order
 
@@ -54,15 +67,16 @@ Test → Clients and Servers with 2 players for multiplayer features.
    - With 2 clients, check the class cap works and the standings order is right.
 6. **World events.**
    - Flash races appear and can be joined.
-   - The midnight meet clue shows at dusk and the meet opens at 23:30 game time. To test quickly, temporarily shorten `WorldClock.DayLength`.
+   - The midnight meet clue shows at dusk (F6) and the meet opens at 23:30 game time (F7).
    - Test a challenge between 2 clients (C, then Y).
 7. **Discoveries.** Speed trap readout, drift zone score, the hidden part stash
    (shows up in the garage inventory), and the scenic road cash reward.
 8. **Saving.** Leave and rejoin. Cash, cars, parts, rep and discoveries persist.
 9. **Sounds.** Upload or choose engine loops, tire squeal and rain sounds. Put their
    ids in `EngineAudio.Profiles[*].soundId` and `Ambience.SOUNDS`.
-10. **Mobile.** Check the VehicleSeat thumbstick drives the car, and add on-screen
-    buttons for handbrake, reset and challenge.
+10. **Mobile.** On-screen DRIFT / RESET / RACE buttons are written (`Hud.setTouchControls`)
+    but untested. Use Studio's device emulator to check that the default thumbstick drives
+    the VehicleSeat and that the buttons don't cover anything important.
 
 After that, follow "Next steps" in `README.md`: personal garage interiors, meet
 route voting and photo mode, crew rivalries, traffic and detours, more districts,

@@ -100,12 +100,14 @@ with tab4:
     if pred:
         counts,acc=pred["counts"],pred["accuracy"]
         st.caption(f"{pred['version']} • {pred['rule']} • record-only, never changes paper entries")
-        p1,p2,p3,p4,p5=st.columns(5)
+        sev=(pred.get("severe_loss") or {}).get("accuracy") or {}
+        p1,p2,p3,p4,p5,p6=st.columns(6)
         p1.metric("Predictions",counts["predictions"])
         p2.metric("Learned from",counts["model_updates"])
         p3.metric("Pending",counts["pending"])
-        p4.metric("Skill vs base rate",f"{acc['skill_vs_baseline_pct']:+.1f}%" if acc.get("skill_vs_baseline_pct") is not None else "—")
-        p5.metric("AUC",f"{acc['auc']:.2f}" if acc.get("auc") is not None else "—")
+        p4.metric("Win-call skill",f"{acc['skill_vs_baseline_pct']:+.1f}%" if acc.get("skill_vs_baseline_pct") is not None else "—")
+        p5.metric("Win-call AUC",f"{acc['auc']:.2f}" if acc.get("auc") is not None else "—")
+        p6.metric("Severe-loss skill",f"{sev['skill_vs_baseline_pct']:+.1f}%" if sev.get("skill_vs_baseline_pct") is not None else "—")
         st.markdown("**What it thinks it can do better**")
         for line in pred.get("suggestions") or ["Waiting for outcomes."]:
             st.markdown(f"- {line}")
@@ -127,6 +129,19 @@ with tab4:
             if not signals.empty:
                 st.markdown("**Learned signals (weight > 0 favours a win)**")
                 st.dataframe(signals,use_container_width=True,hide_index=True)
+        severe=pred.get("severe_loss") or {}
+        if severe:
+            st.markdown("**Severe-loss radar (net loss at or beyond 2x the stop)**")
+            s1,s2=st.columns(2)
+            with s1:
+                sev_cal=pd.DataFrame(severe.get("calibration") or [])
+                if not sev_cal.empty:
+                    st.dataframe(sev_cal,use_container_width=True,hide_index=True)
+            with s2:
+                sev_sig=pd.DataFrame(severe.get("raises_risk",[])+severe.get("lowers_risk",[]))
+                if not sev_sig.empty:
+                    st.caption("Weight > 0 raises severe-loss risk")
+                    st.dataframe(sev_sig,use_container_width=True,hide_index=True)
         st.markdown("**Recent lessons from confident misses**")
         lessons=pd.DataFrame(pred.get("recent_lessons") or [])
         if lessons.empty:

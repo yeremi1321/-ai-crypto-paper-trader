@@ -65,6 +65,10 @@ This is a research collector, not an execution engine or guaranteed real-time al
 - **Learn:** an online logistic model updates from each outcome only after it happened,
   so every score is out-of-sample. Confident misses get a one-line lesson naming the
   signals that misled it. Model state lives in `meme_predictor_state`.
+- **Severe-loss radar (V2):** a second model predicts the chance a trade ends at a net loss
+  of 20% or worse (price gapping through the stop, e.g. a rug). Expected return combines
+  win, ordinary-loss and severe-loss chances with their learned average sizes. A V1
+  database is upgraded once on first load, re-scored in time order with no look-ahead.
 - **Report:** `python memecoin_predictor.py --report`, the collector's
   `/paper-predictions` endpoint, and the dashboard's 🔮 Predictions tab show accuracy
   vs. the running win rate, a learning curve, calibration, how its picks compare with

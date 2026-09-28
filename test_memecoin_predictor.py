@@ -1,5 +1,6 @@
 """Predictor: no look-ahead, same exit semantics as the study, dedup, and learning."""
 import json
+import math
 import random
 from datetime import datetime, timedelta, timezone
 
@@ -110,3 +111,44 @@ def test_report_served_by_background_research_worker():
     import research_worker as rw
     assert "/paper-predictions" in rw.PATHS
     assert "predictions" in rw.default_jobs()
+
+
+def test_severe_head_learns_and_prices_tail_risk():
+    c = db()
+    for i in range(150):
+        rug = i % 4 == 0
+        add(c, i + 1, T0 + timedelta(minutes=i), f"t{i}", {"volume_accel": 8 if rug else 1},
+            path=[(240, .6 if rug else .88)])  # rugs gap to -40%, the rest stop out near -12%
+    mp.catch_up(c, T0 + timedelta(hours=4))
+    m = mp.load_model(c)
+    assert m.severe_n == 38 and m.avg_severe() < -40 < m.avg_mild_loss()
+    rep = mp.report(c)
+    assert rep["severe_loss"]["raises_risk"][0]["feature"] == "volume_accel"
+    assert rep["severe_loss"]["accuracy"]["auc"] > .9
+    rug, calm = {"volume_accel": math.log1p(8)}, {"volume_accel": math.log1p(1)}
+    assert m.predict_all(rug)[1] > .5 > m.predict_all(calm)[1]
+    assert m.predict_all(rug)[2] < m.predict_all(calm)[2]  # tail risk lowers expected return
+    lessons = [r[0] for r in c.execute("SELECT lesson FROM meme_predictions WHERE lesson LIKE 'Severe loss%'")]
+    assert lessons  # early rugs it did not yet see coming
+
+
+def test_v1_history_is_upgraded_without_look_ahead():
+    c = db()
+    for i in range(80):
+        add(c, i + 1, T0 + timedelta(minutes=i), f"t{i}", {"volume_accel": 8 if i % 4 == 0 else 1},
+            path=[(240, .6 if i % 4 == 0 else 1.3)])
+    mp.catch_up(c, T0 + timedelta(hours=3))
+    # Make it look like a V1 database: no severe head, no severe columns filled.
+    state = json.loads(c.execute("SELECT state_json FROM meme_predictor_state").fetchone()[0])
+    for k in ("severe", "severe_n", "severe_sum"):
+        state.pop(k)
+    c.execute("UPDATE meme_predictor_state SET state_json=?", (json.dumps(state),))
+    c.execute("UPDATE meme_predictions SET p_severe_loss=NULL,severe_loss=NULL,brier_severe=NULL")
+    c.commit()
+    m = mp.load_model(c)
+    assert m.severe is not None and m.severe.n == 80 and m.severe_n == 20
+    ps = [r[0] for r in c.execute("SELECT p_severe_loss FROM meme_predictions ORDER BY predicted_at")]
+    assert None not in ps
+    assert abs(ps[0] - mp.PRIOR_SEVERE_RATE) < 1e-9  # the first prediction knew nothing yet
+    assert c.execute("SELECT COUNT(*) FROM meme_predictions WHERE severe_loss=1").fetchone()[0] == 20
+    assert mp.load_model(c).severe.n == 80  # upgrade runs once

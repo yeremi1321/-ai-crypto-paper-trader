@@ -142,6 +142,14 @@ with tab4:
                 if not sev_sig.empty:
                     st.caption("Weight > 0 raises severe-loss risk")
                     st.dataframe(sev_sig,use_container_width=True,hide_index=True)
+        hyps=pred.get("preregistered_hypotheses") or []
+        if hyps:
+            st.markdown("**Pre-registered forward tests (real bot trades after registration)**")
+            st.dataframe(pd.DataFrame([{"test":h["name"],"since":h["registered_at"],"verdict":h["verdict"],
+                "kept avg %":h["kept"]["avg_net_return_pct"],"skipped avg %":h["skipped"]["avg_net_return_pct"],
+                "every entry avg %":h["every_entry"]["avg_net_return_pct"],"trades":h["every_entry"]["trades"],
+                "skipped":h["skipped"]["trades"],"bootstrap % better":h["bootstrap_pct_kept_beats_every"]} for h in hyps]),
+                use_container_width=True,hide_index=True)
         st.markdown("**Recent lessons from confident misses**")
         lessons=pd.DataFrame(pred.get("recent_lessons") or [])
         if lessons.empty:

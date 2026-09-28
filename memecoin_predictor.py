@@ -22,6 +22,7 @@ import argparse
 import heapq
 import json
 import math
+import random
 from datetime import datetime, timedelta, timezone
 
 from memecoin_candidate_study import FEE, SLIP, TP, SL, HORIZON_S, END_TOLERANCE_S, net_return_pct, _pct
@@ -40,6 +41,23 @@ PRIOR_SEVERE_RATE = 0.2
 CONFIDENT_MISS = 0.5           # |predicted - actual| at or above this writes a lesson
 Z_CLIP = 5.0
 TRADED = "PAPER_TRADE_CANDIDATE"
+
+# Pre-registered forward tests. Each rule is fixed before the data that judges it exists and is evaluated only on
+# the bot's real paper trades opened after registration, using the chances the predictor recorded before each trade.
+# Never edit a rule after registration; add a new one instead. Nothing here changes live trading.
+MIN_VERDICT_TRADES = 40
+MIN_VERDICT_SKIPPED = 10
+BOOTSTRAP_SAMPLES = 1000
+HYPOTHESES = [
+    {"name": "skip_high_severe_risk",
+     "registered_at": "2026-09-28T09:30:00+00:00",
+     "motivation": "predictor report 2026-09-28 08:38Z (history re-scored without look-ahead): the bot's riskiest "
+                   "quarter of entries (p_severe_loss >= 0.313) averaged -7.2%/trade vs -5.7% for the rest "
+                   "(364 vs 1,095 trades)",
+     "statement": "Skipping bot entries whose recorded severe-loss chance is >= 31% improves average net return per "
+                  "trade over taking every bot entry.",
+     "skip_if": {"field": "p_severe_loss", "at_least": 0.31}},
+]
 
 
 def _f(x, k):
@@ -593,6 +611,7 @@ def report(c, recent_n=25):
     out["policies"]["bot_entries_other_three_quarters"] = _policy(rated[:cut])
     if rated[cut:]:
         out["policies"]["bot_entries_riskiest_quarter"]["min_p_severe_loss"] = _r(rated[cut]["p_severe_loss"], 3)
+    out["preregistered_hypotheses"] = preregistered(c)
     out["suggestions"] = suggestions(out, model)
     out["recent_lessons"] = [{"token": r["token"], "at": r["resolved_at"], "lesson": r["lesson"]}
                              for r in res[::-1] if r["lesson"]][:10]
@@ -601,6 +620,57 @@ def report(c, recent_n=25):
                                    "would_trade", "bot_decision", "status", "actual_reason", "actual_net_return_pct",
                                    "won")}
                                  for r in rows[::-1][:recent_n]]
+    return out
+
+
+def preregistered(c, seed=31):
+    """Judge each registered rule on real bot paper trades opened after its registration time."""
+    try:
+        trades = c.execute("""SELECT t.opened_at,t.net_return_pct,p.p_win,p.p_severe_loss FROM meme_paper_trades t
+            JOIN meme_predictions p ON p.candidate_id=t.candidate_id
+            WHERE t.status='CLOSED' AND t.net_return_pct IS NOT NULL ORDER BY t.opened_at""").fetchall()
+    except Exception:
+        c.rollback()  # paper engine has not added its exit columns yet
+        trades = []
+    out = []
+    for h in HYPOTHESES:
+        rule = h["skip_if"]
+        rows = [(net, (p_sev if rule["field"] == "p_severe_loss" else p_win))
+                for opened, net, p_win, p_sev in trades if opened >= h["registered_at"]]
+        rows = [(net, v) for net, v in rows if v is not None]
+        skip = [net for net, v in rows if v >= rule["at_least"]]
+        keep = [net for net, v in rows if v < rule["at_least"]]
+        every = [net for net, _ in rows]
+
+        def side(vals):
+            return {"trades": len(vals), "avg_net_return_pct": _r(sum(vals) / len(vals), 2) if vals else None,
+                    "win_rate_pct": _r(100 * sum(v > 0 for v in vals) / len(vals), 1) if vals else None,
+                    "pnl_usd_at_100": _r(sum(vals), 2)}
+        rng = random.Random(seed)
+        beats = positive = done = 0
+        for _ in range(BOOTSTRAP_SAMPLES if keep and skip else 0):
+            sample = [rng.choice(rows) for _ in rows]
+            k = [net for net, v in sample if v < rule["at_least"]]
+            if not k:
+                continue
+            beats += sum(k) / len(k) > sum(net for net, _ in sample) / len(sample)
+            positive += sum(k) > 0
+            done += 1
+        pct = _r(100 * beats / done, 1) if done else None
+        kept, allr = side(keep), side(every)
+        if len(rows) < MIN_VERDICT_TRADES or len(skip) < MIN_VERDICT_SKIPPED:
+            verdict = (f"collecting: need {MIN_VERDICT_TRADES}+ bot trades after registration with "
+                       f"{MIN_VERDICT_SKIPPED}+ skipped (have {len(rows)} / {len(skip)})")
+        elif kept["avg_net_return_pct"] <= allr["avg_net_return_pct"]:
+            verdict = "REJECTED: skipping does not improve on taking every bot entry"
+        elif pct >= 90:
+            verdict = "SUPPORTED: improves on every-entry in >=90% of bootstrap samples -> eligible for a paper trial (needs owner OK)"
+        else:
+            verdict = "NOT SUPPORTED: ahead but not reliably"
+        out.append({**h, "kept": kept, "skipped": side(skip), "every_entry": allr,
+                    "bootstrap_pct_kept_beats_every": pct,
+                    "bootstrap_pct_kept_profitable": _r(100 * positive / done, 1) if done else None,
+                    "verdict": verdict})
     return out
 
 
@@ -656,6 +726,8 @@ def suggestions(rep, model):
                      f"{rest['avg_net_return_pct']:+.1f}% for the rest. Candidate rule to test forward: skip those.")
         else:
             s.append("Skipping the bot's highest severe-risk entries would not have helped yet.")
+    for h in rep.get("preregistered_hypotheses", []):
+        s.append(f"Forward test '{h['name']}': {h['verdict']}.")
     if sev["raises_risk"]:
         s.append(f"Biggest severe-loss warning sign learned: {sev['raises_risk'][0]['feature']}.")
     if rep["model"]["top_positive_signals"]:

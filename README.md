@@ -76,3 +76,9 @@ This is a research collector, not an execution engine or guaranteed real-time al
   the live rules automatically.
 
 A fresh model first replays the last 7 days of discoveries oldest-first, in 6-hour steps.
+
+Forward tests: `HYPOTHESES` in `memecoin_predictor.py` holds pre-registered rules judged only
+on the bot's real paper trades opened after registration, using the chances the predictor
+recorded before each trade. The first, `skip_high_severe_risk`, tests whether skipping bot
+entries with a 31%+ severe-loss chance improves average return. A SUPPORTED verdict only makes
+a rule eligible for a paper trial with the owner's OK; nothing changes live trading automatically.

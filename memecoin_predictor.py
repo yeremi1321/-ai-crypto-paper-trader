@@ -3,7 +3,8 @@
 Loop, for every discovered token:
   1. PREDICT  - at discovery, estimate the chance that buying now under the live paper rules
                 (+20% target, -10% stop, 20-minute max hold, 1% slippage + 0.6% fee each side)
-                ends as a net WIN, plus the expected net return. The prediction is stored before
+                ends as a net WIN, the chance it ends as a SEVERE LOSS (price gapping through the
+                stop, e.g. a rug), and the expected net return from both. The prediction is stored before
                 the outcome exists, so it can never peek at the future.
   2. RESOLVE  - once the recorded price path decides the trade (target, stop, or time), store what
                 actually happened next to what was predicted.
@@ -25,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 
 from memecoin_candidate_study import FEE, SLIP, TP, SL, HORIZON_S, END_TOLERANCE_S, net_return_pct, _pct
 
-VERSION = "MEME_PREDICTOR_V1"
+VERSION = "MEME_PREDICTOR_V2"
 DB = "memecoin_shadow.db"
 GRACE_S = 10 * 60             # a path still undecided this long after the horizon is unresolvable
 BACKFILL_DAYS = 7              # a fresh model first replays this much history, oldest first
@@ -34,6 +35,8 @@ WARMUP = 50                    # resolved outcomes before the predictor states a
 LEARNING_RATE = 0.1
 L2 = 1e-3
 PRIOR_WIN_RATE = 0.25
+SEVERE_LOSS_PCT = -20.0        # net loss at least twice the planned stop: the price gapped through it
+PRIOR_SEVERE_RATE = 0.2
 CONFIDENT_MISS = 0.5           # |predicted - actual| at or above this writes a lesson
 Z_CLIP = 5.0
 TRADED = "PAPER_TRADE_CANDIDATE"
@@ -101,22 +104,29 @@ def _sigmoid(z):
 class Model:
     """Online logistic regression on running-standardized features, AdaGrad steps, L2 shrinkage."""
 
-    def __init__(self, state=None):
+    def __init__(self, state=None, prior=PRIOR_WIN_RATE):
         s = state or {}
         self.w = dict(s.get("w", {}))
-        self.bias = s.get("bias", math.log(PRIOR_WIN_RATE / (1 - PRIOR_WIN_RATE)))
+        self.bias = s.get("bias", math.log(prior / (1 - prior)))
         self.g2 = dict(s.get("g2", {}))
         self.stats = {k: list(v) for k, v in s.get("stats", {}).items()}  # name -> [count, mean, M2]
         self.n = s.get("n", 0)
         self.wins = s.get("wins", 0)
         self.win_sum = s.get("win_sum", 0.0)
         self.loss_sum = s.get("loss_sum", 0.0)
+        self.severe_n = s.get("severe_n", 0)
+        self.severe_sum = s.get("severe_sum", 0.0)
         self.cursor_id = s.get("cursor_id", 0)
+        # Second head: chance of a severe loss. None until trained (older saved states lack it).
+        self.severe = Model(s["severe"], PRIOR_SEVERE_RATE) if "severe" in s else None
 
     def state(self):
-        return {"w": self.w, "bias": self.bias, "g2": self.g2, "stats": self.stats, "n": self.n,
-                "wins": self.wins, "win_sum": self.win_sum, "loss_sum": self.loss_sum,
-                "cursor_id": self.cursor_id}
+        out = {"w": self.w, "bias": self.bias, "g2": self.g2, "stats": self.stats, "n": self.n,
+               "wins": self.wins, "win_sum": self.win_sum, "loss_sum": self.loss_sum,
+               "severe_n": self.severe_n, "severe_sum": self.severe_sum, "cursor_id": self.cursor_id}
+        if self.severe is not None:
+            out["severe"] = self.severe.state()
+        return out
 
     def _z(self, feats):
         z = {}
@@ -140,8 +150,34 @@ class Model:
         losses = self.n - self.wins
         return self.loss_sum / losses if losses else -SL - 2 * 100 * (SLIP + FEE)
 
-    def expected_return(self, p):
-        return p * self.avg_win() + (1 - p) * self.avg_loss()
+    def avg_severe(self):
+        return self.severe_sum / self.severe_n if self.severe_n else 2 * SEVERE_LOSS_PCT
+
+    def avg_mild_loss(self):
+        mild = self.n - self.wins - self.severe_n
+        return (self.loss_sum - self.severe_sum) / mild if mild else -SL - 2 * 100 * (SLIP + FEE)
+
+    def expected_return(self, p, p_severe=None):
+        if p_severe is None:
+            return p * self.avg_win() + (1 - p) * self.avg_loss()
+        p_severe = min(p_severe, 1 - p)
+        return p * self.avg_win() + p_severe * self.avg_severe() + (1 - p - p_severe) * self.avg_mild_loss()
+
+    def predict_all(self, feats):
+        """(p_win, p_severe_loss or None, expected net return %)."""
+        p, _ = self.predict(feats)
+        ps = self.severe.predict(feats)[0] if self.severe is not None else None
+        return p, ps, self.expected_return(p, ps)
+
+    def learn_outcome(self, feats, net):
+        """Update both heads and the return tallies from one resolved trade."""
+        if self.severe is None:
+            self.severe = Model(prior=PRIOR_SEVERE_RATE)
+        self.severe.learn(feats, net <= SEVERE_LOSS_PCT, net)
+        if net <= SEVERE_LOSS_PCT:
+            self.severe_n += 1
+            self.severe_sum += net
+        self.learn(feats, net > 0, net)
 
     def learn(self, feats, won, net):
         for k, v in feats.items():  # Welford running mean/variance
@@ -190,15 +226,22 @@ def outcome(entry, path, window_closed):
     return None
 
 
-def lesson(p, won, reason, net, contrib, top=2):
-    """One sentence naming what misled a confident miss."""
-    if abs(p - (1.0 if won else 0.0)) < CONFIDENT_MISS:
-        return None
-    wrong = sorted(((v, k) for k, v in contrib.items() if (v > 0) != won and v), key=lambda t: -abs(t[0]))[:top]
-    blame = ", ".join(f"{k} ({v:+.2f})" for v, k in wrong) or "the base rate alone"
-    said = "win" if not won else "lose"
-    return (f"Predicted {p:.0%} win but it ended {reason} ({net:+.1f}%). Pushed toward '{said}' mostly by {blame}; "
-            f"those weights were corrected by this outcome.")
+def _blame(contrib, happened, top=2):
+    wrong = sorted(((v, k) for k, v in contrib.items() if (v > 0) != happened and v), key=lambda t: -abs(t[0]))[:top]
+    return ", ".join(f"{k} ({v:+.2f})" for v, k in wrong) or "the base rate alone"
+
+
+def lesson(p, won, reason, net, contrib, p_severe=None, severe_contrib=None):
+    """One sentence naming what misled a confident miss (win call, or a severe loss it did not see coming)."""
+    out = []
+    if abs(p - (1.0 if won else 0.0)) >= CONFIDENT_MISS:
+        said = "win" if not won else "lose"
+        out.append(f"Predicted {p:.0%} win but it ended {reason} ({net:+.1f}%). Pushed toward '{said}' mostly by "
+                   f"{_blame(contrib, won)}; those weights were corrected by this outcome.")
+    if p_severe is not None and net <= SEVERE_LOSS_PCT and p_severe < 1 - CONFIDENT_MISS:
+        out.append(f"Severe loss ({net:+.1f}%) it rated only {p_severe:.0%} likely. Looked safe mostly because of "
+                   f"{_blame(severe_contrib or {}, True)}.")
+    return " ".join(out) or None
 
 
 # ---------------------------------------------------------------- storage
@@ -219,6 +262,15 @@ def init(c):
         p_win {real},expected_net_return_pct {real},would_trade INTEGER,bot_decision TEXT,features_json TEXT,
         status TEXT,resolved_at TEXT,actual_reason TEXT,actual_net_return_pct {real},actual_max_up_pct {real},
         won INTEGER,brier {real},lesson TEXT)""")
+    added = {"p_severe_loss": real, "severe_loss": "INTEGER", "brier_severe": real}
+    if _pg(c):
+        for name, typ in added.items():
+            c.execute(f"ALTER TABLE meme_predictions ADD COLUMN IF NOT EXISTS {name} {typ}")
+    else:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(meme_predictions)")}
+        for name, typ in added.items():
+            if name not in cols:
+                c.execute(f"ALTER TABLE meme_predictions ADD COLUMN {name} {typ}")
     c.execute("CREATE INDEX IF NOT EXISTS meme_predictions_status ON meme_predictions(status, predicted_at)")
     c.execute("CREATE TABLE IF NOT EXISTS meme_predictor_state(id INTEGER PRIMARY KEY,updated_at TEXT,state_json TEXT)")
     c.commit()
@@ -231,7 +283,54 @@ def init(c):
 
 def load_model(c):
     row = c.execute("SELECT state_json FROM meme_predictor_state WHERE id=1").fetchone()
-    return Model(json.loads(row[0]) if row else None)
+    model = Model(json.loads(row[0]) if row else None)
+    if model.severe is None and model.n:
+        rescore_history(c, model)
+    return model
+
+
+def rescore_history(c, model):
+    """One-time upgrade of a V1 model: train the severe-loss head and re-score every stored prediction.
+
+    Replays resolved predictions in time order and, for each one, predicts with only the outcomes
+    resolved before it, so the upgraded history is as honest as if V2 had run from the start. The
+    win-probability column is left as originally recorded."""
+    cols = "candidate_id,predicted_at,resolved_at,status,features_json,actual_net_return_pct,model_updates,p_win"
+    rows = c.execute(f"SELECT {cols} FROM meme_predictions ORDER BY predicted_at,id").fetchall()
+    head = Model(prior=PRIOR_SEVERE_RATE)
+    tally = Model()  # only its return tallies are used
+    done = sorted(((r[2], i) for i, r in enumerate(rows) if r[3] == "RESOLVED" and r[5] is not None))
+    j, out = 0, []
+    for cid, at, _, status, fj, net, updates, p in rows:
+        while j < len(done) and done[j][0] <= at:
+            _, _, _, _, fj2, net2, _, _ = rows[done[j][1]]
+            f2 = json.loads(fj2 or "{}")
+            head.learn(f2, net2 <= SEVERE_LOSS_PCT, net2)
+            tally.n += 1
+            tally.wins += net2 > 0
+            if net2 > 0:
+                tally.win_sum += net2
+            else:
+                tally.loss_sum += net2
+            if net2 <= SEVERE_LOSS_PCT:
+                tally.severe_n += 1
+                tally.severe_sum += net2
+            j += 1
+        ps = head.predict(json.loads(fj or "{}"))[0]
+        er = tally.expected_return(p, ps)
+        severe = None if net is None else int(net <= SEVERE_LOSS_PCT)
+        out.append((ps, er, int(updates >= WARMUP and er > 0), severe,
+                    None if severe is None else (ps - severe) ** 2, cid))
+    c.cursor().executemany(_q(c, """UPDATE meme_predictions SET p_severe_loss=?,expected_net_return_pct=?,
+        would_trade=?,severe_loss=?,brier_severe=? WHERE candidate_id=?"""), out)
+    # Continue live from everything resolved so far.
+    for _, i in done[j:]:
+        net2 = rows[i][5]
+        head.learn(json.loads(rows[i][4] or "{}"), net2 <= SEVERE_LOSS_PCT, net2)
+    severe = [rows[i][5] for _, i in done if rows[i][5] <= SEVERE_LOSS_PCT]
+    model.severe_n, model.severe_sum = len(severe), sum(severe)
+    model.severe = head
+    c.commit()
 
 
 def save_model(c, model, now):
@@ -265,8 +364,8 @@ def step(c, now=None):
         caught_up = len(chunk) == len(cands)
         cands = chunk
     as_of = now if caught_up else _utc(cands[-1][1])
-    pending = c.execute(_q(c, """SELECT id,candidate_id,token_address,predicted_at,entry_price,p_win,features_json
-        FROM meme_predictions WHERE status='PENDING' AND predicted_at<=?"""), (as_of.isoformat(),)).fetchall()
+    pending = c.execute(_q(c, """SELECT id,candidate_id,token_address,predicted_at,entry_price,p_win,features_json,
+        p_severe_loss FROM meme_predictions WHERE status='PENDING' AND predicted_at<=?"""), (as_of.isoformat(),)).fetchall()
     starts = [r[3] for r in pending] + [r[1] for r in cands]
     if not starts:
         save_model(c, model, now.isoformat()); c.commit()
@@ -307,16 +406,18 @@ def step(c, now=None):
     def drain(until):
         while queue and queue[0][0] <= until:
             decided, _, item, (reason, net, max_up, _) = heapq.heappop(queue)
-            won = net > 0
+            won, severe = net > 0, net <= SEVERE_LOSS_PCT
             _, contrib = model.predict(item["features"])  # what the model believed just before this outcome
-            item_p = item["p_win"]
-            model.learn(item["features"], won, net)
+            severe_contrib = model.severe.predict(item["features"])[1] if model.severe is not None else {}
+            item_p, item_ps = item["p_win"], item["p_severe"]
+            model.learn_outcome(item["features"], net)
             updates.append((item, decided, reason, net, max_up, won, (item_p - won) ** 2,
-                            lesson(item_p, won, reason, net, contrib)))
+                            lesson(item_p, won, reason, net, contrib, item_ps, severe_contrib), severe,
+                            None if item_ps is None else (item_ps - severe) ** 2))
 
-    for pid, cid, tok, at, entry, p, fj in pending:
+    for pid, cid, tok, at, entry, p, fj, ps in pending:
         schedule({"id": pid, "candidate_id": cid, "token_address": tok, "predicted_at": at,
-                  "entry_price": entry, "p_win": p, "features": json.loads(fj or "{}")})
+                  "entry_price": entry, "p_win": p, "p_severe": ps, "features": json.loads(fj or "{}")})
     inserts = []
     for cid, seen, token, tok, eligible, raw, decision in cands:
         drain(seen)
@@ -333,11 +434,10 @@ def step(c, now=None):
             continue
         recent[tok] = seen
         feats = features(x, eligible)
-        p, _ = model.predict(feats)
-        er = model.expected_return(p)
+        p, ps, er = model.predict_all(feats)
         item = {"id": None, "candidate_id": cid, "token_address": tok, "predicted_at": seen,
-                "entry_price": price * (1 + SLIP), "p_win": p, "features": feats}
-        inserts.append((cid, token, tok, seen, VERSION, model.n, item["entry_price"], p, er,
+                "entry_price": price * (1 + SLIP), "p_win": p, "p_severe": ps, "features": feats}
+        inserts.append((cid, token, tok, seen, VERSION, model.n, item["entry_price"], p, ps, er,
                         int(model.n >= WARMUP and er > 0), decision, json.dumps(feats)))
         schedule(item)
     drain(as_of.isoformat())
@@ -345,13 +445,14 @@ def step(c, now=None):
     cur = c.cursor()
     if inserts:
         cur.executemany(_q(c, """INSERT INTO meme_predictions(candidate_id,token,token_address,predicted_at,model_version,
-            model_updates,entry_price,p_win,expected_net_return_pct,would_trade,bot_decision,features_json,status)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'PENDING')""" + (" ON CONFLICT DO NOTHING" if _pg(c) else "")), inserts)
-    done = [(decided, reason, net, max_up, int(won), brier, les, item["candidate_id"])
-            for item, decided, reason, net, max_up, won, brier, les in updates]
+            model_updates,entry_price,p_win,p_severe_loss,expected_net_return_pct,would_trade,bot_decision,
+            features_json,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'PENDING')""" + (" ON CONFLICT DO NOTHING" if _pg(c) else "")), inserts)
+    done = [(decided, reason, net, max_up, int(won), brier, les, int(severe), brier_s, item["candidate_id"])
+            for item, decided, reason, net, max_up, won, brier, les, severe, brier_s in updates]
     if done:
         cur.executemany(_q(c, """UPDATE meme_predictions SET status='RESOLVED',resolved_at=?,actual_reason=?,
-            actual_net_return_pct=?,actual_max_up_pct=?,won=?,brier=?,lesson=? WHERE candidate_id=?"""), done)
+            actual_net_return_pct=?,actual_max_up_pct=?,won=?,brier=?,lesson=?,severe_loss=?,brier_severe=?
+            WHERE candidate_id=?"""), done)
     if dead:
         cur.executemany(_q(c, "UPDATE meme_predictions SET status='UNRESOLVABLE',resolved_at=? WHERE candidate_id=?"),
                         [(as_of.isoformat(), item["candidate_id"]) for item in dead])
@@ -375,13 +476,13 @@ def catch_up(c, now=None, max_steps=500):
 
 # ---------------------------------------------------------------- report
 
-def _brier(rows, p_of=lambda r: r["p_win"]):
-    return sum((p_of(r) - r["won"]) ** 2 for r in rows) / len(rows) if rows else None
+def _brier(rows, p_of, y_of):
+    return sum((p_of(r) - y_of(r)) ** 2 for r in rows) / len(rows) if rows else None
 
 
-def _auc(rows):
-    pos = [r["p_win"] for r in rows if r["won"]]
-    neg = [r["p_win"] for r in rows if not r["won"]]
+def _auc(rows, p_of, y_of):
+    pos = [p_of(r) for r in rows if y_of(r)]
+    neg = [p_of(r) for r in rows if not y_of(r)]
     if not pos or not neg:
         return None
     ranked = sorted([(p, 1) for p in pos] + [(p, 0) for p in neg])
@@ -393,6 +494,46 @@ def _auc(rows):
         rank_sum += (i + j + 1) / 2 * sum(1 for k in range(i, j) if ranked[k][1])
         i = j
     return (rank_sum - len(pos) * (len(pos) + 1) / 2) / (len(pos) * len(neg))
+
+
+def _scorecard(rows, p_key, y_key, prior):
+    """Prequential accuracy, learning curve and calibration for one head.
+
+    The baseline is the running outcome rate, which also only knew the past."""
+    p_of, y_of, b_of = (lambda r: r[p_key]), (lambda r: r[y_key]), (lambda r: r["_base"])
+    seen = 0
+    for i, r in enumerate(rows):
+        r["_base"] = (seen + prior * 10) / (i + 10)
+        seen += r[y_key]
+    b, b0 = _brier(rows, p_of, y_of), _brier(rows, b_of, y_of)
+    acc = {"n": len(rows), "brier": _r(b), "baseline_brier": _r(b0),
+           "skill_vs_baseline_pct": _r(100 * (1 - b / b0), 1) if b is not None and b0 else None,
+           "auc": _r(_auc(rows, p_of, y_of), 3),
+           "hit_rate_at_50pct": _r(sum((r[p_key] >= .5) == bool(r[y_key]) for r in rows) / len(rows), 3)
+           if rows else None}
+    windows = []
+    size = max(25, len(rows) // 6) if rows else 1
+    for i in range(0, len(rows), size):
+        w = rows[i:i + size]
+        if len(w) >= 10:
+            bw, bw0 = _brier(w, p_of, y_of), _brier(w, b_of, y_of)
+            windows.append({"from": w[0]["predicted_at"], "n": len(w), "brier": _r(bw),
+                            "skill_vs_baseline_pct": _r(100 * (1 - bw / bw0), 1) if bw0 else None,
+                            "auc": _r(_auc(w, p_of, y_of), 3)})
+    buckets = []
+    for lo, hi in ((0, .1), (.1, .2), (.2, .3), (.3, .4), (.4, .5), (.5, .7), (.7, 1.01)):
+        w = [r for r in rows if lo <= r[p_key] < hi]
+        if w:
+            buckets.append({"predicted": f"{lo:.0%}-{min(hi, 1):.0%}", "n": len(w),
+                            "avg_predicted_pct": round(100 * sum(r[p_key] for r in w) / len(w), 1),
+                            "actual_pct": round(100 * sum(r[y_key] for r in w) / len(w), 1)})
+    return acc, windows, buckets
+
+
+def _signals(model):
+    ranked = sorted(model.w.items(), key=lambda kv: kv[1])
+    return ([{"feature": k, "weight": round(v, 3)} for k, v in ranked[::-1][:6] if v > 0],
+            [{"feature": k, "weight": round(v, 3)} for k, v in ranked[:6] if v < 0])
 
 
 def _policy(rows):
@@ -410,56 +551,33 @@ def _r(x, n=4):
 
 def report(c, recent_n=25):
     init(c)
-    cols = ["candidate_id", "token", "predicted_at", "model_updates", "p_win", "expected_net_return_pct",
-            "would_trade", "bot_decision", "status", "resolved_at", "actual_reason", "actual_net_return_pct",
-            "actual_max_up_pct", "won", "brier", "lesson"]
+    cols = ["candidate_id", "token", "predicted_at", "model_updates", "p_win", "p_severe_loss",
+            "expected_net_return_pct", "would_trade", "bot_decision", "status", "resolved_at", "actual_reason",
+            "actual_net_return_pct", "actual_max_up_pct", "won", "severe_loss", "brier", "lesson"]
+    model = load_model(c)  # upgrades a V1 history before it is read
     rows = [dict(zip(cols, r)) for r in c.execute(f"SELECT {','.join(cols)} FROM meme_predictions ORDER BY predicted_at,id")]
-    model = load_model(c)
     res = [r for r in rows if r["status"] == "RESOLVED"]
     scored = [r for r in res if r["model_updates"] >= WARMUP]  # judge only predictions made after warm-up
+    scored_severe = [r for r in scored if r["p_severe_loss"] is not None and r["severe_loss"] is not None]
+    pos, neg = _signals(model)
     out = {"version": VERSION, "as_of": datetime.now(timezone.utc).isoformat(), "mode": "paper_research",
            "rule": f"win = net > 0 under +{TP:.0f}% target / -{SL:.0f}% stop / {HORIZON_S // 60}m hold, "
-                   f"{SLIP:.0%} slippage + {FEE:.1%} fee each side",
+                   f"{SLIP:.0%} slippage + {FEE:.1%} fee each side; severe loss = net <= {SEVERE_LOSS_PCT:.0f}%",
            "counts": {"predictions": len(rows), "resolved": len(res),
                       "pending": sum(r["status"] == "PENDING" for r in rows),
                       "unresolvable": sum(r["status"] == "UNRESOLVABLE" for r in rows),
                       "model_updates": model.n, "scored_after_warmup": len(scored)},
            "model": {"learned_win_rate_pct": round(100 * model.wins / model.n, 1) if model.n else None,
+                     "learned_severe_loss_rate_pct": round(100 * model.severe_n / model.n, 1) if model.n else None,
                      "avg_win_net_pct": round(model.avg_win(), 2), "avg_loss_net_pct": round(model.avg_loss(), 2),
-                     "top_positive_signals": [], "top_negative_signals": []}}
-    ranked = sorted(model.w.items(), key=lambda kv: kv[1])
-    out["model"]["top_positive_signals"] = [{"feature": k, "weight": round(v, 3)} for k, v in ranked[::-1][:6] if v > 0]
-    out["model"]["top_negative_signals"] = [{"feature": k, "weight": round(v, 3)} for k, v in ranked[:6] if v < 0]
-
-    # Accuracy: prequential scores vs an honest baseline that also only knew the past (running win rate).
-    wins_so_far = 0
-    for i, r in enumerate(res):
-        r["baseline_p"] = (wins_so_far + PRIOR_WIN_RATE * 10) / (i + 10)
-        wins_so_far += r["won"]
-    b, b0 = _brier(scored), _brier(scored, lambda r: r["baseline_p"])
-    out["accuracy"] = {"brier": _r(b), "baseline_brier": _r(b0),
-                       "skill_vs_baseline_pct": _r(100 * (1 - b / b0), 1) if b is not None and b0 else None,
-                       "auc": _r(_auc(scored), 3),
-                       "hit_rate_at_50pct": _r(sum((r["p_win"] >= .5) == bool(r["won"]) for r in scored) / len(scored), 3)
-                       if scored else None}
-    windows = []
-    size = max(25, len(scored) // 6) if scored else 0
-    for i in range(0, len(scored), size or 1):
-        w = scored[i:i + size]
-        if len(w) >= 10:
-            bw, bw0 = _brier(w), _brier(w, lambda r: r["baseline_p"])
-            windows.append({"from": w[0]["predicted_at"], "n": len(w), "brier": _r(bw),
-                            "skill_vs_baseline_pct": _r(100 * (1 - bw / bw0), 1) if bw0 else None, "auc": _r(_auc(w), 3)})
-    out["learning_curve"] = windows
-    buckets = []
-    for lo in (0, .1, .2, .3, .4, .5, .7):
-        hi = {0: .1, .1: .2, .2: .3, .3: .4, .4: .5, .5: .7, .7: 1.01}[lo]
-        w = [r for r in scored if lo <= r["p_win"] < hi]
-        if w:
-            buckets.append({"predicted": f"{lo:.0%}-{min(hi, 1):.0%}", "n": len(w),
-                            "avg_predicted_pct": round(100 * sum(r["p_win"] for r in w) / len(w), 1),
-                            "actual_win_pct": round(100 * sum(r["won"] for r in w) / len(w), 1)})
-    out["calibration"] = buckets
+                     "avg_mild_loss_net_pct": round(model.avg_mild_loss(), 2),
+                     "avg_severe_loss_net_pct": round(model.avg_severe(), 2),
+                     "top_positive_signals": pos, "top_negative_signals": neg}}
+    out["accuracy"], out["learning_curve"], out["calibration"] = _scorecard(scored, "p_win", "won", PRIOR_WIN_RATE)
+    sev_pos, sev_neg = _signals(model.severe) if model.severe is not None else ([], [])
+    acc, curve, cal = _scorecard(scored_severe, "p_severe_loss", "severe_loss", PRIOR_SEVERE_RATE)
+    out["severe_loss"] = {"accuracy": acc, "learning_curve": curve, "calibration": cal,
+                          "raises_risk": sev_pos, "lowers_risk": sev_neg}
 
     picks = [r for r in scored if r["would_trade"]]
     bot = [r for r in scored if r["bot_decision"] == TRADED]
@@ -468,12 +586,20 @@ def report(c, recent_n=25):
                        "bot_entries_predictor_would_skip": _policy([r for r in bot if not r["would_trade"]]),
                        "bot_entries_predictor_agreed": _policy([r for r in bot if r["would_trade"]]),
                        "predictor_picks_bot_rejected": _policy([r for r in picks if r["bot_decision"] != TRADED])}
+    # Would skipping the bot's riskiest entries (top quarter by predicted severe-loss chance) have helped?
+    rated = sorted((r for r in bot if r["p_severe_loss"] is not None), key=lambda r: r["p_severe_loss"])
+    cut = len(rated) - len(rated) // 4
+    out["policies"]["bot_entries_riskiest_quarter"] = _policy(rated[cut:])
+    out["policies"]["bot_entries_other_three_quarters"] = _policy(rated[:cut])
+    if rated[cut:]:
+        out["policies"]["bot_entries_riskiest_quarter"]["min_p_severe_loss"] = _r(rated[cut]["p_severe_loss"], 3)
     out["suggestions"] = suggestions(out, model)
     out["recent_lessons"] = [{"token": r["token"], "at": r["resolved_at"], "lesson": r["lesson"]}
                              for r in res[::-1] if r["lesson"]][:10]
     out["recent_predictions"] = [{k: (_r(r[k], 3) if isinstance(r[k], float) else r[k]) for k in
-                                  ("token", "predicted_at", "p_win", "expected_net_return_pct", "would_trade",
-                                   "bot_decision", "status", "actual_reason", "actual_net_return_pct", "won")}
+                                  ("token", "predicted_at", "p_win", "p_severe_loss", "expected_net_return_pct",
+                                   "would_trade", "bot_decision", "status", "actual_reason", "actual_net_return_pct",
+                                   "won")}
                                  for r in rows[::-1][:recent_n]]
     return out
 
@@ -511,12 +637,27 @@ def suggestions(rep, model):
     if rejected["n"] >= 10 and rejected["avg_net_return_pct"] > 0:
         s.append(f"{rejected['n']} tokens the bot's gates rejected were predictor picks averaging "
                  f"{rejected['avg_net_return_pct']:+.1f}%: review which gate blocked them.")
-    worst = max(rep["calibration"], key=lambda b: abs(b["avg_predicted_pct"] - b["actual_win_pct"]) if b["n"] >= 10 else 0,
+    worst = max(rep["calibration"], key=lambda b: abs(b["avg_predicted_pct"] - b["actual_pct"]) if b["n"] >= 10 else 0,
                 default=None)
-    if worst and worst["n"] >= 10 and abs(worst["avg_predicted_pct"] - worst["actual_win_pct"]) >= 10:
-        way = "overconfident" if worst["avg_predicted_pct"] > worst["actual_win_pct"] else "underconfident"
-        s.append(f"Most {way} around {worst['predicted']} predictions: said {worst['avg_predicted_pct']}%, "
-                 f"got {worst['actual_win_pct']}% (n={worst['n']}).")
+    if worst and worst["n"] >= 10 and abs(worst["avg_predicted_pct"] - worst["actual_pct"]) >= 10:
+        way = "overconfident" if worst["avg_predicted_pct"] > worst["actual_pct"] else "underconfident"
+        s.append(f"Most {way} around {worst['predicted']} win predictions: said {worst['avg_predicted_pct']}%, "
+                 f"got {worst['actual_pct']}% (n={worst['n']}).")
+    sev = rep["severe_loss"]
+    if sev["accuracy"]["skill_vs_baseline_pct"] is not None and sev["accuracy"]["n"] >= 100:
+        sk = sev["accuracy"]["skill_vs_baseline_pct"]
+        s.append(f"Severe-loss warnings are {'better' if sk > 0 else 'no better'} than the running severe-loss rate "
+                 f"({sk:+.1f}% Brier skill, AUC {sev['accuracy']['auc']}).")
+    risky, rest = pol["bot_entries_riskiest_quarter"], pol["bot_entries_other_three_quarters"]
+    if risky["n"] >= 10 and rest["n"] >= 10:
+        if risky["avg_net_return_pct"] < rest["avg_net_return_pct"]:
+            s.append(f"The bot's riskiest quarter of entries (predicted severe-loss chance >= "
+                     f"{risky['min_p_severe_loss']:.0%}) averaged {risky['avg_net_return_pct']:+.1f}% vs "
+                     f"{rest['avg_net_return_pct']:+.1f}% for the rest. Candidate rule to test forward: skip those.")
+        else:
+            s.append("Skipping the bot's highest severe-risk entries would not have helped yet.")
+    if sev["raises_risk"]:
+        s.append(f"Biggest severe-loss warning sign learned: {sev['raises_risk'][0]['feature']}.")
     if rep["model"]["top_positive_signals"]:
         top = rep["model"]["top_positive_signals"][0]["feature"]
         s.append(f"Strongest learned win signal: {top}. Strongest warning sign: "
@@ -548,6 +689,7 @@ def self_test():
     assert rep["counts"]["resolved"] == 120
     assert rep["model"]["top_positive_signals"][0]["feature"] == "volume_accel", rep["model"]
     assert rep["accuracy"]["auc"] > .9, rep["accuracy"]
+    assert rep["severe_loss"]["lowers_risk"][0]["feature"] == "volume_accel", rep["severe_loss"]
     assert step(c)["predicted"] == 0
     c.close()
     print("memecoin predictor self-test passed")

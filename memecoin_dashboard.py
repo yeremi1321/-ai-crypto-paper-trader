@@ -145,10 +145,13 @@ with tab4:
         hyps=pred.get("preregistered_hypotheses") or []
         if hyps:
             st.markdown("**Pre-registered forward tests (real bot trades after registration)**")
+            def side(h,key,field):
+                return (h.get(key) or {}).get(field)
             st.dataframe(pd.DataFrame([{"test":h["name"],"since":h["registered_at"],"verdict":h["verdict"],
-                "kept avg %":h["kept"]["avg_net_return_pct"],"skipped avg %":h["skipped"]["avg_net_return_pct"],
-                "every entry avg %":h["every_entry"]["avg_net_return_pct"],"trades":h["every_entry"]["trades"],
-                "skipped":h["skipped"]["trades"],"bootstrap % better":h["bootstrap_pct_kept_beats_every"]} for h in hyps]),
+                "kept avg %":side(h,"kept","avg_net_return_pct"),"skipped avg %":side(h,"skipped","avg_net_return_pct"),
+                "every entry avg %":side(h,"every_entry","avg_net_return_pct"),
+                "trades":side(h,"every_entry","trades") or h.get("trades_so_far"),
+                "skipped":side(h,"skipped","trades"),"bootstrap % better":h.get("bootstrap_pct_kept_beats_every")} for h in hyps]),
                 use_container_width=True,hide_index=True)
         st.markdown("**Recent lessons from confident misses**")
         lessons=pd.DataFrame(pred.get("recent_lessons") or [])

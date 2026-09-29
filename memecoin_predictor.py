@@ -57,6 +57,16 @@ HYPOTHESES = [
      "statement": "Skipping bot entries whose recorded severe-loss chance is >= 31% improves average net return per "
                   "trade over taking every bot entry.",
      "skip_if": {"field": "p_severe_loss", "at_least": 0.31}},
+    {"name": "skip_high_severe_risk_fixed_150",
+     "registered_at": "2026-09-29T07:00:00+00:00",
+     "motivation": "skip_high_severe_risk has no fixed end and is re-judged on every report, so repeatedly checking it "
+                   "until it crosses 90% could pass by chance (it read 62% on 55 trades, then 88% on 82). This copy is "
+                   "decided exactly once, blind.",
+     "statement": "Same rule as skip_high_severe_risk, judged once on exactly the first 150 bot trades opened after "
+                  "registration.",
+     "skip_if": {"field": "p_severe_loss", "at_least": 0.31},
+     # Results stay hidden until all 150 trades have closed; the verdict at that point is final.
+     "decide_at_trades": 150},
 ]
 
 
@@ -638,6 +648,13 @@ def preregistered(c, seed=31):
         rows = [(net, (p_sev if rule["field"] == "p_severe_loss" else p_win))
                 for opened, net, p_win, p_sev in trades if opened >= h["registered_at"]]
         rows = [(net, v) for net, v in rows if v is not None]
+        n = h.get("decide_at_trades")
+        if n and len(rows) < n:
+            out.append({**h, "trades_so_far": len(rows),
+                        "verdict": f"blind: decided once at {n} trades (have {len(rows)}); interim results hidden"})
+            continue
+        if n:
+            rows = rows[:n]
         skip = [net for net, v in rows if v >= rule["at_least"]]
         keep = [net for net, v in rows if v < rule["at_least"]]
         every = [net for net, _ in rows]

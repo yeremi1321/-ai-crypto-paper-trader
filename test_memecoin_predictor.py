@@ -184,3 +184,22 @@ def test_forward_test_only_uses_trades_after_registration_and_judges_them():
     c2 = db(); mp.init(c2); memecoin_paper.migrate(c2)
     _pred(c2, 1, reg.isoformat(), .5); _paper(c2, 1, reg.isoformat(), -30); c2.commit()
     assert mp.preregistered(c2)[0]["verdict"].startswith("collecting")
+
+
+def test_fixed_horizon_test_is_blind_until_decided_then_uses_exactly_n_trades():
+    import memecoin_paper
+    h = next(x for x in mp.HYPOTHESES if x.get("decide_at_trades"))
+    n, reg = h["decide_at_trades"], datetime.fromisoformat(h["registered_at"])
+    c = db(); mp.init(c); memecoin_paper.migrate(c)
+    for i in range(n - 1):
+        at = (reg + timedelta(minutes=i)).isoformat()
+        _pred(c, i + 1, at, .5 if i % 4 == 0 else .1); _paper(c, i + 1, at, -30 if i % 4 == 0 else 1)
+    c.commit()
+    r = next(x for x in mp.preregistered(c) if x["name"] == h["name"])
+    assert r["verdict"].startswith("blind") and "kept" not in r and r["trades_so_far"] == n - 1
+    for i in range(n - 1, n + 20):  # later trades beyond the horizon must not count
+        at = (reg + timedelta(minutes=i)).isoformat()
+        _pred(c, i + 1, at, .1); _paper(c, i + 1, at, -90)
+    c.commit()
+    r = next(x for x in mp.preregistered(c) if x["name"] == h["name"])
+    assert r["every_entry"]["trades"] == n and r["verdict"].startswith("SUPPORTED"), r

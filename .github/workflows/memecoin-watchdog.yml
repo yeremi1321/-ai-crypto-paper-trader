@@ -1,0 +1,23 @@
+name: Memecoin bot watchdog
+
+# Fails (and GitHub emails the repo owner) when the live bot's database is unreachable or discovery has stalled.
+# On 2026-09-29 the bot was down ~15 hours before anyone noticed.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "11,41 * * * *"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check /healthz (one retry)
+        run: |
+          for attempt in 1 2; do
+            code=$(curl -s -o body.json -w '%{http_code}' --max-time 60 https://meme-fast-paper-trader.onrender.com/healthz || true)
+            echo "attempt $attempt: HTTP $code"; cat body.json 2>/dev/null; echo
+            [ "$code" = "200" ] && exit 0
+            sleep 60
+          done
+          echo "::error::memecoin bot unhealthy (HTTP $code)"; exit 1

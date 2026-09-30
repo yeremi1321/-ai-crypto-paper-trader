@@ -1,0 +1,46 @@
+name: Memecoin nightly backup
+
+# Saves paper trades, predictions and predictor state from the live Render bot into the repo, so losing the
+# free database (as on 2026-09-30) no longer loses history. A fresh database restores from it on startup.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: memecoin-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Download backup from the live bot
+        run: |
+          curl -sf --retry 3 --retry-delay 20 --max-time 120 \
+            https://meme-fast-paper-trader.onrender.com/backup-export -o backup.json
+          python - <<'PY'
+          import json
+          d = json.load(open("backup.json"))
+          assert d.get("mode") == "paper_trading" and "paper_trades" in d and "predictions" in d, "bad backup"
+          print("trades", len(d["paper_trades"]["rows"]), "predictions", len(d["predictions"]["rows"]),
+                "predictor_state", bool(d.get("predictor_state")))
+          PY
+          mkdir -p backups
+          gzip -n -9 -c backup.json > backups/memecoin_backup.json.gz
+      - name: Commit backup
+        run: |
+          git config user.name "memecoin-backup"
+          git config user.email "actions@users.noreply.github.com"
+          git add backups/memecoin_backup.json.gz
+          git diff --cached --quiet && exit 0
+          git commit -m "Record nightly memecoin backup"
+          git pull --rebase origin main
+          git push origin HEAD:main

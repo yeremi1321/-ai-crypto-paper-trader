@@ -22,10 +22,11 @@ MAX_DIAGNOSTIC_GAP_S = 60  # gap/slide is only meaningful with quotes this close
 
 
 def _rule(name, tp=20.0, sl=10.0, trail_after=None, trail_drop=None, breakeven_after=None,
-          early_sl=None, early_window=None, tick_drop=None):
+          early_sl=None, early_window=None, tick_drop=None, confirm_stop=False):
     return {"name": name, "tp": tp, "sl": sl, "trail_after": trail_after,
             "trail_drop": trail_drop, "breakeven_after": breakeven_after,
-            "early_sl": early_sl, "early_window": early_window, "tick_drop": tick_drop}
+            "early_sl": early_sl, "early_window": early_window, "tick_drop": tick_drop,
+            "confirm_stop": confirm_stop}
 
 
 RULES = [_rule(BASELINE)]
@@ -41,6 +42,9 @@ RULES += [_rule("tp20_sl5", sl=5.0)]
 # TICKDROP: leave as soon as one quote-to-quote fall reaches d%, before a falling token reaches the stop.
 RULES += [_rule(f"tp20_sl10_early{x}_{w}s", early_sl=x, early_window=w) for x, w in ((5, 60), (6, 60), (6, 120), (8, 120))]
 RULES += [_rule(f"tp20_sl10_tickdrop{d}", tick_drop=d) for d in (5, 8)]
+# CONFIRM: the stop needs two quotes in a row at or below -10%, so one bad quote cannot stop a trade out
+# (tests upgrade #6; costs one extra quote of delay on real crashes).
+RULES += [_rule("tp20_sl10_confirm2", confirm_stop=True)]
 
 
 def _pct(a, b):
@@ -62,6 +66,7 @@ def simulate(entry_price, path, rule):
     peak = entry_price / (1 + SLIP)
     trail_armed = be_armed = False
     prev = None
+    below = False
     for t, p in path:
         if t > HORIZON_S + END_TOLERANCE_S:
             break
@@ -69,7 +74,11 @@ def simulate(entry_price, path, rule):
         peak = max(peak, p)
         peak_ret = _pct(entry_price, peak)
         if ret <= -rule["sl"]:
-            return "STOP", p, t
+            if not rule.get("confirm_stop") or below:
+                return "STOP", p, t
+            below = (t, p)
+        else:
+            below = False
         if rule.get("early_sl") is not None and t <= rule["early_window"] and ret <= -rule["early_sl"]:
             return "EARLY_STOP", p, t
         if rule.get("tick_drop") is not None and prev and _pct(prev, p) <= -rule["tick_drop"]:
@@ -87,6 +96,8 @@ def simulate(entry_price, path, rule):
                 return "BREAKEVEN", p, t
         if t >= HORIZON_S:
             return "TIME", p, t
+    if below and below == path[-1]:  # no quote left to confirm with: stop conservatively
+        return "STOP", below[1], below[0]
     if path and path[-1][0] >= HORIZON_S - END_TOLERANCE_S:
         return "TIME", path[-1][1], path[-1][0]
     return None

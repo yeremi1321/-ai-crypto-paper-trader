@@ -52,7 +52,8 @@ def safety_reasons(x,cfg=DEFAULTS):
 def score(x):
  s=min(max(float(x.get("price_change_1h_pct",0)),0),30)
  s+=min(max(float(x.get("volume_accel",0))-1,0),4)*7.5
- s+=min(max(float(x.get("holder_growth_1h_pct",0)),0),20)*.75
+ # holder_growth_1h_pct is not scored: discovery never measures it (always 0.0), so its 15 points could never be
+ # earned. Removing the term changes no live score. Re-add it only once holder counts are actually tracked.
  s+=10 if x.get("higher_highs",False) else 0; s+=10 if x.get("narrative_momentum",False) else 0
  return round(min(s,100),2)
 

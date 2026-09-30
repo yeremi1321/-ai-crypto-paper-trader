@@ -20,6 +20,7 @@ import memecoin_exit_replay
 import memecoin_candidate_study
 import memecoin_predictor
 import memecoin_retention
+import memecoin_backup
 import research_worker
 
 DISCOVERY_SECONDS=float(os.getenv("MEME_DISCOVERY_SECONDS","30"))
@@ -212,10 +213,44 @@ def open_position_watcher(stop=None,interval=None):
                 print(f"::warning::open-position refresh failed: {e}",flush=True)
         time.sleep(max(0.0,min(1.0,next_run-time.monotonic())))
 
+STALE_DISCOVERY_SECONDS=10*60
+
+def healthz():
+    """(ok, reasons). Unhealthy when the database is unreachable or discovery has stalled, so a watchdog or
+    Render's health check can notice. "/" keeps returning 200 with details for the dashboards."""
+    reasons=[]
+    try:
+        c=init_db()
+        try:
+            c.execute("SELECT 1").fetchone()
+        finally:
+            c.close()
+    except Exception as e:
+        reasons.append(f"database: {type(e).__name__}")
+    last=STATE.get("last_discovery")
+    started=datetime.fromisoformat(STATE["started_at"])
+    ref=datetime.fromisoformat(last) if last else started
+    if (datetime.now(timezone.utc)-ref).total_seconds()>STALE_DISCOVERY_SECONDS:
+        reasons.append("discovery stalled" if last else "no discovery since start")
+    return not reasons,reasons
+
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
         path=self.path.split("?",1)[0]
-        if path in research_worker.PATHS:
+        if path=="/healthz":
+            ok,reasons=healthz()
+            payload={"status":"ok" if ok else "unhealthy","reasons":reasons,"last_discovery":STATE.get("last_discovery")}
+            code=200 if ok else 503
+        elif path=="/backup-export":
+            try:
+                c=init_db()
+                try:
+                    payload=memecoin_backup.export(c); code=200
+                finally:
+                    c.close()
+            except Exception as e:
+                payload={"status":"unavailable","error":type(e).__name__}; code=503
+        elif path in research_worker.PATHS:
             payload,code=research_worker.get(path)
         elif path=="/paper-candidate-study":
             try:
@@ -255,6 +290,16 @@ class Health(BaseHTTPRequestHandler):
 if __name__=="__main__":
     if DISCOVERY_SECONDS<30 or REFRESH_SECONDS<30:
         raise SystemExit("Refusing intervals below 30 seconds to reduce upstream API/rate-limit risk.")
+    try:  # a brand-new database starts from the last nightly backup in the repo, if there is one
+        _c=init_db()
+        try:
+            restored=memecoin_backup.restore_if_fresh(_c)
+        finally:
+            _c.close()
+        if restored:
+            print(f"restored from {memecoin_backup.BACKUP_PATH}: {restored}",flush=True)
+    except Exception as e:
+        print(f"::warning::backup restore skipped: {e}",flush=True)
     threading.Thread(target=collector,daemon=True,name="meme-collector").start()
     threading.Thread(target=open_position_watcher,daemon=True,name="meme-open-positions").start()
     try:

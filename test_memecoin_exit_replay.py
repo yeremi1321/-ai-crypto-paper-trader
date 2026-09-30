@@ -140,3 +140,11 @@ def test_faster_loss_exits_and_gap_diagnostic():
     assert d["reading"].startswith("mostly gaps") and d["severe_stops_pct"] > 60
     sparse = {"entry_price": e, "path": [(30, 1.0), (600, .6)]}          # quotes 10 minutes apart
     assert er.stop_gaps([sparse])["reading"].startswith("prices too sparse")
+
+
+def test_confirmed_stop_ignores_one_bad_quote():
+    e = 1.01
+    r = RULE["tp20_sl10_confirm2"]
+    assert er.simulate(e, [(30, .5), (40, 1.0), (1200, 1.0)], r)[0] == "TIME"      # lone bad quote ignored
+    assert er.simulate(e, [(30, .85), (40, .80)], r)[:2] == ("STOP", .80)          # real drop stops one quote later
+    assert er.simulate(e, [(30, .5), (40, 1.0), (1200, 1.0)], RULE[er.BASELINE])[0] == "STOP"

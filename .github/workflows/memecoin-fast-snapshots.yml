@@ -2,8 +2,8 @@ name: Memecoin fast snapshots
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "2,7,17,22,32,37,47,52 * * * *"
+  # Schedule removed 2026-09-30: the Render bot is the source of truth. This copy sampled prices only every
+  # 5-13 minutes (too sparse for exit research) and committed its database to the repo every few minutes.
 
 permissions:
   contents: write

@@ -236,3 +236,31 @@ def test_history_with_glitched_wins_is_repaired_once():
     assert abs(c.execute("SELECT actual_net_return_pct FROM meme_predictions WHERE candidate_id=2").fetchone()[0] - cap) < 1e-9
     assert m.avg_win() < 30 and m.n == 80 and m.outcome_rules == mp.OUTCOME_RULES
     assert mp.report(c)["policies"]["buy_every_discovery"]["avg_net_return_pct"] < 20
+
+
+def test_every_new_forward_test_has_a_fixed_decision_point():
+    # Lesson from skip_high_severe_risk (62% -> 90% -> 76% while being re-checked): rules registered after the
+    # fixed-horizon policy must decide once, blind.
+    for h in mp.HYPOTHESES:
+        if h["registered_at"] > "2026-09-29T06:59:59+00:00":
+            assert h.get("decide_at_trades"), h["name"]
+
+
+def test_picks_vs_bot_is_blind_then_decides_on_the_same_measuring_stick():
+    h = next(x for x in mp.HYPOTHESES if x.get("kind") == "picks_vs_bot")
+    reg = datetime.fromisoformat(h["registered_at"])
+    c = db(); mp.init(c)
+    def row(i, wt, ps, dec, net):
+        c.execute("""INSERT INTO meme_predictions(candidate_id,predicted_at,would_trade,p_severe_loss,bot_decision,
+            status,actual_net_return_pct) VALUES(?,?,?,?,?,'RESOLVED',?)""",
+                  (i, (reg + timedelta(minutes=i)).isoformat(), wt, ps, dec, net))
+    for i in range(149):
+        row(i, 1, .1, None, 2.0)
+    for i in range(149, 200):
+        row(i, 0, .5, mp.TRADED, -6.0)
+    c.commit()
+    r = next(x for x in mp.preregistered(c) if x["name"] == h["name"])
+    assert r["verdict"].startswith("blind") and "kept" not in r
+    row(300, 1, .1, None, 2.0); c.commit()
+    r = next(x for x in mp.preregistered(c) if x["name"] == h["name"])
+    assert r["verdict"].startswith("SUPPORTED") and r["kept"]["trades"] == 150 and r["every_entry"]["trades"] == 51

@@ -73,6 +73,19 @@ HYPOTHESES = [
      "skip_if": {"field": "p_severe_loss", "at_least": 0.31},
      # Results stay hidden until all 150 trades have closed; the verdict at that point is final.
      "decide_at_trades": 150},
+    {"name": "predictor_low_risk_picks_beat_bot_fixed_150",
+     "registered_at": "2026-09-30T11:00:00+00:00",
+     "kind": "picks_vs_bot",
+     "motivation": "old-database history (lost 2026-09-30): tokens the predictor liked but the bot's gates rejected "
+                   "were the best group every time (about -1.5%/trade vs about -6% for bot entries), and the bot's "
+                   "score components carried little signal. Tests upgrades #3 (rebalance gates) and #5 (rebuild "
+                   "the entry score around the predictor's signals) before either touches live trading.",
+     "statement": "Discoveries the predictor would trade (expected return > 0) with a recorded severe-loss chance "
+                  "< 31% average a better simulated net return than the bot's own paper entries, both measured "
+                  "with the same simulated exit rule.",
+     "pick_if": {"would_trade": 1, "p_severe_loss_below": 0.31},
+     # Blind; decided once when 150 picks resolved after registration (and at least 40 bot entries).
+     "decide_at_trades": 150, "min_bot_entries": 40},
 ]
 
 
@@ -389,9 +402,9 @@ def rescore_history(c, model):
                 tally.severe_sum += net2
             j += 1
         ps = head.predict(json.loads(fj or "{}"))[0]
-        er = tally.expected_return(p, ps)
+        er = None if p is None else tally.expected_return(p, ps)  # restored stubs may lack a win probability
         severe = None if net is None else int(net <= SEVERE_LOSS_PCT)
-        out.append((ps, er, int(updates >= WARMUP and er > 0), severe,
+        out.append((ps, er, int((updates or 0) >= WARMUP and er is not None and er > 0), severe,
                     None if severe is None else (ps - severe) ** 2, cid))
     c.cursor().executemany(_q(c, """UPDATE meme_predictions SET p_severe_loss=?,expected_net_return_pct=?,
         would_trade=?,severe_loss=?,brier_severe=? WHERE candidate_id=?"""), out)
@@ -688,6 +701,9 @@ def preregistered(c, seed=31):
         trades = []
     out = []
     for h in HYPOTHESES:
+        if h.get("kind") == "picks_vs_bot":
+            out.append(_picks_vs_bot(c, h, seed))
+            continue
         rule = h["skip_if"]
         rows = [(net, (p_sev if rule["field"] == "p_severe_loss" else p_win))
                 for opened, net, p_win, p_sev in trades if opened >= h["registered_at"]]
@@ -733,6 +749,49 @@ def preregistered(c, seed=31):
                     "bootstrap_pct_kept_profitable": _r(100 * positive / done, 1) if done else None,
                     "verdict": verdict})
     return out
+
+
+def _picks_vs_bot(c, h, seed):
+    """Blind fixed-horizon comparison on the predictor's own simulated outcomes (same exit rule for both sides)."""
+    rows = c.execute(_q(c, """SELECT predicted_at,would_trade,p_severe_loss,bot_decision,actual_net_return_pct
+        FROM meme_predictions WHERE status='RESOLVED' AND actual_net_return_pct IS NOT NULL AND predicted_at>=?
+        ORDER BY predicted_at,id"""), (h["registered_at"],)).fetchall()
+    rule = h["pick_if"]
+    picks = [net for _, wt, ps, _, net in rows
+             if wt == rule["would_trade"] and ps is not None and ps < rule["p_severe_loss_below"]]
+    n = h["decide_at_trades"]
+    if len(picks) < n:
+        return {**h, "trades_so_far": len(picks),
+                "verdict": f"blind: decided once at {n} picks (have {len(picks)}); interim results hidden"}
+    picks = picks[:n]
+    # Bot entries over the same window: up to the time of the n-th pick.
+    last_at = [at for at, wt, ps, _, _ in rows
+               if wt == rule["would_trade"] and ps is not None and ps < rule["p_severe_loss_below"]][n - 1]
+    bot = [net for at, _, _, dec, net in rows if dec == TRADED and at <= last_at]
+    if len(bot) < h["min_bot_entries"]:
+        return {**h, "trades_so_far": len(picks),
+                "verdict": f"blind: waiting for {h['min_bot_entries']} bot entries in the window (have {len(bot)})"}
+
+    def side(vals):
+        return {"trades": len(vals), "avg_net_return_pct": _r(sum(vals) / len(vals), 2),
+                "win_rate_pct": _r(100 * sum(v > 0 for v in vals) / len(vals), 1), "pnl_usd_at_100": _r(sum(vals), 2)}
+    rng = random.Random(seed)
+    beats = positive = 0
+    for _ in range(BOOTSTRAP_SAMPLES):
+        a = [rng.choice(picks) for _ in picks]
+        b = [rng.choice(bot) for _ in bot]
+        beats += sum(a) / len(a) > sum(b) / len(b)
+        positive += sum(a) > 0
+    pct = _r(100 * beats / BOOTSTRAP_SAMPLES, 1)
+    kept, every = side(picks), side(bot)
+    if kept["avg_net_return_pct"] <= every["avg_net_return_pct"]:
+        verdict = "REJECTED: predictor picks do not beat the bot's entries"
+    elif pct >= 90:
+        verdict = "SUPPORTED: beats the bot's entries in >=90% of bootstrap samples -> eligible for a paper trial (needs owner OK)"
+    else:
+        verdict = "NOT SUPPORTED: ahead but not reliably"
+    return {**h, "kept": kept, "skipped": {}, "every_entry": every, "bootstrap_pct_kept_beats_every": pct,
+            "bootstrap_pct_kept_profitable": _r(100 * positive / BOOTSTRAP_SAMPLES, 1), "verdict": verdict}
 
 
 def suggestions(rep, model):

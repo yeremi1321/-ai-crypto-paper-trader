@@ -82,3 +82,16 @@ on the bot's real paper trades opened after registration, using the chances the 
 recorded before each trade. The first, `skip_high_severe_risk`, tests whether skipping bot
 entries with a 31%+ severe-loss chance improves average return. A SUPPORTED verdict only makes
 a rule eligible for a paper trial with the owner's OK; nothing changes live trading automatically.
+
+## Memecoin bot operations (Render)
+- **Health:** `/healthz` returns 503 when the database is unreachable or discovery has stalled. The
+  `Memecoin bot watchdog` workflow checks it every 30 minutes and fails (GitHub emails you) when it is down.
+- **Storage:** `memecoin_retention.py` prunes price snapshots and repeat discovery payloads hourly so the free
+  1 GB Postgres cannot fill up. Trades and predictions are never deleted.
+- **Backup:** the `Memecoin nightly backup` workflow saves paper trades, predictions and predictor state from
+  `/backup-export` to `backups/memecoin_backup.json.gz`.
+- **Moving to a new database** (the free Render database expires after 30 days):
+  1. Run the `Memecoin nightly backup` workflow once (Actions → Run workflow) so the backup is fresh.
+  2. Delete the old free database (Render allows only one), create a new free Postgres in the same region.
+  3. Paste its Internal Database URL into the service's `DATABASE_URL` and deploy the latest commit.
+  4. On startup the bot sees an empty database and restores the backup automatically (logged as `restored from`).

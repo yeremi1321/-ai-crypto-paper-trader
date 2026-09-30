@@ -203,3 +203,36 @@ def test_fixed_horizon_test_is_blind_until_decided_then_uses_exactly_n_trades():
     c.commit()
     r = next(x for x in mp.preregistered(c) if x["name"] == h["name"])
     assert r["every_entry"]["trades"] == n and r["verdict"].startswith("SUPPORTED"), r
+
+
+def test_isolated_spikes_are_ignored_but_real_moves_are_kept():
+    up = [(30, 1.0), (60, 900.0), (90, 1.0)]
+    down = [(30, 1.0), (60, .001), (90, 1.0)]
+    rug = [(30, 1.0), (60, .05), (90, .04)]
+    assert mp.despike(up) == [(30, 1.0), (90, 1.0)]
+    assert mp.despike(down) == [(30, 1.0), (90, 1.0)]
+    assert mp.despike(rug) == rug
+    assert mp.outcome(1.01, rug, True)[0] == "STOP"
+
+
+def test_target_fill_is_capped():
+    cap = study.net_return_pct(1.0, 1 + mp.MAX_FILL_UP_PCT / 100)
+    reason, net, _, _ = mp.outcome(1.0, [(60, 1500.0)], True)  # last quote, so despike cannot judge it
+    assert reason == "TARGET" and abs(net - cap) < 1e-9
+    assert mp.outcome(1.0, [(60, 1.3)], True)[1] < cap  # ordinary targets unchanged
+
+
+def test_history_with_glitched_wins_is_repaired_once():
+    c = db()
+    for i in range(80):
+        add(c, i + 1, T0 + timedelta(minutes=i), f"t{i}", path=[(240, 1.3 if i % 2 else .85)])
+    mp.catch_up(c, T0 + timedelta(hours=3))
+    c.execute("UPDATE meme_predictions SET actual_net_return_pct=150000 WHERE candidate_id=2")  # a glitched win
+    state = json.loads(c.execute("SELECT state_json FROM meme_predictor_state").fetchone()[0])
+    state.pop("outcome_rules"); state["win_sum"] += 150000
+    c.execute("UPDATE meme_predictor_state SET state_json=?", (json.dumps(state),)); c.commit()
+    m = mp.load_model(c)
+    cap = study.net_return_pct(1.0, 1 + mp.MAX_FILL_UP_PCT / 100)
+    assert abs(c.execute("SELECT actual_net_return_pct FROM meme_predictions WHERE candidate_id=2").fetchone()[0] - cap) < 1e-9
+    assert m.avg_win() < 30 and m.n == 80 and m.outcome_rules == mp.OUTCOME_RULES
+    assert mp.report(c)["policies"]["buy_every_discovery"]["avg_net_return_pct"] < 20

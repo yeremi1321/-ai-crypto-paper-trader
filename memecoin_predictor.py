@@ -38,6 +38,12 @@ L2 = 1e-3
 PRIOR_WIN_RATE = 0.25
 SEVERE_LOSS_PCT = -20.0        # net loss at least twice the planned stop: the price gapped through it
 PRIOR_SEVERE_RATE = 0.2
+# Quote hygiene. Snapshots arrive every ~30s (5 min on the GitHub collector), so a pump or a bad quote can show up as
+# one enormous jump. No paper trade has ever filled above +79% net, so a target exit is credited with at most a +100%
+# market move, and a lone quote more than 5x away from both neighbours (which agree with each other) is ignored.
+MAX_FILL_UP_PCT = 100.0
+SPIKE_X = 5.0
+OUTCOME_RULES = 2              # bump when outcome() semantics change; stored history is repaired once on load
 CONFIDENT_MISS = 0.5           # |predicted - actual| at or above this writes a lesson
 Z_CLIP = 5.0
 TRADED = "PAPER_TRADE_CANDIDATE"
@@ -145,13 +151,15 @@ class Model:
         self.severe_n = s.get("severe_n", 0)
         self.severe_sum = s.get("severe_sum", 0.0)
         self.cursor_id = s.get("cursor_id", 0)
+        self.outcome_rules = s.get("outcome_rules", 1)
         # Second head: chance of a severe loss. None until trained (older saved states lack it).
         self.severe = Model(s["severe"], PRIOR_SEVERE_RATE) if "severe" in s else None
 
     def state(self):
         out = {"w": self.w, "bias": self.bias, "g2": self.g2, "stats": self.stats, "n": self.n,
                "wins": self.wins, "win_sum": self.win_sum, "loss_sum": self.loss_sum,
-               "severe_n": self.severe_n, "severe_sum": self.severe_sum, "cursor_id": self.cursor_id}
+               "severe_n": self.severe_n, "severe_sum": self.severe_sum, "cursor_id": self.cursor_id,
+               "outcome_rules": self.outcome_rules}
         if self.severe is not None:
             out["severe"] = self.severe.state()
         return out
@@ -230,11 +238,25 @@ class Model:
             self.loss_sum += net
 
 
+def despike(path):
+    """Drop isolated one-quote spikes: a price over SPIKE_X times away from both neighbours that agree (within 2x)."""
+    out = []
+    for i, (t, p) in enumerate(path):
+        if 0 < i < len(path) - 1 and p > 0:
+            a, b = path[i - 1][1], path[i + 1][1]
+            if a > 0 and b > 0 and max(a, b) <= 2 * min(a, b) and (p > SPIKE_X * max(a, b) or p * SPIKE_X < min(a, b)):
+                continue
+        out.append((t, p))
+    return out
+
+
 def outcome(entry, path, window_closed):
-    """Live paper rule on [(secs, price)], same semantics as memecoin_candidate_study.simulate_live.
+    """Live paper rule on [(secs, price)], same semantics as memecoin_candidate_study.simulate_live, plus quote
+    hygiene: isolated spikes are ignored and a target fill is capped at a +MAX_FILL_UP_PCT market move.
 
     Returns (reason, net_return_pct, max_up_pct, decided_at_secs) or None while undecided. The
     'last quote near the horizon' fallback only applies once no later quote can still arrive."""
+    path = despike(path)
     max_up = 0.0
     for t, p in path:
         if t > HORIZON_S + END_TOLERANCE_S:
@@ -244,7 +266,7 @@ def outcome(entry, path, window_closed):
         if ret <= -SL:
             return "STOP", net_return_pct(entry, p), max_up, t
         if ret >= TP:
-            return "TARGET", net_return_pct(entry, p), max_up, t
+            return "TARGET", net_return_pct(entry, min(p, entry * (1 + MAX_FILL_UP_PCT / 100))), max_up, t
         if t >= HORIZON_S:
             return "TIME", net_return_pct(entry, p), max_up, t
     inside = [s for s in path if s[0] <= HORIZON_S + END_TOLERANCE_S]
@@ -312,9 +334,31 @@ def init(c):
 def load_model(c):
     row = c.execute("SELECT state_json FROM meme_predictor_state WHERE id=1").fetchone()
     model = Model(json.loads(row[0]) if row else None)
-    if model.severe is None and model.n:
+    if model.n and model.outcome_rules < OUTCOME_RULES:
+        repair_outcomes(c, model)
+    elif model.severe is None and model.n:
         rescore_history(c, model)
+    model.outcome_rules = OUTCOME_RULES
     return model
+
+
+def repair_outcomes(c, model):
+    """One-time repair of history recorded before the target-fill cap: cap stored target exits, rebuild the return
+    tallies from stored outcomes, then re-score expected returns and the severe head without look-ahead.
+
+    Win/loss and severe labels are unchanged by the cap (a capped target is still a win), so the learned weights
+    stay as they are."""
+    cap = net_return_pct(1.0, 1 + MAX_FILL_UP_PCT / 100)
+    c.execute(_q(c, """UPDATE meme_predictions SET actual_net_return_pct=? WHERE status='RESOLVED'
+        AND actual_reason='TARGET' AND actual_net_return_pct>?"""), (cap, cap))
+    nets = [r[0] for r in c.execute("""SELECT actual_net_return_pct FROM meme_predictions
+        WHERE status='RESOLVED' AND actual_net_return_pct IS NOT NULL""")]
+    model.n = len(nets)
+    model.wins = sum(n > 0 for n in nets)
+    model.win_sum = sum(n for n in nets if n > 0)
+    model.loss_sum = sum(n for n in nets if n <= 0)
+    c.commit()
+    rescore_history(c, model)
 
 
 def rescore_history(c, model):

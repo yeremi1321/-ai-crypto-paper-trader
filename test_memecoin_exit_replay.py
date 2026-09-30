@@ -125,3 +125,18 @@ if __name__ == "__main__":
     test_genuine_edge_is_recognised()
     test_endpoint_read_only_and_cached()
     print("exit replay tests passed")
+
+
+def test_faster_loss_exits_and_gap_diagnostic():
+    e = 1.01
+    assert er.simulate(e, [(30, .95)], RULE["tp20_sl10_early5_60s"])[0] == "EARLY_STOP"
+    assert er.simulate(e, [(90, .95), (1200, 1.0)], RULE["tp20_sl10_early5_60s"])[0] == "TIME"  # outside window
+    assert er.simulate(e, [(30, 1.0), (60, .93)], RULE["tp20_sl10_tickdrop5"])[0] == "TICK_DROP"
+    assert er.simulate(e, [(30, 1.0), (60, .97)], RULE["tp20_sl10_tickdrop5"]) is None
+    gap = {"entry_price": e, "path": [(30, 1.0), (40, .60)]}             # one 10s tick from -1% to -40%
+    slide = {"entry_price": e, "path": [(30, .95), (40, .92), (50, .88)]}
+    d = er.stop_gaps([gap, gap, slide])
+    assert d["stops"] == 3 and d["gap_stops"]["n"] == 2 and d["sliding_stops"]["n"] == 1
+    assert d["reading"].startswith("mostly gaps") and d["severe_stops_pct"] > 60
+    sparse = {"entry_price": e, "path": [(30, 1.0), (600, .6)]}          # quotes 10 minutes apart
+    assert er.stop_gaps([sparse])["reading"].startswith("prices too sparse")

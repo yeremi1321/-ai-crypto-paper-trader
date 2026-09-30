@@ -19,6 +19,7 @@ import memecoin_entry_analysis
 import memecoin_exit_replay
 import memecoin_candidate_study
 import memecoin_predictor
+import memecoin_retention
 import research_worker
 
 DISCOVERY_SECONDS=float(os.getenv("MEME_DISCOVERY_SECONDS","30"))
@@ -27,7 +28,8 @@ OPEN_REFRESH_SECONDS=10.0
 PORT=int(os.getenv("PORT","10000"))
 STATE={"started_at":datetime.now(timezone.utc).isoformat(),"cycles":0,"last_discovery":None,"last_refresh":None,"last_error":None,
        "last_open_refresh":None,"open_refresh_cycles":0,"last_open_error":None,
-       "last_prediction":None,"last_prediction_error":None}
+       "last_prediction":None,"last_prediction_error":None,
+       "last_retention":None,"last_retention_result":None,"last_retention_error":None}
 ANALYSIS_CACHE_SECONDS=120.0
 _ANALYSIS={"at":0.0,"summary":None,"trades":None}
 _ANALYSIS_LOCK=threading.Lock()
@@ -145,8 +147,20 @@ def predict_and_learn():
     STATE["last_prediction_error"]=None
     return result
 
+def prune_storage():
+    """Hourly storage retention so the free 1 GB database cannot fill up again. Never deletes trades."""
+    c=init_db()
+    try:
+        result=memecoin_retention.run(c)
+    finally:
+        c.close()
+    STATE["last_retention"]=datetime.now(timezone.utc).isoformat()
+    STATE["last_retention_result"]=result
+    STATE["last_retention_error"]=None
+    return result
+
 def collector(stop=None):
-    next_discovery=0.0; next_refresh=0.0
+    next_discovery=0.0; next_refresh=0.0; next_retention=0.0
     while not (stop and stop.is_set()):
         try:
             now=time.monotonic()
@@ -164,6 +178,14 @@ def collector(stop=None):
                 except Exception as e:
                     STATE["last_prediction_error"]=repr(e)
                     print(f"::warning::predictor step failed: {e}",flush=True)
+            now=time.monotonic()
+            if now>=next_retention:
+                next_retention=now+memecoin_retention.INTERVAL_SECONDS
+                try:
+                    prune_storage()
+                except Exception as e:
+                    STATE["last_retention_error"]=repr(e)
+                    print(f"::warning::storage retention failed: {e}",flush=True)
             STATE["cycles"]+=1
             STATE["last_error"]=None
         except Exception as e:

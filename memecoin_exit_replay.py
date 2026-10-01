@@ -47,6 +47,51 @@ RULES += [_rule(f"tp20_sl10_tickdrop{d}", tick_drop=d) for d in (5, 8)]
 RULES += [_rule("tp20_sl10_confirm2", confirm_stop=True)]
 
 
+# Pre-registered blind forward tests of exit rules, judged only on trades opened after registration, once, at a fixed
+# trade count. Never edit one after registration; add a new one instead. Nothing here changes live trading.
+FORWARD_TESTS = [
+    {"name": "tighter_stop_sl5_fixed_150",
+     "registered_at": "2026-10-01T23:00:00+00:00",
+     "motivation": "exit replay 2026-10-01 22:05Z (154 trades): tp20_sl5 was chosen on training tokens and beat the "
+                   "live rule on holdout (+2.92% vs +2.09%/trade) but was not reliably profitable; 63 of 84 stops were "
+                   "gaps no exit can catch.",
+     "statement": "On the first 150 paper trades opened after registration, a -5% stop (target unchanged) gives a "
+                  "higher average net return than the live -10% stop on the same sampled price paths.",
+     "rule": "tp20_sl5", "decide_at_trades": 150},
+]
+
+
+def forward_tests(paths, results, seed=13):
+    out = []
+    for h in FORWARD_TESTS:
+        trades = sorted((tr for tr in paths if tr["opened_at"] >= h["registered_at"] and tr["id"] in results),
+                        key=lambda tr: (tr["opened_at"], tr["id"]))
+        n = h["decide_at_trades"]
+        if len(trades) < n:
+            out.append({**h, "trades_so_far": len(trades),
+                        "verdict": f"blind: decided once at {n} trades (have {len(trades)}); interim results hidden"})
+            continue
+        trades = trades[:n]
+        rule = [results[tr["id"]][h["rule"]][1] for tr in trades]
+        live = [results[tr["id"]][BASELINE][1] for tr in trades]
+        rng = random.Random(seed)
+        beats = positive = 0
+        for _ in range(BOOTSTRAP_SAMPLES):
+            idx = [rng.randrange(n) for _ in range(n)]
+            beats += sum(rule[i] for i in idx) > sum(live[i] for i in idx)
+            positive += sum(rule[i] for i in idx) > 0
+        pct = _r(100 * beats / BOOTSTRAP_SAMPLES, 1)
+        if mean(rule) <= mean(live):
+            verdict = "REJECTED: the rule does not beat the live exit"
+        elif pct >= 90:
+            verdict = "SUPPORTED: beats the live exit in >=90% of bootstrap samples -> eligible for a paper trial (needs owner OK)"
+        else:
+            verdict = "NOT SUPPORTED: ahead but not reliably"
+        out.append({**h, "rule_result": _stats(rule), "live_result": _stats(live), "bootstrap_pct_beats_live": pct,
+                    "bootstrap_pct_rule_positive": _r(100 * positive / BOOTSTRAP_SAMPLES, 1), "verdict": verdict})
+    return out
+
+
 def _pct(a, b):
     return ((b / a) - 1) * 100 if a else None
 
@@ -271,6 +316,7 @@ def run(conn, as_of):
             "median_seconds_between_prices": _r(median(gaps), 1) if gaps else None,
             "harness_validation_live_rule": validate(paths, results),
             "stop_gap_diagnostic": stop_gaps(paths),
+            "forward_tests": forward_tests(paths, results),
             "rules": [r["name"] for r in RULES],
             "all_trades_token_split": evaluate(paths, results, "all trades, token-disjoint split"),
             "first_trade_per_token": evaluate(first, results, "first trade per token (independent)"),

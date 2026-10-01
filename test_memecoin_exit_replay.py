@@ -148,3 +148,22 @@ def test_confirmed_stop_ignores_one_bad_quote():
     assert er.simulate(e, [(30, .5), (40, 1.0), (1200, 1.0)], r)[0] == "TIME"      # lone bad quote ignored
     assert er.simulate(e, [(30, .85), (40, .80)], r)[:2] == ("STOP", .80)          # real drop stops one quote later
     assert er.simulate(e, [(30, .5), (40, 1.0), (1200, 1.0)], RULE[er.BASELINE])[0] == "STOP"
+
+
+def test_exit_forward_test_is_blind_then_decides_on_exactly_n_trades():
+    h = er.FORWARD_TESTS[0]
+    reg = datetime.fromisoformat(h["registered_at"])
+    def trade(i, dip):
+        opened = (reg + timedelta(minutes=i)).isoformat()
+        return {"id": i, "token": f"t{i}", "token_address": f"a{i}", "opened_at": opened, "entry_price": 1.01,
+                "actual_reason": None, "actual_net_return_pct": None,
+                "path": [(30, dip), (1200, .80 if dip < .97 else 1.0)]}   # dips keep falling; the rest recover
+    paths = [trade(i, .95 if i % 3 == 0 else .99) for i in range(h["decide_at_trades"] - 1)]
+    results, _ = er.replay(paths)
+    r = er.forward_tests(paths, results)[0]
+    assert r["verdict"].startswith("blind") and "rule_result" not in r
+    paths.append(trade(1000, .95))
+    paths.append({**trade(-1, .95), "opened_at": (reg - timedelta(hours=1)).isoformat()})  # before registration
+    results, _ = er.replay(paths)
+    r = er.forward_tests(paths, results)[0]
+    assert r["rule_result"]["n"] == h["decide_at_trades"] and r["verdict"].startswith("SUPPORTED"), r

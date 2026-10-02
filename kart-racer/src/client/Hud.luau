@@ -8,6 +8,7 @@ local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Items = require(Shared:WaitForChild("Items"))
+local KartBodies = require(Shared:WaitForChild("KartBodies"))
 local Karts = require(Shared:WaitForChild("Karts"))
 
 local Hud = {}
@@ -88,7 +89,7 @@ end
 ---------------------------------------------------------------------------
 -- Lobby
 ---------------------------------------------------------------------------
-local lobby = frame(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 620, 0, 420) })
+local lobby = frame(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 620, 0, 560) })
 text(lobby, { Position = UDim2.new(0, 20, 0, 14), Size = UDim2.new(1, -40, 0, 44), Text = "KART RACER" , TextColor3 = YELLOW })
 local lobbySub = text(lobby, { Position = UDim2.new(0, 20, 0, 60), Size = UDim2.new(1, -40, 0, 22), Font = Enum.Font.GothamMedium, Text = "" })
 local cards = Instance.new("Frame")
@@ -100,9 +101,11 @@ local cardLayout = Instance.new("UIListLayout")
 cardLayout.FillDirection = Enum.FillDirection.Horizontal
 cardLayout.Padding = UDim.new(0, 10)
 cardLayout.Parent = cards
-local playersLabel = text(lobby, { Position = UDim2.new(0, 20, 0, 276), Size = UDim2.new(1, -40, 0, 60), Font = Enum.Font.GothamMedium, TextScaled = false, TextSize = 15, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Text = "" })
+local playersLabel = text(lobby, { Position = UDim2.new(0, 20, 0, 420), Size = UDim2.new(1, -40, 0, 60), Font = Enum.Font.GothamMedium, TextScaled = false, TextSize = 15, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Text = "" })
 
 local chosenKart = Karts.Default
+local look = { body = KartBodies.Default, main = 1, accent = 10 }
+Hud.onLook = nil :: ((any) -> ())?
 local isReady = false
 local cardButtons: { [string]: TextButton } = {}
 Hud.onChooseKart = nil :: ((string) -> ())?
@@ -137,6 +140,74 @@ for _, def in Karts.List do
 	cardButtons[def.id] = card
 end
 
+-- Body design and paint pickers ---------------------------------------------
+local function pickerRow(y: number, title: string): Frame
+	text(lobby, { Position = UDim2.new(0, 20, 0, y), Size = UDim2.new(0, 70, 0, 30), Font = Enum.Font.GothamBold, TextScaled = false, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left, Text = title })
+	local row = Instance.new("Frame")
+	row.BackgroundTransparency = 1
+	row.Position = UDim2.new(0, 92, 0, y)
+	row.Size = UDim2.new(1, -112, 0, 30)
+	row.Parent = lobby
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Horizontal
+	layout.Padding = UDim.new(0, 6)
+	layout.Parent = row
+	return row
+end
+
+local bodyButtons: { [string]: TextButton } = {}
+local mainSwatches: { TextButton } = {}
+local accentSwatches: { TextButton } = {}
+
+local function sendLook()
+	if Hud.onLook then
+		Hud.onLook(look)
+	end
+	Hud.refreshPickers()
+end
+
+local bodyRow = pickerRow(278, "Body")
+for _, body in KartBodies.List do
+	bodyButtons[body.id] = button(bodyRow, body.name, { Size = UDim2.new(0, 78, 1, 0), TextScaled = true, Font = Enum.Font.GothamBold }, function()
+		look.body = body.id
+		sendLook()
+	end)
+end
+
+local function swatchRow(y: number, title: string, list: { TextButton }, key: string)
+	local row = pickerRow(y, title)
+	for i, c in KartBodies.Palette do
+		list[i] = button(row, "", { Size = UDim2.new(0, 30, 1, 0), BackgroundColor3 = Color3.fromRGB(c[1], c[2], c[3]) }, function()
+			look[key] = i
+			sendLook()
+		end)
+	end
+end
+swatchRow(318, "Paint", mainSwatches, "main")
+swatchRow(358, "Trim", accentSwatches, "accent")
+
+local function outline(b: GuiObject, on: boolean)
+	local stroke = b:FindFirstChildOfClass("UIStroke") or Instance.new("UIStroke")
+	stroke.Thickness = if on then 3 else 0
+	stroke.Color = YELLOW
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Parent = b
+end
+
+function Hud.refreshPickers()
+	for id, b in bodyButtons do
+		outline(b, id == look.body)
+		b.BackgroundColor3 = if id == look.body then Color3.fromRGB(90, 90, 120) else Color3.fromRGB(60, 60, 80)
+	end
+	for i, b in mainSwatches do
+		outline(b, i == look.main)
+	end
+	for i, b in accentSwatches do
+		outline(b, i == look.accent)
+	end
+end
+Hud.refreshPickers()
+
 function Hud.refreshCards()
 	for id, card in cardButtons do
 		local stroke = card:FindFirstChildOfClass("UIStroke") or Instance.new("UIStroke")
@@ -162,7 +233,8 @@ function Hud.setLobby(state: any)
 	local lines = {}
 	for _, p in state.players do
 		local kart = Karts.get(p.kart).name
-		table.insert(lines, `{if p.ready then "✔" else "…"} {p.name} ({kart})`)
+		local body = KartBodies.get(p.body).name
+		table.insert(lines, `{if p.ready then "✔" else "…"} {p.name} ({kart}, {body})`)
 		if p.name == player.DisplayName then
 			isReady = p.ready
 		end

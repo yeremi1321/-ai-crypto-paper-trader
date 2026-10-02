@@ -15,6 +15,7 @@ end
 
 local Shared = child(ReplicatedStorage, "Shared")
 local KartPhysics = require(child(Shared, "KartPhysics"))
+local KartBodies = require(child(Shared, "KartBodies"))
 local Karts = require(child(Shared, "Karts"))
 
 local KartRig = {}
@@ -29,8 +30,19 @@ local function weld(a: BasePart, b: BasePart)
 	w.Parent = b
 end
 
-local function visual(model: Model, root: BasePart, name: string, size: Vector3, offset: CFrame, color: Color3, material: Enum.Material?): Part
-	local p = Instance.new("Part")
+local function visual(model: Model, root: BasePart, name: string, size: Vector3, offset: CFrame, color: Color3, material: Enum.Material?, shape: string?): BasePart
+	local p: BasePart
+	if shape == "Wedge" then
+		p = Instance.new("WedgePart")
+	else
+		local part = Instance.new("Part")
+		if shape == "Ball" then
+			part.Shape = Enum.PartType.Ball
+		elseif shape == "Cylinder" then
+			part.Shape = Enum.PartType.Cylinder
+		end
+		p = part
+	end
 	p.Name = name
 	p.Size = size
 	p.CFrame = root.CFrame * offset
@@ -47,10 +59,34 @@ local function visual(model: Model, root: BasePart, name: string, size: Vector3,
 	return p
 end
 
+local function rgb(c: { number }): Color3
+	return Color3.fromRGB(c[1], c[2], c[3])
+end
+
+-- Colour and material for each body part role.
+local function roleStyle(role: string, main: Color3, accent: Color3): (Color3, Enum.Material, number)
+	if role == "main" then
+		return main, Enum.Material.SmoothPlastic, 0
+	elseif role == "accent" then
+		return accent, Enum.Material.SmoothPlastic, 0
+	elseif role == "glass" then
+		return Color3.fromRGB(150, 210, 255), Enum.Material.Glass, 0.45
+	elseif role == "chrome" then
+		return Color3.fromRGB(205, 210, 220), Enum.Material.Metal, 0
+	elseif role == "light" then
+		return Color3.fromRGB(255, 250, 220), Enum.Material.Neon, 0
+	end
+	return Color3.fromRGB(35, 35, 40), Enum.Material.SmoothPlastic, 0
+end
+
 -- `cf` is where the kart should sit on the road (position on the surface).
-function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: Instance): Model
+-- `look` picks the body design and paint (see KartBodies); stats come from `kartId`.
+function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: Instance, look: KartBodies.Look?): Model
 	local def = Karts.get(kartId)
-	local color = Color3.fromRGB(def.color[1], def.color[2], def.color[3])
+	local chosen = look or { body = KartBodies.Default, main = 1, accent = 10 }
+	local body = KartBodies.get(chosen.body)
+	local main = rgb(KartBodies.color(chosen.main))
+	local accent = rgb(KartBodies.color(chosen.accent))
 
 	local model = Instance.new("Model")
 	model.Name = driverName
@@ -90,18 +126,33 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	align.Parent = root
 
 	local drop = CFrame.new(0, -BODY_DROP, 0)
-	visual(model, root, "Chassis", Vector3.new(4.6, 0.6, 7), drop, Color3.fromRGB(35, 35, 40))
-	visual(model, root, "Body", Vector3.new(4.2, 1.2, 4.4), drop * CFrame.new(0, 0.8, -0.6), color)
-	visual(model, root, "Nose", Vector3.new(3.4, 0.8, 1.6), drop * CFrame.new(0, 0.5, -3.4), color)
-	visual(model, root, "Spoiler", Vector3.new(4.4, 0.25, 1), drop * CFrame.new(0, 2.2, 3.2), color)
-	visual(model, root, "Strut", Vector3.new(0.3, 1.4, 0.3), drop * CFrame.new(0, 1.4, 3.2), Color3.fromRGB(35, 35, 40))
-	local exhaust = visual(model, root, "Exhaust", Vector3.new(1.2, 0.6, 0.4), drop * CFrame.new(0, 0.6, 3.6), Color3.fromRGB(255, 140, 40), Enum.Material.Neon)
+	for i, part in body.parts do
+		local color, material, transparency = roleStyle(part.role, main, accent)
+		local rot = part.rotation or { 0, 0, 0 }
+		local offset = drop
+			* CFrame.new(part.offset[1], part.offset[2], part.offset[3])
+			* CFrame.Angles(math.rad(rot[1]), math.rad(rot[2]), math.rad(rot[3]))
+		local p = visual(model, root, `Body{i}`, Vector3.new(part.size[1], part.size[2], part.size[3]), offset, color, material, part.shape)
+		p.Transparency = transparency
+	end
+	local ex = body.exhaust
+	local exhaust = visual(model, root, "Exhaust", Vector3.new(1.2, 0.6, 0.4), drop * CFrame.new(ex[1], ex[2], ex[3]), Color3.fromRGB(255, 140, 40), Enum.Material.Neon)
 	exhaust.Transparency = 1
 
-	for _, w in { { -2.5, -2.4, "WheelFL" }, { 2.5, -2.4, "WheelFR" }, { -2.5, 2.4, "WheelRL" }, { 2.5, 2.4, "WheelRR" } } do
-		local wheel = visual(model, root, w[3], Vector3.new(0.9, 1.6, 1.6), drop * CFrame.new(w[1], -0.1, w[2]), Color3.fromRGB(20, 20, 22))
-		wheel.Shape = Enum.PartType.Cylinder
-		if w[2] > 0 then
+	-- Wheels sit on the road: the body's center rides BODY_DROP below the ball's center.
+	local groundToBody = KartRig.BallRadius - BODY_DROP
+	local wheelY = body.wheelRadius - groundToBody
+	local rearZ = -math.huge
+	for _, w in body.wheels do
+		rearZ = math.max(rearZ, w[2])
+	end
+	for i, w in body.wheels do
+		local name = if w[2] >= rearZ then (if w[1] < 0 then "WheelRL" else "WheelRR") else `Wheel{i}`
+		local d = body.wheelRadius * 2
+		local wheel = visual(model, root, name, Vector3.new(body.wheelWidth, d, d), drop * CFrame.new(w[1], wheelY, w[2]), Color3.fromRGB(20, 20, 22), nil, "Cylinder")
+		local hub = visual(model, root, `{name}Hub`, Vector3.new(body.wheelWidth + 0.05, d * 0.5, d * 0.5), drop * CFrame.new(w[1], wheelY, w[2]), accent, Enum.Material.Metal, "Cylinder")
+		local _ = hub
+		if w[2] >= rearZ then
 			local sparks = Instance.new("ParticleEmitter")
 			sparks.Name = "DriftSparks"
 			sparks.Texture = "rbxasset://textures/particles/sparkles_main.dds"
@@ -117,10 +168,11 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 		end
 	end
 
+	local seatPos = body.seat
 	local seat = Instance.new("Seat")
 	seat.Name = "DriverSeat"
 	seat.Size = Vector3.new(2, 0.4, 2)
-	seat.CFrame = root.CFrame * drop * CFrame.new(0, 0.6, 0.6)
+	seat.CFrame = root.CFrame * drop * CFrame.new(seatPos[1], seatPos[2], seatPos[3])
 	seat.Transparency = 1
 	seat.CanCollide = false
 	seat.Massless = true
@@ -145,6 +197,7 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	label.Parent = tag
 
 	model:SetAttribute("KartId", def.id)
+	model:SetAttribute("Body", body.id)
 	model.Parent = parent
 	return model
 end

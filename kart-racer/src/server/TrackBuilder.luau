@@ -1,13 +1,17 @@
--- Builds a track's parts from its centerline: road, grass shoulders, walls,
--- bridge pillars, boost pads, the start line and the ground below.
+-- Builds a track's parts from its centerline: road, curbs and lane lines,
+-- grass shoulders, walls, bridge pillars, boost pads, the start line, the
+-- ground, scenery (see Scenery.luau / Props.luau) and the theme's lighting.
 
 local Lighting = game:GetService("Lighting")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage.Shared
+local Scenery = require(Shared.Scenery)
 local Track = require(Shared.Track)
 local Tracks = require(Shared.Tracks)
+
+local Props = require(script.Parent.Props)
 
 local TrackBuilder = {}
 
@@ -33,6 +37,63 @@ local function part(parent: Instance, name: string, size: Vector3, cf: CFrame, c
 	return p
 end
 
+-- Markings sit just above the road; raycasts and collisions ignore them.
+local function decal(parent: Instance, size: Vector3, cf: CFrame, color: Color3, glow: boolean): Part
+	local p = part(parent, "Marking", size, cf, color, if glow then Enum.Material.Neon else Enum.Material.SmoothPlastic)
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.CastShadow = false
+	return p
+end
+
+-- Sky, sun and colour grading for a theme. Replaces the previous track's.
+local function applyLighting(theme: any)
+	for _, name in { "KartAtmosphere", "KartBloom", "KartGrade", "KartSunRays" } do
+		local old = Lighting:FindFirstChild(name)
+		if old then
+			old:Destroy()
+		end
+	end
+	Lighting.ClockTime = theme.clock
+	Lighting.Brightness = theme.brightness
+	Lighting.Ambient = rgb(theme.ambient)
+	Lighting.OutdoorAmbient = rgb(theme.ambient)
+	Lighting.GlobalShadows = true
+	Lighting.EnvironmentDiffuseScale = 0.5
+	Lighting.EnvironmentSpecularScale = 0.5
+
+	local a = theme.atmosphere
+	local atmosphere = Instance.new("Atmosphere")
+	atmosphere.Name = "KartAtmosphere"
+	atmosphere.Density = a.density
+	atmosphere.Haze = a.haze
+	atmosphere.Glare = a.glare
+	atmosphere.Color = rgb(a.color)
+	atmosphere.Decay = rgb(a.decay)
+	atmosphere.Parent = Lighting
+
+	local bloom = Instance.new("BloomEffect")
+	bloom.Name = "KartBloom"
+	bloom.Intensity = theme.bloom
+	bloom.Size = 24
+	bloom.Threshold = 0.9
+	bloom.Parent = Lighting
+
+	local grade = Instance.new("ColorCorrectionEffect")
+	grade.Name = "KartGrade"
+	grade.TintColor = rgb(theme.tint)
+	grade.Saturation = theme.saturation
+	grade.Contrast = 0.08
+	grade.Parent = Lighting
+
+	local rays = Instance.new("SunRaysEffect")
+	rays.Name = "KartSunRays"
+	rays.Intensity = if theme.clock > 6 and theme.clock < 19 then 0.08 else 0
+	rays.Spread = 0.6
+	rays.Parent = Lighting
+end
+
 local function flatAngle(a: Vector3, b: Vector3): number
 	return math.atan2(b.X - a.X, b.Z - a.Z)
 end
@@ -56,6 +117,12 @@ function TrackBuilder.build(trackId: string): (Folder, Track.Built)
 	local pts = track.points
 	local n = #pts
 	local minY, minX, maxX, minZ, maxZ = math.huge, math.huge, -math.huge, math.huge, -math.huge
+	local markings = Instance.new("Folder")
+	markings.Name = "Markings"
+	markings.Parent = folder
+	local neon = def.theme == "neon"
+	local curbColors = { rgb(theme.curb[1]), rgb(theme.curb[2]) }
+	local lineColor = rgb(theme.line)
 
 	for i = 1, n do
 		local a, b, c = v3(pts[i]), v3(pts[i % n + 1]), v3(pts[(i + 1) % n + 1])
@@ -72,6 +139,20 @@ function TrackBuilder.build(trackId: string): (Folder, Track.Built)
 			local shoulder = part(folder, "Shoulder", Vector3.new(sw, 1, segLen), cf * CFrame.new(side * (half + sw / 2), -0.52, 0), shoulderColor, Enum.Material.Grass)
 			shoulder:SetAttribute("Surface", "offroad")
 			part(folder, "Wall", Vector3.new(1, 4, segLen), cf * CFrame.new(side * (half + sw + 0.5), 1.5, 0), wallColor, if def.theme == "neon" then Enum.Material.Neon else Enum.Material.SmoothPlastic)
+		end
+
+		-- Red-and-white curbs through corners, lane lines on the straights.
+		if turn > 0.02 then
+			for _, side in { -1, 1 } do
+				decal(markings, Vector3.new(3, 0.1, length + 0.6), cf * CFrame.new(side * (half - 1.5), 0.05, 0), curbColors[i % 2 + 1], neon)
+			end
+		else
+			for _, side in { -1, 1 } do
+				decal(markings, Vector3.new(0.8, 0.06, length + 0.4), cf * CFrame.new(side * (half - 1.2), 0.03, 0), lineColor, neon)
+			end
+		end
+		if i % 3 ~= 0 then
+			decal(markings, Vector3.new(0.7, 0.06, length * 0.7), cf * CFrame.new(0, 0.03, 0), lineColor, neon)
 		end
 
 		minY = math.min(minY, a.Y)
@@ -141,7 +222,15 @@ function TrackBuilder.build(trackId: string): (Folder, Track.Built)
 	end
 	part(folder, "Banner", Vector3.new(def.width + 10, 3, 1), lineCf * CFrame.new(0, 17, 0), rgb(theme.accent), Enum.Material.Neon)
 
-	Lighting.ClockTime = theme.clock
+	-- Scenery around the track.
+	local scenery = Instance.new("Folder")
+	scenery.Name = "Scenery"
+	scenery.Parent = folder
+	for _, prop in Scenery.place(track) do
+		Props.build(prop, theme, scenery)
+	end
+
+	applyLighting(theme)
 	folder.Parent = Workspace
 	return folder, track
 end

@@ -90,7 +90,7 @@ for _, def in Tracks.List do
 		for _, r in racers do
 			T.ok(r.finishTime, `{r.id} did not finish (lap {r.progress.lap}, sector {r.progress.sector})`)
 			local lapTime = r.finishTime / def.laps
-			T.ok(lapTime > 15 and lapTime < 60, `{r.id} lap time {lapTime}`)
+			T.ok(lapTime > 15 and lapTime < 75, `{r.id} lap time {lapTime}`)
 			T.ok(r.wallTime < r.finishTime * 0.08, `{r.id} scraped the wall for {r.wallTime}s`)
 			T.ok(r.offroadTime < r.finishTime * 0.15, `{r.id} offroad for {r.offroadTime}s`)
 			table.insert(entries, { id = r.id, finished = true, finishTime = r.finishTime, score = 0 })

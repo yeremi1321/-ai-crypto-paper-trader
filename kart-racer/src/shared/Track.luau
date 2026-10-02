@@ -14,6 +14,9 @@ export type TrackDef = {
 	boostPads: { { t: number, offset: number } }, -- t = 0..1 along the lap, offset = -1..1 across
 	itemRows: { number }, -- t values for rows of item boxes
 	theme: string,
+	-- Multiplies every control point (x, y and z), so the whole layout grows
+	-- without changing its shape or how steep the hills are. Default 1.
+	scale: number?,
 }
 
 export type Built = {
@@ -57,7 +60,11 @@ local function catmull(p0: Vec, p1: Vec, p2: Vec, p3: Vec, t: number): Vec
 end
 
 function Track.build(def: TrackDef): Built
-	local ctrl = def.controls
+	local scale = def.scale or 1
+	local ctrl = {}
+	for i, c in def.controls do
+		ctrl[i] = v(c.x * scale, c.y * scale, c.z * scale)
+	end
 	local n = #ctrl
 	-- Fine samples first, then resample evenly by distance.
 	local fine: { Vec } = {}

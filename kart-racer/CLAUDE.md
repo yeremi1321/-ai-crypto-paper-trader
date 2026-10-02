@@ -5,13 +5,14 @@ features, controls and layout.
 
 ## Status
 
-- All code for the first playable version is written: 3 tracks, 3 karts,
+- All code for the first playable version is written: 3 big themed tracks with
+  scenery and lighting, 3 kart classes, 6 body designs with paint,
   drifting and mini-turbos, 7 items, CPU drivers, a 3-race Grand Prix, lobby,
   results and touch buttons.
 - **It has never been run in Roblox Studio.** Only the pure rules
   (`src/shared`), the track builder, the kart builder and the item boxes were
   checked outside Roblox, with Lune.
-- `lune run tests/run` (33 tests, including an 8-CPU race simulation on every
+- `lune run tests/run` (40 tests, including an 8-CPU race simulation on every
   track), `lune run tests/syntax` and `lune run tests/smoke` all pass.
 
 ## Setup on this PC
@@ -25,30 +26,34 @@ features, controls and layout.
 Verify each one in Studio before moving on.
 
 1. **Boot and lobby.** No errors in Output. The lobby screen shows 3 kart cards, and READY starts a race.
-2. **Seating and countdown.** Your avatar sits in the kart on the grid behind the
+2. **Looks and performance.** The lobby showroom shows 6 kart designs, and the body
+   and paint pickers change your kart. Each track looks right (lighting, curbs,
+   scenery), and frame rate is fine. Each track is about 3,000–4,000 parts; if it
+   lags, lower the counts in `Scenery.Themes`.
+3. **Seating and countdown.** Your avatar sits in the kart on the grid behind the
    line. The camera is behind the kart, and the 3-2-1-GO countdown shows.
-3. **Driving.** W moves the kart forward (if it goes backwards, check the sign in
+4. **Driving.** W moves the kart forward (if it goes backwards, check the sign in
    `KartPhysics.forward`). A/D steer the right way. The kart follows slopes on
    Canyon Climb and the Neon Eight bridge, and walls stop it without launching it.
    - Tune feel in `KartPhysics` (speeds, drift, turbo times) and `KartRig.apply`
      (force, `Responsiveness`).
    - If the kart bounces or tips, raise `AlignOrientation.Responsiveness` or lower ball elasticity.
-4. **Drift.** Hold Space while turning. Sparks go blue → orange → purple, and letting go boosts.
+5. **Drift.** Hold Space while turning. Sparks go blue → orange → purple, and letting go boosts.
    Make sure Space doesn't make the avatar jump out of the seat (`KartDrift` action in `KartController`).
-5. **CPU drivers** drive the track, drift and use items, and don't get stuck on walls.
+6. **CPU drivers** drive the track, drift and use items, and don't get stuck on walls.
    The race simulation passes, but real physics may differ.
-6. **Items.** Boxes give items after the roulette. Each item works: oil spins
+7. **Items.** Boxes give items after the roulette. Each item works: oil spins
    karts, the bouncer bounces off walls, the rocket chases the racer ahead,
    the bolt hits 1st, and Overdrive makes you immune.
-7. **Laps and results.** Lap / final lap / finish messages appear, positions
+8. **Laps and results.** Lap / final lap / finish messages appear, positions
    update, and results and points show. The next track loads, then cup results,
    then back to the lobby.
-8. **Respawn.** Driving off the Neon Eight bridge or getting stuck puts you back on the road.
-9. **Multiplayer** (Test → Clients and Servers, 2–3 players). Bumping, items
+9. **Respawn.** Driving off the Neon Eight bridge or getting stuck puts you back on the road.
+10. **Multiplayer** (Test → Clients and Servers, 2–3 players). Bumping, items
    hitting other players, and everyone seeing each other's karts.
-10. **Mobile.** Use Studio's device emulator to check the thumbstick drives and
+11. **Mobile.** Use Studio's device emulator to check the thumbstick drives and
     the DRIFT/ITEM buttons work.
-11. **Sound.** Add engine, drift, boost, item and countdown sounds. There are none yet.
+12. **Sound.** Add engine, drift, boost, item and countdown sounds. There are none yet.
 
 After that:
 - More tracks and cups (add to `Tracks.List`; the simulation test checks they're drivable).

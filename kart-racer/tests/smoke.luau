@@ -109,15 +109,23 @@ check("TrackBuilder builds every track", function()
 			end
 		end
 		assert(roads == #track.points, `{def.id}: {roads} road parts for {#track.points} points`)
-		print(`     {def.name}: {#folder:GetChildren()} parts, {math.floor(track.length)} studs a lap`)
+		local total = #folder:GetDescendants()
+		local scenery = folder:FindFirstChild("Scenery")
+		assert(scenery and #scenery:GetChildren() > 300, `{def.id}: not enough scenery`)
+		print(`     {def.name}: {total} objects, {math.floor(track.length)} studs a lap`)
 	end
 end)
 
-check("KartRig builds every kart", function()
+check("KartRig builds every kart class and body design", function()
 	local Karts = load(shared.Karts)
+	local KartBodies = load(shared.KartBodies)
 	local KartRig = load(common.KartRig)
-	for _, def in Karts.List do
-		local kart = KartRig.build(def.id, "Tester", roblox.CFrame.new(0, 0, 0), game:GetService("Workspace"))
+	for i, body in KartBodies.List do
+		local def = Karts.List[(i - 1) % #Karts.List + 1]
+		local look = { body = body.id, main = i, accent = 13 - i }
+		local kart = KartRig.build(def.id, "Tester", roblox.CFrame.new(0, 0, 0), game:GetService("Workspace"), look)
+		assert(kart:GetAttribute("Body") == body.id, "body attribute")
+		assert(kart:FindFirstChild("WheelRL") and kart:FindFirstChild("WheelRR"), `{body.id}: rear wheels`)
 		assert(kart.PrimaryPart and kart.PrimaryPart.Name == "Root", "root")
 		assert(kart.PrimaryPart:FindFirstChild("Drive"), "LinearVelocity")
 		assert(kart.PrimaryPart:FindFirstChild("Align"), "AlignOrientation")

@@ -14,6 +14,9 @@ KartController.start()
 Hud.onChooseKart = function(kartId)
 	Remotes.ChooseKart:FireServer(kartId)
 end
+Hud.onLook = function(look)
+	Remotes.ChooseLook:FireServer(look)
+end
 Hud.onReady = function(ready)
 	Remotes.Ready:FireServer(ready)
 end

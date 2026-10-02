@@ -137,7 +137,7 @@ T.test("every track: grid is behind the line, items and pads are on the road", f
 			T.ok(s == "road" or s == "boost", `{def.id} item box on {s}`)
 		end
 		T.ok(#Track.pads(track) == #def.boostPads)
-		T.ok(track.length > 1500 and track.length < 4000, `{def.id} length {track.length}`)
+		T.ok(track.length > 1500 and track.length < 6500, `{def.id} length {track.length}`)
 	end
 end)
 

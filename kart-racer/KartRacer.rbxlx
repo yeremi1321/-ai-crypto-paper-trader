@@ -27,6 +27,7 @@ end
 
 local Shared = child(ReplicatedStorage, "Shared")
 local KartPhysics = require(child(Shared, "KartPhysics"))
+local KartBodies = require(child(Shared, "KartBodies"))
 local Karts = require(child(Shared, "Karts"))
 
 local KartRig = {}
@@ -41,8 +42,19 @@ local function weld(a: BasePart, b: BasePart)
 	w.Parent = b
 end
 
-local function visual(model: Model, root: BasePart, name: string, size: Vector3, offset: CFrame, color: Color3, material: Enum.Material?): Part
-	local p = Instance.new("Part")
+local function visual(model: Model, root: BasePart, name: string, size: Vector3, offset: CFrame, color: Color3, material: Enum.Material?, shape: string?): BasePart
+	local p: BasePart
+	if shape == "Wedge" then
+		p = Instance.new("WedgePart")
+	else
+		local part = Instance.new("Part")
+		if shape == "Ball" then
+			part.Shape = Enum.PartType.Ball
+		elseif shape == "Cylinder" then
+			part.Shape = Enum.PartType.Cylinder
+		end
+		p = part
+	end
 	p.Name = name
 	p.Size = size
 	p.CFrame = root.CFrame * offset
@@ -59,10 +71,34 @@ local function visual(model: Model, root: BasePart, name: string, size: Vector3,
 	return p
 end
 
+local function rgb(c: { number }): Color3
+	return Color3.fromRGB(c[1], c[2], c[3])
+end
+
+-- Colour and material for each body part role.
+local function roleStyle(role: string, main: Color3, accent: Color3): (Color3, Enum.Material, number)
+	if role == "main" then
+		return main, Enum.Material.SmoothPlastic, 0
+	elseif role == "accent" then
+		return accent, Enum.Material.SmoothPlastic, 0
+	elseif role == "glass" then
+		return Color3.fromRGB(150, 210, 255), Enum.Material.Glass, 0.45
+	elseif role == "chrome" then
+		return Color3.fromRGB(205, 210, 220), Enum.Material.Metal, 0
+	elseif role == "light" then
+		return Color3.fromRGB(255, 250, 220), Enum.Material.Neon, 0
+	end
+	return Color3.fromRGB(35, 35, 40), Enum.Material.SmoothPlastic, 0
+end
+
 -- `cf` is where the kart should sit on the road (position on the surface).
-function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: Instance): Model
+-- `look` picks the body design and paint (see KartBodies); stats come from `kartId`.
+function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: Instance, look: KartBodies.Look?): Model
 	local def = Karts.get(kartId)
-	local color = Color3.fromRGB(def.color[1], def.color[2], def.color[3])
+	local chosen = look or { body = KartBodies.Default, main = 1, accent = 10 }
+	local body = KartBodies.get(chosen.body)
+	local main = rgb(KartBodies.color(chosen.main))
+	local accent = rgb(KartBodies.color(chosen.accent))
 
 	local model = Instance.new("Model")
 	model.Name = driverName
@@ -102,18 +138,33 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	align.Parent = root
 
 	local drop = CFrame.new(0, -BODY_DROP, 0)
-	visual(model, root, "Chassis", Vector3.new(4.6, 0.6, 7), drop, Color3.fromRGB(35, 35, 40))
-	visual(model, root, "Body", Vector3.new(4.2, 1.2, 4.4), drop * CFrame.new(0, 0.8, -0.6), color)
-	visual(model, root, "Nose", Vector3.new(3.4, 0.8, 1.6), drop * CFrame.new(0, 0.5, -3.4), color)
-	visual(model, root, "Spoiler", Vector3.new(4.4, 0.25, 1), drop * CFrame.new(0, 2.2, 3.2), color)
-	visual(model, root, "Strut", Vector3.new(0.3, 1.4, 0.3), drop * CFrame.new(0, 1.4, 3.2), Color3.fromRGB(35, 35, 40))
-	local exhaust = visual(model, root, "Exhaust", Vector3.new(1.2, 0.6, 0.4), drop * CFrame.new(0, 0.6, 3.6), Color3.fromRGB(255, 140, 40), Enum.Material.Neon)
+	for i, part in body.parts do
+		local color, material, transparency = roleStyle(part.role, main, accent)
+		local rot = part.rotation or { 0, 0, 0 }
+		local offset = drop
+			* CFrame.new(part.offset[1], part.offset[2], part.offset[3])
+			* CFrame.Angles(math.rad(rot[1]), math.rad(rot[2]), math.rad(rot[3]))
+		local p = visual(model, root, `Body{i}`, Vector3.new(part.size[1], part.size[2], part.size[3]), offset, color, material, part.shape)
+		p.Transparency = transparency
+	end
+	local ex = body.exhaust
+	local exhaust = visual(model, root, "Exhaust", Vector3.new(1.2, 0.6, 0.4), drop * CFrame.new(ex[1], ex[2], ex[3]), Color3.fromRGB(255, 140, 40), Enum.Material.Neon)
 	exhaust.Transparency = 1
 
-	for _, w in { { -2.5, -2.4, "WheelFL" }, { 2.5, -2.4, "WheelFR" }, { -2.5, 2.4, "WheelRL" }, { 2.5, 2.4, "WheelRR" } } do
-		local wheel = visual(model, root, w[3], Vector3.new(0.9, 1.6, 1.6), drop * CFrame.new(w[1], -0.1, w[2]), Color3.fromRGB(20, 20, 22))
-		wheel.Shape = Enum.PartType.Cylinder
-		if w[2] > 0 then
+	-- Wheels sit on the road: the body's center rides BODY_DROP below the ball's center.
+	local groundToBody = KartRig.BallRadius - BODY_DROP
+	local wheelY = body.wheelRadius - groundToBody
+	local rearZ = -math.huge
+	for _, w in body.wheels do
+		rearZ = math.max(rearZ, w[2])
+	end
+	for i, w in body.wheels do
+		local name = if w[2] >= rearZ then (if w[1] < 0 then "WheelRL" else "WheelRR") else `Wheel{i}`
+		local d = body.wheelRadius * 2
+		local wheel = visual(model, root, name, Vector3.new(body.wheelWidth, d, d), drop * CFrame.new(w[1], wheelY, w[2]), Color3.fromRGB(20, 20, 22), nil, "Cylinder")
+		local hub = visual(model, root, `{name}Hub`, Vector3.new(body.wheelWidth + 0.05, d * 0.5, d * 0.5), drop * CFrame.new(w[1], wheelY, w[2]), accent, Enum.Material.Metal, "Cylinder")
+		local _ = hub
+		if w[2] >= rearZ then
 			local sparks = Instance.new("ParticleEmitter")
 			sparks.Name = "DriftSparks"
 			sparks.Texture = "rbxasset://textures/particles/sparkles_main.dds"
@@ -129,10 +180,11 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 		end
 	end
 
+	local seatPos = body.seat
 	local seat = Instance.new("Seat")
 	seat.Name = "DriverSeat"
 	seat.Size = Vector3.new(2, 0.4, 2)
-	seat.CFrame = root.CFrame * drop * CFrame.new(0, 0.6, 0.6)
+	seat.CFrame = root.CFrame * drop * CFrame.new(seatPos[1], seatPos[2], seatPos[3])
 	seat.Transparency = 1
 	seat.CanCollide = false
 	seat.Massless = true
@@ -157,6 +209,7 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	label.Parent = tag
 
 	model:SetAttribute("KartId", def.id)
+	model:SetAttribute("Body", body.id)
 	model.Parent = parent
 	return model
 end
@@ -394,6 +447,225 @@ return Items
       </Item>
       <Item class="ModuleScript" referent="6">
         <Properties>
+          <string name="Name">KartBodies</string>
+          <string name="Source"><![CDATA[--!strict
+-- Kart body designs and paint. Bodies are looks only: speed and handling come
+-- from the kart class (Karts.luau), so any body can be paired with any class.
+--
+-- Adding a body: copy one below and change its parts. Each part is a box,
+-- ball, cylinder or wedge with a size and an offset from the kart's center
+-- (cylinders run along their x size; rotate them to point elsewhere)
+-- (x = right, y = up, z = back; the nose points toward -z). `role` picks the
+-- colour: main/accent paint, dark trim, glass, chrome or light (glowing).
+
+export type BodyPart = {
+	size: { number },
+	offset: { number },
+	role: "main" | "accent" | "dark" | "glass" | "chrome" | "light",
+	shape: ("Block" | "Ball" | "Cylinder" | "Wedge")?,
+	rotation: { number }?, -- degrees x, y, z
+}
+
+export type Body = {
+	id: string,
+	name: string,
+	wheelRadius: number,
+	wheelWidth: number,
+	wheels: { { number } }, -- x, z of each wheel; the two with the largest z are rear wheels
+	seat: { number }, -- where the driver sits
+	exhaust: { number },
+	parts: { BodyPart },
+}
+
+local KartBodies = {}
+
+KartBodies.Default = "classic"
+
+KartBodies.Palette = {
+	{ 230, 60, 60 }, -- red
+	{ 255, 140, 40 }, -- orange
+	{ 255, 210, 50 }, -- yellow
+	{ 120, 220, 90 }, -- lime
+	{ 40, 170, 110 }, -- green
+	{ 80, 200, 255 }, -- sky
+	{ 40, 90, 220 }, -- blue
+	{ 140, 80, 230 }, -- purple
+	{ 255, 110, 190 }, -- pink
+	{ 245, 245, 250 }, -- white
+	{ 120, 120, 130 }, -- grey
+	{ 25, 25, 30 }, -- black
+}
+
+local WHEELS_STANDARD = { { -2.5, -2.4 }, { 2.5, -2.4 }, { -2.5, 2.4 }, { 2.5, 2.4 } }
+
+KartBodies.List = {
+	{
+		id = "classic",
+		name = "Classic",
+		wheelRadius = 0.8,
+		wheelWidth = 0.9,
+		wheels = WHEELS_STANDARD,
+		seat = { 0, 0.6, 0.6 },
+		exhaust = { 0, 0.6, 3.6 },
+		parts = {
+			{ size = { 4.6, 0.6, 7 }, offset = { 0, 0, 0 }, role = "dark" },
+			{ size = { 4.2, 1.2, 4.4 }, offset = { 0, 0.8, -0.6 }, role = "main" },
+			{ size = { 3.4, 0.8, 1.6 }, offset = { 0, 0.5, -3.4 }, role = "main" },
+			{ size = { 4.4, 0.25, 1 }, offset = { 0, 2.2, 3.2 }, role = "accent" },
+			{ size = { 0.3, 1.4, 0.3 }, offset = { 0, 1.4, 3.2 }, role = "dark" },
+			{ size = { 3.6, 0.3, 0.3 }, offset = { 0, 0.7, -4.2 }, role = "chrome" },
+		},
+	},
+	{
+		id = "racer",
+		name = "Wedge Racer",
+		wheelRadius = 0.75,
+		wheelWidth = 1,
+		wheels = { { -2.6, -2.6 }, { 2.6, -2.6 }, { -2.6, 2.6 }, { 2.6, 2.6 } },
+		seat = { 0, 0.5, 0.9 },
+		exhaust = { 0, 0.5, 3.9 },
+		parts = {
+			{ size = { 4.8, 0.5, 7.6 }, offset = { 0, 0, 0 }, role = "dark" },
+			{ size = { 3.8, 1, 3.4 }, offset = { 0, 0.6, -2.4 }, role = "main", shape = "Wedge" },
+			{ size = { 4.2, 1, 3 }, offset = { 0, 0.6, 1.6 }, role = "main" },
+			{ size = { 1, 0.7, 4 }, offset = { -2.1, 0.5, 0.2 }, role = "accent" },
+			{ size = { 1, 0.7, 4 }, offset = { 2.1, 0.5, 0.2 }, role = "accent" },
+			{ size = { 5, 0.2, 1.2 }, offset = { 0, 2.4, 3.6 }, role = "accent" },
+			{ size = { 0.3, 1.6, 0.4 }, offset = { -1.6, 1.5, 3.6 }, role = "dark" },
+			{ size = { 0.3, 1.6, 0.4 }, offset = { 1.6, 1.5, 3.6 }, role = "dark" },
+			{ size = { 4.2, 0.2, 0.2 }, offset = { 0, 0.4, -4 }, role = "light" },
+		},
+	},
+	{
+		id = "buggy",
+		name = "Dune Buggy",
+		wheelRadius = 1.05,
+		wheelWidth = 1.2,
+		wheels = { { -2.7, -2.5 }, { 2.7, -2.5 }, { -2.7, 2.5 }, { 2.7, 2.5 } },
+		seat = { 0, 0.8, 0.4 },
+		exhaust = { 0, 1.2, 3.4 },
+		parts = {
+			{ size = { 3.6, 0.6, 6.4 }, offset = { 0, 0.2, 0 }, role = "main" },
+			{ size = { 3.2, 0.6, 1.2 }, offset = { 0, 0.6, -3.1 }, role = "accent" },
+			-- Roll cage
+			{ size = { 0.25, 2.6, 0.25 }, offset = { -1.5, 1.8, -0.8 }, role = "chrome" },
+			{ size = { 0.25, 2.6, 0.25 }, offset = { 1.5, 1.8, -0.8 }, role = "chrome" },
+			{ size = { 0.25, 2.6, 0.25 }, offset = { -1.5, 1.8, 1.8 }, role = "chrome" },
+			{ size = { 0.25, 2.6, 0.25 }, offset = { 1.5, 1.8, 1.8 }, role = "chrome" },
+			{ size = { 3.25, 0.25, 0.25 }, offset = { 0, 3.1, -0.8 }, role = "chrome" },
+			{ size = { 3.25, 0.25, 0.25 }, offset = { 0, 3.1, 1.8 }, role = "chrome" },
+			{ size = { 0.25, 0.25, 2.85 }, offset = { -1.5, 3.1, 0.5 }, role = "chrome" },
+			{ size = { 0.25, 0.25, 2.85 }, offset = { 1.5, 3.1, 0.5 }, role = "chrome" },
+			{ size = { 2.4, 1.4, 1.2 }, offset = { 0, 1, 2.7 }, role = "dark" },
+			{ size = { 0.6, 0.6, 0.3 }, offset = { -0.9, 1.1, -3.7 }, role = "light" },
+			{ size = { 0.6, 0.6, 0.3 }, offset = { 0.9, 1.1, -3.7 }, role = "light" },
+		},
+	},
+	{
+		id = "muscle",
+		name = "Muscle",
+		wheelRadius = 0.9,
+		wheelWidth = 1.3,
+		wheels = { { -2.6, -2.6 }, { 2.6, -2.6 }, { -2.6, 2.5 }, { 2.6, 2.5 } },
+		seat = { 0, 0.7, 1 },
+		exhaust = { 0, 0.5, 3.9 },
+		parts = {
+			{ size = { 4.4, 1.3, 7.6 }, offset = { 0, 0.5, 0 }, role = "main" },
+			{ size = { 1.6, 0.5, 2 }, offset = { 0, 1.35, -2 }, role = "dark" },
+			{ size = { 0.8, 1.3, 7.7 }, offset = { 0, 0.52, 0 }, role = "accent" },
+			{ size = { 4.5, 0.4, 0.4 }, offset = { 0, 0.1, -3.9 }, role = "chrome" },
+			{ size = { 4.5, 0.4, 0.4 }, offset = { 0, 0.1, 3.9 }, role = "chrome" },
+			{ size = { 1, 0.45, 0.45 }, offset = { -1.4, 0.2, 4.1 }, role = "chrome", shape = "Cylinder", rotation = { 0, 90, 0 } },
+			{ size = { 1, 0.45, 0.45 }, offset = { 1.4, 0.2, 4.1 }, role = "chrome", shape = "Cylinder", rotation = { 0, 90, 0 } },
+			{ size = { 1, 0.4, 0.2 }, offset = { -1.5, 0.8, -3.85 }, role = "light" },
+			{ size = { 1, 0.4, 0.2 }, offset = { 1.5, 0.8, -3.85 }, role = "light" },
+		},
+	},
+	{
+		id = "bubble",
+		name = "Bubble",
+		wheelRadius = 0.7,
+		wheelWidth = 0.9,
+		wheels = { { -2.2, -2 }, { 2.2, -2 }, { -2.2, 2 }, { 2.2, 2 } },
+		seat = { 0, 0.5, 0.3 },
+		exhaust = { 0, 0.5, 3 },
+		parts = {
+			{ size = { 4.6, 4.6, 4.6 }, offset = { 0, 0.9, 0.2 }, role = "main", shape = "Ball" },
+			{ size = { 3.4, 3.4, 3.4 }, offset = { 0, 1.9, -0.4 }, role = "glass", shape = "Ball" },
+			{ size = { 4.2, 0.5, 6 }, offset = { 0, -0.1, 0 }, role = "dark" },
+			{ size = { 1.2, 1.2, 1.2 }, offset = { -1.4, 0.8, -2.2 }, role = "light", shape = "Ball" },
+			{ size = { 1.2, 1.2, 1.2 }, offset = { 1.4, 0.8, -2.2 }, role = "light", shape = "Ball" },
+			{ size = { 0.25, 1.8, 0.25 }, offset = { 1.2, 3.6, 1.6 }, role = "dark" },
+			{ size = { 0.9, 0.9, 0.9 }, offset = { 1.2, 4.6, 1.6 }, role = "accent", shape = "Ball" },
+		},
+	},
+	{
+		id = "formula",
+		name = "Formula",
+		wheelRadius = 0.85,
+		wheelWidth = 1.2,
+		wheels = { { -2.8, -2.8 }, { 2.8, -2.8 }, { -2.8, 2.6 }, { 2.8, 2.6 } },
+		seat = { 0, 0.5, 0.8 },
+		exhaust = { 0, 0.8, 4 },
+		parts = {
+			{ size = { 1.6, 0.9, 8.4 }, offset = { 0, 0.3, -0.2 }, role = "main" },
+			{ size = { 1.2, 0.6, 2 }, offset = { 0, 0.2, -4.8 }, role = "main", shape = "Wedge" },
+			{ size = { 5.6, 0.2, 1 }, offset = { 0, -0.1, -4.9 }, role = "accent" },
+			{ size = { 1.2, 0.8, 3 }, offset = { -1.4, 0.3, 0.8 }, role = "accent" },
+			{ size = { 1.2, 0.8, 3 }, offset = { 1.4, 0.3, 0.8 }, role = "accent" },
+			{ size = { 1.2, 1.2, 1.6 }, offset = { 0, 1.1, 2 }, role = "main" },
+			{ size = { 4.8, 0.25, 1.2 }, offset = { 0, 2.3, 3.8 }, role = "accent" },
+			{ size = { 0.25, 1.4, 0.8 }, offset = { -2.2, 1.6, 3.8 }, role = "dark" },
+			{ size = { 0.25, 1.4, 0.8 }, offset = { 2.2, 1.6, 3.8 }, role = "dark" },
+			{ size = { 3, 0.2, 0.2 }, offset = { 0, 1.5, -0.6 }, role = "chrome" },
+		},
+	},
+} :: { Body }
+
+export type Look = { body: string, main: number, accent: number }
+
+function KartBodies.get(id: string?): Body
+	for _, b in KartBodies.List do
+		if b.id == id then
+			return b
+		end
+	end
+	return KartBodies.get(KartBodies.Default)
+end
+
+function KartBodies.color(index: number?): { number }
+	local n = #KartBodies.Palette
+	local i = math.clamp(math.floor(tonumber(index) or 1), 1, n)
+	return KartBodies.Palette[i]
+end
+
+-- Cleans a look sent by a client.
+function KartBodies.sanitize(look: any): Look
+	local t = if type(look) == "table" then look else {}
+	return {
+		body = KartBodies.get(t.body).id,
+		main = math.clamp(math.floor(tonumber(t.main) or 1), 1, #KartBodies.Palette),
+		accent = math.clamp(math.floor(tonumber(t.accent) or 10), 1, #KartBodies.Palette),
+	}
+end
+
+-- A varied look for CPU driver number n (the same every race).
+function KartBodies.cpuLook(n: number): Look
+	local body = KartBodies.List[(n - 1) % #KartBodies.List + 1].id
+	local main = (n * 5) % #KartBodies.Palette + 1
+	local accent = (n * 7 + 4) % #KartBodies.Palette + 1
+	if accent == main then
+		accent = accent % #KartBodies.Palette + 1
+	end
+	return { body = body, main = main, accent = accent }
+end
+
+return KartBodies
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="7">
+        <Properties>
           <string name="Name">KartPhysics</string>
           <string name="Source"><![CDATA[--!strict
 -- Arcade kart handling as a pure step function. The same code drives player
@@ -585,7 +857,7 @@ return KartPhysics
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="7">
+      <Item class="ModuleScript" referent="8">
         <Properties>
           <string name="Name">Karts</string>
           <string name="Source"><![CDATA[--!strict
@@ -661,7 +933,7 @@ return Karts
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="8">
+      <Item class="ModuleScript" referent="9">
         <Properties>
           <string name="Name">RaceRules</string>
           <string name="Source"><![CDATA[--!strict
@@ -747,7 +1019,7 @@ return RaceRules
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="9">
+      <Item class="ModuleScript" referent="10">
         <Properties>
           <string name="Name">RemoteNames</string>
           <string name="Source"><![CDATA[--!strict
@@ -765,13 +1037,151 @@ return {
 
 	-- client -> server
 	ChooseKart = "ChooseKart", -- (kartId)
+	ChooseLook = "ChooseLook", -- ({ body, main, accent }) body design and paint
 	Ready = "Ready", -- (isReady)
 	UseItem = "UseItem", -- ()
 }
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="10">
+      <Item class="ModuleScript" referent="11">
+        <Properties>
+          <string name="Name">Scenery</string>
+          <string name="Source"><![CDATA[--!strict
+-- Decides where scenery goes around a track: trees and grandstands on Sunny
+-- Loop, rocks and mesas in the canyon, towers and lamps in the neon city.
+-- Placement is seeded by the track id, so every server builds the same
+-- scenery, and nothing is ever placed on (or too close to) the road.
+--
+-- To get more or fewer props, change the counts in Scenery.Themes.
+
+local Track = require("./Track")
+
+export type Prop = {
+	kind: string,
+	x: number,
+	y: number,
+	z: number,
+	size: number, -- 1 = normal, props scale from this
+	yaw: number,
+}
+
+local Scenery = {}
+
+-- kind = how many, how close to the barrier (min, max studs), size range, footprint radius.
+type Rule = { kind: string, count: number, near: number, far: number, minSize: number, maxSize: number, radius: number }
+
+Scenery.Themes = {
+	sunny = {
+		{ kind = "tree", count = 170, near = 12, far = 220, minSize = 0.8, maxSize = 1.5, radius = 8 },
+		{ kind = "bush", count = 80, near = 6, far = 120, minSize = 0.7, maxSize = 1.3, radius = 4 },
+		{ kind = "billboard", count = 8, near = 14, far = 30, minSize = 1, maxSize = 1, radius = 14 },
+		{ kind = "flag", count = 18, near = 4, far = 10, minSize = 1, maxSize = 1, radius = 3 },
+	},
+	canyon = {
+		{ kind = "mesa", count = 22, near = 60, far = 320, minSize = 0.8, maxSize = 1.8, radius = 40 },
+		{ kind = "rock", count = 110, near = 8, far = 200, minSize = 0.6, maxSize = 1.8, radius = 9 },
+		{ kind = "cactus", count = 70, near = 8, far = 160, minSize = 0.8, maxSize = 1.4, radius = 4 },
+	},
+	neon = {
+		{ kind = "tower", count = 80, near = 30, far = 300, minSize = 0.7, maxSize = 2.2, radius = 24 },
+		{ kind = "lamp", count = 60, near = 3, far = 6, minSize = 1, maxSize = 1, radius = 2 },
+		{ kind = "billboard", count = 10, near = 14, far = 30, minSize = 1, maxSize = 1, radius = 14 },
+	},
+} :: { [string]: { Rule } }
+
+-- Small deterministic random generator (exact in doubles).
+local function rng(seedText: string): () -> number
+	local seed = 1
+	for i = 1, #seedText do
+		seed = (seed * 31 + string.byte(seedText, i)) % 2147483647
+	end
+	return function(): number
+		seed = (seed * 48271) % 2147483647
+		return seed / 2147483647
+	end
+end
+
+-- Distance from the centerline to just outside the barrier.
+function Scenery.barrier(track: Track.Built): number
+	return track.def.width / 2 + Track.ShoulderWidth + 1
+end
+
+function Scenery.place(track: Track.Built): { Prop }
+	local rules = Scenery.Themes[track.def.theme] or {}
+	local random = rng(track.def.id)
+	local barrier = Scenery.barrier(track)
+	local minY = math.huge
+	for _, p in track.points do
+		minY = math.min(minY, p.y)
+	end
+
+	local props: { Prop } = {}
+	local placedRadius: { number } = {}
+
+	local function clear(x: number, z: number, radius: number): boolean
+		-- Away from every part of the track (matters where the track loops back).
+		for _, p in track.points do
+			local dx, dz = p.x - x, p.z - z
+			local need = barrier + radius + 2
+			if dx * dx + dz * dz < need * need then
+				return false
+			end
+		end
+		for i, other in props do
+			local dx, dz = other.x - x, other.z - z
+			local need = placedRadius[i] + radius
+			if dx * dx + dz * dz < need * need then
+				return false
+			end
+		end
+		return true
+	end
+
+	for _, rule in rules do
+		local placed, attempts = 0, 0
+		while placed < rule.count and attempts < rule.count * 12 do
+			attempts += 1
+			local d = random() * track.length
+			local side = if random() < 0.5 then -1 else 1
+			local size = rule.minSize + random() * (rule.maxSize - rule.minSize)
+			local radius = rule.radius * size
+			local lateral = side * (barrier + radius + rule.near + random() * (rule.far - rule.near))
+			local spot = Track.spot(track, d, lateral)
+			if clear(spot.x, spot.z, radius) then
+				local _, tan = Track.at(track, d)
+				-- Billboards and flags face the road; everything else is random.
+				local faceRoad = rule.kind == "billboard" or rule.kind == "flag" or rule.kind == "lamp"
+				local yaw = if faceRoad then math.atan2(tan.x, tan.z) + (if side > 0 then math.pi / 2 else -math.pi / 2) else random() * math.pi * 2
+				table.insert(props, { kind = rule.kind, x = spot.x, y = minY, z = spot.z, size = size, yaw = yaw })
+				table.insert(placedRadius, radius)
+				placed += 1
+			end
+		end
+	end
+
+	-- Grandstands either side of the start line.
+	local _, tan = Track.at(track, 0)
+	for _, side in { -1, 1 } do
+		local lateral = side * (barrier + 18)
+		local spot = Track.spot(track, 30, lateral)
+		table.insert(props, {
+			kind = "grandstand",
+			x = spot.x,
+			y = minY,
+			z = spot.z,
+			size = 1,
+			yaw = math.atan2(tan.x, tan.z) + (if side > 0 then math.pi / 2 else -math.pi / 2),
+		})
+	end
+	return props
+end
+
+return Scenery
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="12">
         <Properties>
           <string name="Name">Track</string>
           <string name="Source"><![CDATA[--!strict
@@ -790,6 +1200,9 @@ export type TrackDef = {
 	boostPads: { { t: number, offset: number } }, -- t = 0..1 along the lap, offset = -1..1 across
 	itemRows: { number }, -- t values for rows of item boxes
 	theme: string,
+	-- Multiplies every control point (x, y and z), so the whole layout grows
+	-- without changing its shape or how steep the hills are. Default 1.
+	scale: number?,
 }
 
 export type Built = {
@@ -833,7 +1246,11 @@ local function catmull(p0: Vec, p1: Vec, p2: Vec, p3: Vec, t: number): Vec
 end
 
 function Track.build(def: TrackDef): Built
-	local ctrl = def.controls
+	local scale = def.scale or 1
+	local ctrl = {}
+	for i, c in def.controls do
+		ctrl[i] = v(c.x * scale, c.y * scale, c.z * scale)
+	end
 	local n = #ctrl
 	-- Fine samples first, then resample evenly by distance.
 	local fine: { Vec } = {}
@@ -1061,7 +1478,7 @@ return Track
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="11">
+      <Item class="ModuleScript" referent="13">
         <Properties>
           <string name="Name">Tracks</string>
           <string name="Source"><![CDATA[--!strict
@@ -1069,6 +1486,9 @@ return Track
 -- driven in list order; the first point is the start/finish line.
 -- tests/Simulation.spec.luau has CPU drivers race every track, so a bad edit
 -- here (a corner too tight, a jump too steep) fails the tests.
+--
+-- Making a track bigger: raise `scale` (stretches the whole layout) and
+-- `width` (road width in studs). Then run `lune run tests/run`.
 
 local Track = require("./Track")
 local v = Track.v
@@ -1082,7 +1502,16 @@ Tracks.Themes = {
 		ground = { 100, 160, 70 },
 		wall = { 235, 235, 240 },
 		accent = { 255, 210, 60 },
+		curb = { { 220, 40, 40 }, { 245, 245, 245 } },
+		line = { 245, 245, 245 },
 		clock = 14,
+		-- Lighting: hazy summer afternoon.
+		ambient = { 120, 120, 130 },
+		brightness = 3,
+		atmosphere = { density = 0.3, haze = 1.2, glare = 0.4, color = { 200, 220, 255 }, decay = { 110, 140, 200 } },
+		bloom = 0.6,
+		tint = { 255, 250, 240 },
+		saturation = 0.15,
 	},
 	canyon = {
 		road = { 92, 80, 72 },
@@ -1090,7 +1519,16 @@ Tracks.Themes = {
 		ground = { 180, 120, 80 },
 		wall = { 150, 90, 60 },
 		accent = { 255, 140, 60 },
-		clock = 17.5,
+		curb = { { 230, 110, 40 }, { 250, 235, 210 } },
+		line = { 250, 230, 190 },
+		clock = 17.2,
+		-- Lighting: dusty golden hour.
+		ambient = { 140, 100, 80 },
+		brightness = 2.6,
+		atmosphere = { density = 0.38, haze = 2.2, glare = 1.2, color = { 255, 200, 150 }, decay = { 200, 110, 70 } },
+		bloom = 0.9,
+		tint = { 255, 235, 210 },
+		saturation = 0.2,
 	},
 	neon = {
 		road = { 30, 30, 42 },
@@ -1098,7 +1536,16 @@ Tracks.Themes = {
 		ground = { 16, 12, 28 },
 		wall = { 0, 230, 255 },
 		accent = { 255, 60, 220 },
+		curb = { { 255, 60, 220 }, { 0, 230, 255 } },
+		line = { 0, 230, 255 },
 		clock = 0,
+		-- Lighting: dark city night with glowing neon.
+		ambient = { 60, 40, 90 },
+		brightness = 1,
+		atmosphere = { density = 0.42, haze = 1.5, glare = 0, color = { 120, 60, 180 }, decay = { 40, 20, 80 } },
+		bloom = 1.6,
+		tint = { 235, 220, 255 },
+		saturation = 0.3,
 	},
 }
 
@@ -1107,7 +1554,8 @@ Tracks.List = {
 		id = "sunny",
 		name = "Sunny Loop",
 		theme = "sunny",
-		width = 46,
+		width = 56,
+		scale = 1.6,
 		laps = 3,
 		controls = {
 			v(0, 0, 0),
@@ -1133,7 +1581,8 @@ Tracks.List = {
 		id = "canyon",
 		name = "Canyon Climb",
 		theme = "canyon",
-		width = 42,
+		width = 52,
+		scale = 1.6,
 		laps = 3,
 		controls = {
 			v(0, 0, 0),
@@ -1159,7 +1608,8 @@ Tracks.List = {
 		id = "neon",
 		name = "Neon Eight",
 		theme = "neon",
-		width = 40,
+		width = 50,
+		scale = 1.5,
 		laps = 3,
 		controls = {
 			v(-300, 0, 200),
@@ -1200,15 +1650,15 @@ return Tracks
       </Item>
     </Item>
   </Item>
-  <Item class="ServerScriptService" referent="12">
+  <Item class="ServerScriptService" referent="14">
     <Properties>
       <string name="Name">ServerScriptService</string>
     </Properties>
-    <Item class="Folder" referent="13">
+    <Item class="Folder" referent="15">
       <Properties>
         <string name="Name">Server</string>
       </Properties>
-      <Item class="ModuleScript" referent="14">
+      <Item class="ModuleScript" referent="16">
         <Properties>
           <string name="Name">ItemService</string>
           <string name="Source"><![CDATA[-- Item boxes, rolling items, and everything items do on the track: oil
@@ -1534,7 +1984,7 @@ return ItemService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Script" referent="15">
+      <Item class="Script" referent="17">
         <Properties>
           <string name="Name">Main</string>
           <token name="RunContext">0</token>
@@ -1548,7 +1998,7 @@ print("[KartRacer] server ready - pick a kart and press READY")
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="16">
+      <Item class="ModuleScript" referent="18">
         <Properties>
           <string name="Name">Net</string>
           <string name="Source"><![CDATA[-- Creates the RemoteEvents listed in Shared.RemoteNames under ReplicatedStorage.Remotes.
@@ -1573,7 +2023,189 @@ return Net
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="17">
+      <Item class="ModuleScript" referent="19">
+        <Properties>
+          <string name="Name">Props</string>
+          <string name="Source"><![CDATA[-- Scenery models built from parts. Scenery.luau decides where they go; this
+-- decides what they look like. Each builder gets the prop, the track theme
+-- and a parent, and makes anchored, non-colliding decoration (grandstands
+-- and towers collide so nobody drives through them).
+
+local Props = {}
+
+local function rgb(c: { number }): Color3
+	return Color3.fromRGB(c[1], c[2], c[3])
+end
+
+local function part(parent: Instance, size: Vector3, cf: CFrame, color: Color3, material: Enum.Material, shape: Enum.PartType?): Part
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.CastShadow = true
+	p.Size = size
+	p.CFrame = cf
+	p.Color = color
+	p.Material = material
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	if shape then
+		p.Shape = shape
+	end
+	p.Parent = parent
+	return p
+end
+
+-- Varies a colour a little so rows of props don't look copy-pasted.
+local function vary(c: Color3, amount: number, seed: number): Color3
+	local h, s, v = c:ToHSV()
+	local k = (math.sin(seed * 12.9898) * 43758.5453) % 1
+	return Color3.fromHSV(h, s, math.clamp(v + (k - 0.5) * amount, 0, 1))
+end
+
+local builders: { [string]: (any, any, Instance) -> () } = {}
+
+builders.tree = function(prop, _theme, parent)
+	local s = prop.size
+	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
+	part(parent, Vector3.new(2, 14 * s, 2) , base * CFrame.new(0, 7 * s, 0), Color3.fromRGB(110, 75, 45), Enum.Material.Wood)
+	local leaf = vary(Color3.fromRGB(70, 150, 60), 0.25, prop.x + prop.z)
+	part(parent, Vector3.one * 12 * s, base * CFrame.new(0, 16 * s, 0), leaf, Enum.Material.Grass, Enum.PartType.Ball)
+	part(parent, Vector3.one * 8 * s, base * CFrame.new(3 * s, 13 * s, 1 * s), leaf, Enum.Material.Grass, Enum.PartType.Ball)
+end
+
+builders.bush = function(prop, _theme, parent)
+	local s = prop.size
+	part(parent, Vector3.new(7, 5, 7) * s, CFrame.new(prop.x, prop.y + 1.5 * s, prop.z), vary(Color3.fromRGB(80, 160, 70), 0.2, prop.z), Enum.Material.Grass, Enum.PartType.Ball)
+end
+
+builders.flag = function(prop, theme, parent)
+	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
+	part(parent, Vector3.new(0.4, 12, 0.4), base * CFrame.new(0, 6, 0), Color3.fromRGB(230, 230, 235), Enum.Material.Metal)
+	local colors = { rgb(theme.accent), rgb(theme.curb[1]), rgb(theme.curb[2]) }
+	part(parent, Vector3.new(0.1, 3, 5), base * CFrame.new(0, 10.5, 2.5), colors[(math.floor(prop.x) % 3) + 1], Enum.Material.Fabric)
+end
+
+builders.billboard = function(prop, theme, parent)
+	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
+	for _, side in { -9, 9 } do
+		part(parent, Vector3.new(1, 14, 1), base * CFrame.new(side, 7, 0), Color3.fromRGB(80, 80, 90), Enum.Material.Metal)
+	end
+	local board = part(parent, Vector3.new(24, 9, 0.6), base * CFrame.new(0, 16, 0), Color3.fromRGB(20, 20, 30), Enum.Material.SmoothPlastic)
+	local glow = theme.clock < 6 or theme.clock > 19
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 20
+	gui.LightInfluence = if glow then 0 else 1
+	gui.Parent = board
+	local slogans = { "GO FAST", "TURBO!", "DRIFT KING", "KART RACER", "FULL SPEED", "NO BRAKES" }
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundColor3 = rgb(theme.accent)
+	label.Font = Enum.Font.GothamBlack
+	label.TextScaled = true
+	label.TextColor3 = Color3.fromRGB(20, 20, 30)
+	label.Text = slogans[(math.floor(prop.x + prop.z) % #slogans) + 1]
+	label.Parent = gui
+	-- Same text on the back.
+	local back = gui:Clone()
+	back.Face = Enum.NormalId.Back
+	back.Parent = board
+end
+
+builders.grandstand = function(prop, theme, parent)
+	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
+	local steps = 5
+	for i = 0, steps - 1 do
+		local step = part(parent, Vector3.new(60, 2.5, 5), base * CFrame.new(0, 1.25 + i * 2.5, i * 4.5), Color3.fromRGB(150, 150, 160), Enum.Material.Concrete)
+		step.CanCollide = true
+		-- Crowd: little coloured blocks.
+		for c = -27, 27, 3 do
+			local seed = c * 7 + i * 13 + prop.x
+			local h = (math.sin(seed) * 43758.5453) % 1
+			part(parent, Vector3.new(1.4, 2, 1.2), base * CFrame.new(c, 3.5 + i * 2.5, i * 4.5 - 0.5), Color3.fromHSV(h, 0.6, 0.9), Enum.Material.SmoothPlastic)
+		end
+	end
+	local roof = part(parent, Vector3.new(64, 1, 26), base * CFrame.new(0, 20, 9) * CFrame.Angles(math.rad(-8), 0, 0), rgb(theme.accent), Enum.Material.Metal)
+	roof.CanCollide = true
+	for _, x in { -30, 30 } do
+		part(parent, Vector3.new(1.2, 20, 1.2), base * CFrame.new(x, 10, 20), Color3.fromRGB(90, 90, 100), Enum.Material.Metal)
+	end
+end
+
+builders.rock = function(prop, theme, parent)
+	local s = prop.size
+	local color = vary(rgb(theme.wall), 0.2, prop.x)
+	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
+	part(parent, Vector3.new(10, 7, 8) * s, base * CFrame.new(0, 2.5 * s, 0) * CFrame.Angles(0.2, 0, 0.15), color, Enum.Material.Slate)
+	part(parent, Vector3.new(6, 5, 6) * s, base * CFrame.new(3 * s, 4.5 * s, 1 * s) * CFrame.Angles(-0.3, 0.6, 0.2), color, Enum.Material.Slate)
+end
+
+builders.mesa = function(prop, theme, parent)
+	local s = prop.size
+	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
+	local layers = { { 70, 18, 60 }, { 58, 16, 50 }, { 46, 14, 40 } }
+	local y = 0
+	for i, l in layers do
+		local color = vary(rgb(theme.wall), 0.25, i + prop.x)
+		local p = part(parent, Vector3.new(l[1], l[2], l[3]) * s, base * CFrame.new(0, (y + l[2] / 2) * s, 0), color, Enum.Material.Sandstone)
+		p.CanCollide = true
+		y += l[2]
+	end
+end
+
+builders.cactus = function(prop, _theme, parent)
+	local s = prop.size
+	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
+	local green = Color3.fromRGB(70, 130, 70)
+	part(parent, Vector3.new(2, 12, 2) * s, base * CFrame.new(0, 6 * s, 0), green, Enum.Material.Grass)
+	part(parent, Vector3.new(3, 1.4, 1.4) * s, base * CFrame.new(1.8 * s, 6 * s, 0), green, Enum.Material.Grass)
+	part(parent, Vector3.new(1.4, 4, 1.4) * s, base * CFrame.new(2.8 * s, 8 * s, 0), green, Enum.Material.Grass)
+end
+
+builders.tower = function(prop, theme, parent)
+	local s = prop.size
+	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
+	local h = 60 * s + (math.floor(prop.x * 7) % 5) * 20
+	local w = 30 * math.min(s, 1.4)
+	local tower = part(parent, Vector3.new(w, h, w), base * CFrame.new(0, h / 2, 0), Color3.fromRGB(22, 20, 36), Enum.Material.Glass)
+	tower.CanCollide = true
+	local colors = { rgb(theme.accent), rgb(theme.wall), Color3.fromRGB(255, 200, 60) }
+	local color = colors[(math.floor(prop.z) % #colors) + 1]
+	-- Glowing window bands.
+	for y = 12, h - 6, 14 do
+		part(parent, Vector3.new(w + 0.4, 1.2, w + 0.4), base * CFrame.new(0, y, 0), color, Enum.Material.Neon)
+	end
+	part(parent, Vector3.new(1, 10, 1), base * CFrame.new(0, h + 5, 0), Color3.fromRGB(255, 60, 60), Enum.Material.Neon)
+end
+
+builders.lamp = function(prop, theme, parent)
+	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
+	part(parent, Vector3.new(0.8, 16, 0.8), base * CFrame.new(0, 8, 0), Color3.fromRGB(60, 60, 80), Enum.Material.Metal)
+	local head = part(parent, Vector3.new(1.2, 1.2, 6), base * CFrame.new(0, 16, 2.5), rgb(theme.wall), Enum.Material.Neon)
+	local light = Instance.new("PointLight")
+	light.Color = rgb(theme.wall)
+	light.Range = 30
+	light.Brightness = 2
+	light.Parent = head
+end
+
+function Props.build(prop: any, theme: any, parent: Instance)
+	local builder = builders[prop.kind]
+	if builder then
+		builder(prop, theme, parent)
+	end
+end
+
+Props.Kinds = builders
+
+return Props
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="20">
         <Properties>
           <string name="Name">RaceService</string>
           <string name="Source"><![CDATA[-- The game loop: lobby → Grand Prix (every track in the cup) → results → lobby.
@@ -1588,6 +2220,7 @@ local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage.Shared
 local AIDriver = require(Shared.AIDriver)
+local KartBodies = require(Shared.KartBodies)
 local KartPhysics = require(Shared.KartPhysics)
 local Karts = require(Shared.Karts)
 local RaceRules = require(Shared.RaceRules)
@@ -1615,6 +2248,7 @@ export type Entrant = {
 	isCpu: boolean,
 	player: Player?,
 	kartId: string,
+	look: KartBodies.Look,
 	points: number,
 	lastPlace: number,
 	profile: AIDriver.Profile,
@@ -1649,7 +2283,11 @@ type Race = {
 }
 
 local phase = "lobby"
-local choices: { [Player]: { kart: string, ready: boolean } } = {}
+local choices: { [Player]: { kart: string, look: KartBodies.Look, ready: boolean } } = {}
+
+local function newChoice(): { kart: string, look: KartBodies.Look, ready: boolean }
+	return { kart = Karts.Default, look = KartBodies.sanitize(nil), ready = false }
+end
 local firstReadyAt: number? = nil
 local cup: { trackIndex: number, entrants: { Entrant } }? = nil
 local race: Race? = nil
@@ -1747,10 +2385,14 @@ local function buildLobby()
 	spawn.Color = Color3.fromRGB(255, 200, 40)
 	spawn.Material = Enum.Material.Neon
 	spawn.Parent = lobby
-	-- One of each kart on display.
-	for i, def in Karts.List do
-		local cf = CFrame.new(floor.Position + Vector3.new((i - 2) * 16, 1, -24)) * CFrame.Angles(0, math.pi, 0)
-		local display = KartRig.build(def.id, def.name, cf, lobby)
+	-- Showroom: every body design on display.
+	local count = #KartBodies.List
+	for i, body in KartBodies.List do
+		local x = (i - (count + 1) / 2) * 14
+		local cf = CFrame.new(floor.Position + Vector3.new(x, 1, -26)) * CFrame.Angles(0, math.pi, 0)
+		local look = KartBodies.cpuLook(i)
+		look.body = body.id
+		local display = KartRig.build(Karts.Default, body.name, cf, lobby, look)
 		display.PrimaryPart.Anchored = true
 	end
 	lobby.Parent = Workspace
@@ -1759,7 +2401,7 @@ end
 local function lobbyState()
 	local list = {}
 	for player, c in choices do
-		table.insert(list, { name = player.DisplayName, kart = c.kart, ready = c.ready })
+		table.insert(list, { name = player.DisplayName, kart = c.kart, body = c.look.body, ready = c.ready })
 	end
 	return {
 		phase = phase,
@@ -1839,7 +2481,7 @@ local function startRace(index: number)
 		local _, tan = Track.at(track, gridD)
 		local yaw = yawFromTangent(tan)
 		local cf = CFrame.new(pos.x, pos.y, pos.z) * CFrame.Angles(0, yaw, 0)
-		local model = KartRig.build(entrant.kartId, entrant.name, cf, kartsFolder)
+		local model = KartRig.build(entrant.kartId, entrant.name, cf, kartsFolder, entrant.look)
 		model.PrimaryPart.Anchored = true
 		local stats = Karts.get(entrant.kartId).stats
 		local racer: Racer = {
@@ -2048,6 +2690,7 @@ local function startCup()
 				isCpu = false,
 				player = player,
 				kartId = c.kart,
+				look = c.look,
 				points = 0,
 				lastPlace = 0,
 				profile = { lane = 0, skill = 1 },
@@ -2063,6 +2706,7 @@ local function startCup()
 			name = driver.name,
 			isCpu = true,
 			kartId = driver.kart,
+			look = KartBodies.cpuLook(cpuIndex),
 			points = 0,
 			lastPlace = 0,
 			profile = { lane = ((cpuIndex % 3) - 1) * 0.6, skill = 0.45 + (cpuIndex % 4) * 0.15 },
@@ -2205,11 +2849,11 @@ function RaceService.start()
 	buildLobby()
 
 	Players.PlayerAdded:Connect(function(player)
-		choices[player] = { kart = Karts.Default, ready = false }
+		choices[player] = newChoice()
 		task.delay(1, broadcastLobby)
 	end)
 	for _, player in Players:GetPlayers() do
-		choices[player] = { kart = Karts.Default, ready = false }
+		choices[player] = newChoice()
 	end
 	Players.PlayerRemoving:Connect(function(player)
 		choices[player] = nil
@@ -2225,6 +2869,13 @@ function RaceService.start()
 		local c = choices[player]
 		if c and phase == "lobby" then
 			c.kart = Karts.get(tostring(kartId)).id
+			broadcastLobby()
+		end
+	end)
+	Net.ChooseLook.OnServerEvent:Connect(function(player, look)
+		local c = choices[player]
+		if c and phase == "lobby" then
+			c.look = KartBodies.sanitize(look)
 			broadcastLobby()
 		end
 	end)
@@ -2302,19 +2953,23 @@ return RaceService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="18">
+      <Item class="ModuleScript" referent="21">
         <Properties>
           <string name="Name">TrackBuilder</string>
-          <string name="Source"><![CDATA[-- Builds a track's parts from its centerline: road, grass shoulders, walls,
--- bridge pillars, boost pads, the start line and the ground below.
+          <string name="Source"><![CDATA[-- Builds a track's parts from its centerline: road, curbs and lane lines,
+-- grass shoulders, walls, bridge pillars, boost pads, the start line, the
+-- ground, scenery (see Scenery.luau / Props.luau) and the theme's lighting.
 
 local Lighting = game:GetService("Lighting")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage.Shared
+local Scenery = require(Shared.Scenery)
 local Track = require(Shared.Track)
 local Tracks = require(Shared.Tracks)
+
+local Props = require(script.Parent.Props)
 
 local TrackBuilder = {}
 
@@ -2340,6 +2995,63 @@ local function part(parent: Instance, name: string, size: Vector3, cf: CFrame, c
 	return p
 end
 
+-- Markings sit just above the road; raycasts and collisions ignore them.
+local function decal(parent: Instance, size: Vector3, cf: CFrame, color: Color3, glow: boolean): Part
+	local p = part(parent, "Marking", size, cf, color, if glow then Enum.Material.Neon else Enum.Material.SmoothPlastic)
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.CastShadow = false
+	return p
+end
+
+-- Sky, sun and colour grading for a theme. Replaces the previous track's.
+local function applyLighting(theme: any)
+	for _, name in { "KartAtmosphere", "KartBloom", "KartGrade", "KartSunRays" } do
+		local old = Lighting:FindFirstChild(name)
+		if old then
+			old:Destroy()
+		end
+	end
+	Lighting.ClockTime = theme.clock
+	Lighting.Brightness = theme.brightness
+	Lighting.Ambient = rgb(theme.ambient)
+	Lighting.OutdoorAmbient = rgb(theme.ambient)
+	Lighting.GlobalShadows = true
+	Lighting.EnvironmentDiffuseScale = 0.5
+	Lighting.EnvironmentSpecularScale = 0.5
+
+	local a = theme.atmosphere
+	local atmosphere = Instance.new("Atmosphere")
+	atmosphere.Name = "KartAtmosphere"
+	atmosphere.Density = a.density
+	atmosphere.Haze = a.haze
+	atmosphere.Glare = a.glare
+	atmosphere.Color = rgb(a.color)
+	atmosphere.Decay = rgb(a.decay)
+	atmosphere.Parent = Lighting
+
+	local bloom = Instance.new("BloomEffect")
+	bloom.Name = "KartBloom"
+	bloom.Intensity = theme.bloom
+	bloom.Size = 24
+	bloom.Threshold = 0.9
+	bloom.Parent = Lighting
+
+	local grade = Instance.new("ColorCorrectionEffect")
+	grade.Name = "KartGrade"
+	grade.TintColor = rgb(theme.tint)
+	grade.Saturation = theme.saturation
+	grade.Contrast = 0.08
+	grade.Parent = Lighting
+
+	local rays = Instance.new("SunRaysEffect")
+	rays.Name = "KartSunRays"
+	rays.Intensity = if theme.clock > 6 and theme.clock < 19 then 0.08 else 0
+	rays.Spread = 0.6
+	rays.Parent = Lighting
+end
+
 local function flatAngle(a: Vector3, b: Vector3): number
 	return math.atan2(b.X - a.X, b.Z - a.Z)
 end
@@ -2363,6 +3075,12 @@ function TrackBuilder.build(trackId: string): (Folder, Track.Built)
 	local pts = track.points
 	local n = #pts
 	local minY, minX, maxX, minZ, maxZ = math.huge, math.huge, -math.huge, math.huge, -math.huge
+	local markings = Instance.new("Folder")
+	markings.Name = "Markings"
+	markings.Parent = folder
+	local neon = def.theme == "neon"
+	local curbColors = { rgb(theme.curb[1]), rgb(theme.curb[2]) }
+	local lineColor = rgb(theme.line)
 
 	for i = 1, n do
 		local a, b, c = v3(pts[i]), v3(pts[i % n + 1]), v3(pts[(i + 1) % n + 1])
@@ -2379,6 +3097,20 @@ function TrackBuilder.build(trackId: string): (Folder, Track.Built)
 			local shoulder = part(folder, "Shoulder", Vector3.new(sw, 1, segLen), cf * CFrame.new(side * (half + sw / 2), -0.52, 0), shoulderColor, Enum.Material.Grass)
 			shoulder:SetAttribute("Surface", "offroad")
 			part(folder, "Wall", Vector3.new(1, 4, segLen), cf * CFrame.new(side * (half + sw + 0.5), 1.5, 0), wallColor, if def.theme == "neon" then Enum.Material.Neon else Enum.Material.SmoothPlastic)
+		end
+
+		-- Red-and-white curbs through corners, lane lines on the straights.
+		if turn > 0.02 then
+			for _, side in { -1, 1 } do
+				decal(markings, Vector3.new(3, 0.1, length + 0.6), cf * CFrame.new(side * (half - 1.5), 0.05, 0), curbColors[i % 2 + 1], neon)
+			end
+		else
+			for _, side in { -1, 1 } do
+				decal(markings, Vector3.new(0.8, 0.06, length + 0.4), cf * CFrame.new(side * (half - 1.2), 0.03, 0), lineColor, neon)
+			end
+		end
+		if i % 3 ~= 0 then
+			decal(markings, Vector3.new(0.7, 0.06, length * 0.7), cf * CFrame.new(0, 0.03, 0), lineColor, neon)
 		end
 
 		minY = math.min(minY, a.Y)
@@ -2448,7 +3180,15 @@ function TrackBuilder.build(trackId: string): (Folder, Track.Built)
 	end
 	part(folder, "Banner", Vector3.new(def.width + 10, 3, 1), lineCf * CFrame.new(0, 17, 0), rgb(theme.accent), Enum.Material.Neon)
 
-	Lighting.ClockTime = theme.clock
+	-- Scenery around the track.
+	local scenery = Instance.new("Folder")
+	scenery.Name = "Scenery"
+	scenery.Parent = folder
+	for _, prop in Scenery.place(track) do
+		Props.build(prop, theme, scenery)
+	end
+
+	applyLighting(theme)
 	folder.Parent = Workspace
 	return folder, track
 end
@@ -2459,19 +3199,19 @@ return TrackBuilder
       </Item>
     </Item>
   </Item>
-  <Item class="StarterPlayer" referent="19">
+  <Item class="StarterPlayer" referent="22">
     <Properties>
       <string name="Name">StarterPlayer</string>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="20">
+    <Item class="StarterPlayerScripts" referent="23">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="Folder" referent="21">
+      <Item class="Folder" referent="24">
         <Properties>
           <string name="Name">Client</string>
         </Properties>
-        <Item class="ModuleScript" referent="22">
+        <Item class="ModuleScript" referent="25">
           <Properties>
             <string name="Name">Hud</string>
             <string name="Source"><![CDATA[-- All screens, built in code: lobby (pick a kart, ready up), race HUD (place,
@@ -2484,6 +3224,7 @@ local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Items = require(Shared:WaitForChild("Items"))
+local KartBodies = require(Shared:WaitForChild("KartBodies"))
 local Karts = require(Shared:WaitForChild("Karts"))
 
 local Hud = {}
@@ -2564,7 +3305,7 @@ end
 ---------------------------------------------------------------------------
 -- Lobby
 ---------------------------------------------------------------------------
-local lobby = frame(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 620, 0, 420) })
+local lobby = frame(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 620, 0, 560) })
 text(lobby, { Position = UDim2.new(0, 20, 0, 14), Size = UDim2.new(1, -40, 0, 44), Text = "KART RACER" , TextColor3 = YELLOW })
 local lobbySub = text(lobby, { Position = UDim2.new(0, 20, 0, 60), Size = UDim2.new(1, -40, 0, 22), Font = Enum.Font.GothamMedium, Text = "" })
 local cards = Instance.new("Frame")
@@ -2576,9 +3317,11 @@ local cardLayout = Instance.new("UIListLayout")
 cardLayout.FillDirection = Enum.FillDirection.Horizontal
 cardLayout.Padding = UDim.new(0, 10)
 cardLayout.Parent = cards
-local playersLabel = text(lobby, { Position = UDim2.new(0, 20, 0, 276), Size = UDim2.new(1, -40, 0, 60), Font = Enum.Font.GothamMedium, TextScaled = false, TextSize = 15, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Text = "" })
+local playersLabel = text(lobby, { Position = UDim2.new(0, 20, 0, 420), Size = UDim2.new(1, -40, 0, 60), Font = Enum.Font.GothamMedium, TextScaled = false, TextSize = 15, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Text = "" })
 
 local chosenKart = Karts.Default
+local look = { body = KartBodies.Default, main = 1, accent = 10 }
+Hud.onLook = nil :: ((any) -> ())?
 local isReady = false
 local cardButtons: { [string]: TextButton } = {}
 Hud.onChooseKart = nil :: ((string) -> ())?
@@ -2613,6 +3356,74 @@ for _, def in Karts.List do
 	cardButtons[def.id] = card
 end
 
+-- Body design and paint pickers ---------------------------------------------
+local function pickerRow(y: number, title: string): Frame
+	text(lobby, { Position = UDim2.new(0, 20, 0, y), Size = UDim2.new(0, 70, 0, 30), Font = Enum.Font.GothamBold, TextScaled = false, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left, Text = title })
+	local row = Instance.new("Frame")
+	row.BackgroundTransparency = 1
+	row.Position = UDim2.new(0, 92, 0, y)
+	row.Size = UDim2.new(1, -112, 0, 30)
+	row.Parent = lobby
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Horizontal
+	layout.Padding = UDim.new(0, 6)
+	layout.Parent = row
+	return row
+end
+
+local bodyButtons: { [string]: TextButton } = {}
+local mainSwatches: { TextButton } = {}
+local accentSwatches: { TextButton } = {}
+
+local function sendLook()
+	if Hud.onLook then
+		Hud.onLook(look)
+	end
+	Hud.refreshPickers()
+end
+
+local bodyRow = pickerRow(278, "Body")
+for _, body in KartBodies.List do
+	bodyButtons[body.id] = button(bodyRow, body.name, { Size = UDim2.new(0, 78, 1, 0), TextScaled = true, Font = Enum.Font.GothamBold }, function()
+		look.body = body.id
+		sendLook()
+	end)
+end
+
+local function swatchRow(y: number, title: string, list: { TextButton }, key: string)
+	local row = pickerRow(y, title)
+	for i, c in KartBodies.Palette do
+		list[i] = button(row, "", { Size = UDim2.new(0, 30, 1, 0), BackgroundColor3 = Color3.fromRGB(c[1], c[2], c[3]) }, function()
+			look[key] = i
+			sendLook()
+		end)
+	end
+end
+swatchRow(318, "Paint", mainSwatches, "main")
+swatchRow(358, "Trim", accentSwatches, "accent")
+
+local function outline(b: GuiObject, on: boolean)
+	local stroke = b:FindFirstChildOfClass("UIStroke") or Instance.new("UIStroke")
+	stroke.Thickness = if on then 3 else 0
+	stroke.Color = YELLOW
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Parent = b
+end
+
+function Hud.refreshPickers()
+	for id, b in bodyButtons do
+		outline(b, id == look.body)
+		b.BackgroundColor3 = if id == look.body then Color3.fromRGB(90, 90, 120) else Color3.fromRGB(60, 60, 80)
+	end
+	for i, b in mainSwatches do
+		outline(b, i == look.main)
+	end
+	for i, b in accentSwatches do
+		outline(b, i == look.accent)
+	end
+end
+Hud.refreshPickers()
+
 function Hud.refreshCards()
 	for id, card in cardButtons do
 		local stroke = card:FindFirstChildOfClass("UIStroke") or Instance.new("UIStroke")
@@ -2638,7 +3449,8 @@ function Hud.setLobby(state: any)
 	local lines = {}
 	for _, p in state.players do
 		local kart = Karts.get(p.kart).name
-		table.insert(lines, `{if p.ready then "✔" else "…"} {p.name} ({kart})`)
+		local body = KartBodies.get(p.body).name
+		table.insert(lines, `{if p.ready then "✔" else "…"} {p.name} ({kart}, {body})`)
 		if p.name == player.DisplayName then
 			isReady = p.ready
 		end
@@ -2841,7 +3653,7 @@ return Hud
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="23">
+        <Item class="ModuleScript" referent="26">
           <Properties>
             <string name="Name">KartController</string>
             <string name="Source"><![CDATA[-- Drives your kart: reads input, runs KartPhysics on this client (you own the
@@ -3150,7 +3962,7 @@ return KartController
 ]]></string>
           </Properties>
         </Item>
-        <Item class="LocalScript" referent="24">
+        <Item class="LocalScript" referent="27">
           <Properties>
             <string name="Name">Main</string>
             <string name="Source"><![CDATA[-- Client entry point: wires remotes to the HUD and the kart controller.
@@ -3168,6 +3980,9 @@ KartController.start()
 
 Hud.onChooseKart = function(kartId)
 	Remotes.ChooseKart:FireServer(kartId)
+end
+Hud.onLook = function(look)
+	Remotes.ChooseLook:FireServer(look)
 end
 Hud.onReady = function(ready)
 	Remotes.Ready:FireServer(ready)

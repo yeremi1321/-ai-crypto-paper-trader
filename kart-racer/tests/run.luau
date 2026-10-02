@@ -6,6 +6,8 @@ require("./KartPhysics.spec")
 require("./Track.spec")
 require("./Items.spec")
 require("./RaceRules.spec")
+require("./Scenery.spec")
+require("./KartBodies.spec")
 require("./Simulation.spec")
 
 print(`{T.passed} passed, {T.failed} failed`)

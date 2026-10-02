@@ -13,6 +13,7 @@ return {
 
 	-- client -> server
 	ChooseKart = "ChooseKart", -- (kartId)
+	ChooseLook = "ChooseLook", -- ({ body, main, accent }) body design and paint
 	Ready = "Ready", -- (isReady)
 	UseItem = "UseItem", -- ()
 }

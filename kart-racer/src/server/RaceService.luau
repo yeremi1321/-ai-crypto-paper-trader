@@ -10,6 +10,7 @@ local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage.Shared
 local AIDriver = require(Shared.AIDriver)
+local KartBodies = require(Shared.KartBodies)
 local KartPhysics = require(Shared.KartPhysics)
 local Karts = require(Shared.Karts)
 local RaceRules = require(Shared.RaceRules)
@@ -37,6 +38,7 @@ export type Entrant = {
 	isCpu: boolean,
 	player: Player?,
 	kartId: string,
+	look: KartBodies.Look,
 	points: number,
 	lastPlace: number,
 	profile: AIDriver.Profile,
@@ -71,7 +73,11 @@ type Race = {
 }
 
 local phase = "lobby"
-local choices: { [Player]: { kart: string, ready: boolean } } = {}
+local choices: { [Player]: { kart: string, look: KartBodies.Look, ready: boolean } } = {}
+
+local function newChoice(): { kart: string, look: KartBodies.Look, ready: boolean }
+	return { kart = Karts.Default, look = KartBodies.sanitize(nil), ready = false }
+end
 local firstReadyAt: number? = nil
 local cup: { trackIndex: number, entrants: { Entrant } }? = nil
 local race: Race? = nil
@@ -169,10 +175,14 @@ local function buildLobby()
 	spawn.Color = Color3.fromRGB(255, 200, 40)
 	spawn.Material = Enum.Material.Neon
 	spawn.Parent = lobby
-	-- One of each kart on display.
-	for i, def in Karts.List do
-		local cf = CFrame.new(floor.Position + Vector3.new((i - 2) * 16, 1, -24)) * CFrame.Angles(0, math.pi, 0)
-		local display = KartRig.build(def.id, def.name, cf, lobby)
+	-- Showroom: every body design on display.
+	local count = #KartBodies.List
+	for i, body in KartBodies.List do
+		local x = (i - (count + 1) / 2) * 14
+		local cf = CFrame.new(floor.Position + Vector3.new(x, 1, -26)) * CFrame.Angles(0, math.pi, 0)
+		local look = KartBodies.cpuLook(i)
+		look.body = body.id
+		local display = KartRig.build(Karts.Default, body.name, cf, lobby, look)
 		display.PrimaryPart.Anchored = true
 	end
 	lobby.Parent = Workspace
@@ -181,7 +191,7 @@ end
 local function lobbyState()
 	local list = {}
 	for player, c in choices do
-		table.insert(list, { name = player.DisplayName, kart = c.kart, ready = c.ready })
+		table.insert(list, { name = player.DisplayName, kart = c.kart, body = c.look.body, ready = c.ready })
 	end
 	return {
 		phase = phase,
@@ -261,7 +271,7 @@ local function startRace(index: number)
 		local _, tan = Track.at(track, gridD)
 		local yaw = yawFromTangent(tan)
 		local cf = CFrame.new(pos.x, pos.y, pos.z) * CFrame.Angles(0, yaw, 0)
-		local model = KartRig.build(entrant.kartId, entrant.name, cf, kartsFolder)
+		local model = KartRig.build(entrant.kartId, entrant.name, cf, kartsFolder, entrant.look)
 		model.PrimaryPart.Anchored = true
 		local stats = Karts.get(entrant.kartId).stats
 		local racer: Racer = {
@@ -470,6 +480,7 @@ local function startCup()
 				isCpu = false,
 				player = player,
 				kartId = c.kart,
+				look = c.look,
 				points = 0,
 				lastPlace = 0,
 				profile = { lane = 0, skill = 1 },
@@ -485,6 +496,7 @@ local function startCup()
 			name = driver.name,
 			isCpu = true,
 			kartId = driver.kart,
+			look = KartBodies.cpuLook(cpuIndex),
 			points = 0,
 			lastPlace = 0,
 			profile = { lane = ((cpuIndex % 3) - 1) * 0.6, skill = 0.45 + (cpuIndex % 4) * 0.15 },
@@ -627,11 +639,11 @@ function RaceService.start()
 	buildLobby()
 
 	Players.PlayerAdded:Connect(function(player)
-		choices[player] = { kart = Karts.Default, ready = false }
+		choices[player] = newChoice()
 		task.delay(1, broadcastLobby)
 	end)
 	for _, player in Players:GetPlayers() do
-		choices[player] = { kart = Karts.Default, ready = false }
+		choices[player] = newChoice()
 	end
 	Players.PlayerRemoving:Connect(function(player)
 		choices[player] = nil
@@ -647,6 +659,13 @@ function RaceService.start()
 		local c = choices[player]
 		if c and phase == "lobby" then
 			c.kart = Karts.get(tostring(kartId)).id
+			broadcastLobby()
+		end
+	end)
+	Net.ChooseLook.OnServerEvent:Connect(function(player, look)
+		local c = choices[player]
+		if c and phase == "lobby" then
+			c.look = KartBodies.sanitize(look)
 			broadcastLobby()
 		end
 	end)

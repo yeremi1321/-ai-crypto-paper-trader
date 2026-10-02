@@ -3,6 +3,9 @@
 -- driven in list order; the first point is the start/finish line.
 -- tests/Simulation.spec.luau has CPU drivers race every track, so a bad edit
 -- here (a corner too tight, a jump too steep) fails the tests.
+--
+-- Making a track bigger: raise `scale` (stretches the whole layout) and
+-- `width` (road width in studs). Then run `lune run tests/run`.
 
 local Track = require("./Track")
 local v = Track.v
@@ -16,7 +19,16 @@ Tracks.Themes = {
 		ground = { 100, 160, 70 },
 		wall = { 235, 235, 240 },
 		accent = { 255, 210, 60 },
+		curb = { { 220, 40, 40 }, { 245, 245, 245 } },
+		line = { 245, 245, 245 },
 		clock = 14,
+		-- Lighting: hazy summer afternoon.
+		ambient = { 120, 120, 130 },
+		brightness = 3,
+		atmosphere = { density = 0.3, haze = 1.2, glare = 0.4, color = { 200, 220, 255 }, decay = { 110, 140, 200 } },
+		bloom = 0.6,
+		tint = { 255, 250, 240 },
+		saturation = 0.15,
 	},
 	canyon = {
 		road = { 92, 80, 72 },
@@ -24,7 +36,16 @@ Tracks.Themes = {
 		ground = { 180, 120, 80 },
 		wall = { 150, 90, 60 },
 		accent = { 255, 140, 60 },
-		clock = 17.5,
+		curb = { { 230, 110, 40 }, { 250, 235, 210 } },
+		line = { 250, 230, 190 },
+		clock = 17.2,
+		-- Lighting: dusty golden hour.
+		ambient = { 140, 100, 80 },
+		brightness = 2.6,
+		atmosphere = { density = 0.38, haze = 2.2, glare = 1.2, color = { 255, 200, 150 }, decay = { 200, 110, 70 } },
+		bloom = 0.9,
+		tint = { 255, 235, 210 },
+		saturation = 0.2,
 	},
 	neon = {
 		road = { 30, 30, 42 },
@@ -32,7 +53,16 @@ Tracks.Themes = {
 		ground = { 16, 12, 28 },
 		wall = { 0, 230, 255 },
 		accent = { 255, 60, 220 },
+		curb = { { 255, 60, 220 }, { 0, 230, 255 } },
+		line = { 0, 230, 255 },
 		clock = 0,
+		-- Lighting: dark city night with glowing neon.
+		ambient = { 60, 40, 90 },
+		brightness = 1,
+		atmosphere = { density = 0.42, haze = 1.5, glare = 0, color = { 120, 60, 180 }, decay = { 40, 20, 80 } },
+		bloom = 1.6,
+		tint = { 235, 220, 255 },
+		saturation = 0.3,
 	},
 }
 
@@ -41,7 +71,8 @@ Tracks.List = {
 		id = "sunny",
 		name = "Sunny Loop",
 		theme = "sunny",
-		width = 46,
+		width = 56,
+		scale = 1.6,
 		laps = 3,
 		controls = {
 			v(0, 0, 0),
@@ -67,7 +98,8 @@ Tracks.List = {
 		id = "canyon",
 		name = "Canyon Climb",
 		theme = "canyon",
-		width = 42,
+		width = 52,
+		scale = 1.6,
 		laps = 3,
 		controls = {
 			v(0, 0, 0),
@@ -93,7 +125,8 @@ Tracks.List = {
 		id = "neon",
 		name = "Neon Eight",
 		theme = "neon",
-		width = 40,
+		width = 50,
+		scale = 1.5,
 		laps = 3,
 		controls = {
 			v(-300, 0, 200),

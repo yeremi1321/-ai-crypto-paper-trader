@@ -264,3 +264,21 @@ def test_picks_vs_bot_is_blind_then_decides_on_the_same_measuring_stick():
     row(300, 1, .1, None, 2.0); c.commit()
     r = next(x for x in mp.preregistered(c) if x["name"] == h["name"])
     assert r["verdict"].startswith("SUPPORTED") and r["kept"]["trades"] == 150 and r["every_entry"]["trades"] == 51
+
+
+def test_bot_window_version_decides_and_the_stuck_one_is_void():
+    h = next(x for x in mp.HYPOTHESES if x.get("window") == "bot")
+    old = next(x for x in mp.HYPOTHESES if x["name"] == "predictor_low_risk_picks_beat_bot_fixed_150")
+    reg = datetime.fromisoformat(h["registered_at"])
+    c = db(); mp.init(c)
+    def row(i, wt, ps, dec, net):
+        c.execute("""INSERT INTO meme_predictions(candidate_id,predicted_at,would_trade,p_severe_loss,bot_decision,
+            status,actual_net_return_pct) VALUES(?,?,?,?,?,'RESOLVED',?)""",
+                  (i, (reg + timedelta(minutes=i)).isoformat(), wt, ps, dec, net))
+    for i in range(600):  # picks every minute, a bot entry every 4th minute
+        row(i, 1, .1, mp.TRADED if i % 4 == 0 else None, 3.0 if i % 4 else -6.0)
+    c.commit()
+    res = {r["name"]: r for r in mp.preregistered(c)}
+    r = res[h["name"]]
+    assert r["every_entry"]["trades"] == 150 and r["verdict"].startswith("SUPPORTED"), r
+    assert res[old["name"]]["verdict"].startswith("VOID")

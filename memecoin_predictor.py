@@ -86,6 +86,19 @@ HYPOTHESES = [
      "pick_if": {"would_trade": 1, "p_severe_loss_below": 0.31},
      # Blind; decided once when 150 picks resolved after registration (and at least 40 bot entries).
      "decide_at_trades": 150, "min_bot_entries": 40},
+    {"name": "predictor_low_risk_picks_beat_bot_window_150_bot",
+     "registered_at": "2026-10-02T07:00:00+00:00",
+     "kind": "picks_vs_bot", "window": "bot",
+     "motivation": "predictor_low_risk_picks_beat_bot_fixed_150 could never decide: picks arrive far faster than bot "
+                   "entries, so its window (up to the 150th pick) closed with only 30 of the 40 bot entries it needed. "
+                   "Same statement, with the window sized by bot entries instead. Note: the open report already "
+                   "showed all-history picks at -1.8%/trade vs bot entries at +1.3% when this was registered.",
+     "statement": "Discoveries the predictor would trade (expected return > 0) with a recorded severe-loss chance "
+                  "< 31% average a better simulated net return than the bot's own paper entries, both measured "
+                  "with the same simulated exit rule.",
+     "pick_if": {"would_trade": 1, "p_severe_loss_below": 0.31},
+     # Blind; decided once when 150 bot entries resolved after registration, against every pick in that window.
+     "decide_at_trades": 150},
 ]
 
 
@@ -757,9 +770,18 @@ def _picks_vs_bot(c, h, seed):
         FROM meme_predictions WHERE status='RESOLVED' AND actual_net_return_pct IS NOT NULL AND predicted_at>=?
         ORDER BY predicted_at,id"""), (h["registered_at"],)).fetchall()
     rule = h["pick_if"]
-    picks = [net for _, wt, ps, _, net in rows
-             if wt == rule["would_trade"] and ps is not None and ps < rule["p_severe_loss_below"]]
+    is_pick = lambda wt, ps: wt == rule["would_trade"] and ps is not None and ps < rule["p_severe_loss_below"]
     n = h["decide_at_trades"]
+    if h.get("window") == "bot":
+        bot_rows = [(at, net) for at, _, _, dec, net in rows if dec == TRADED]
+        if len(bot_rows) < n:
+            return {**h, "trades_so_far": len(bot_rows),
+                    "verdict": f"blind: decided once at {n} bot entries (have {len(bot_rows)}); interim results hidden"}
+        last_at = bot_rows[n - 1][0]
+        bot = [net for _, net in bot_rows[:n]]
+        picks = [net for at, wt, ps, _, net in rows if is_pick(wt, ps) and at <= last_at]
+        return _judge_picks(h, picks, bot, seed)
+    picks = [net for _, wt, ps, _, net in rows if is_pick(wt, ps)]
     if len(picks) < n:
         return {**h, "trades_so_far": len(picks),
                 "verdict": f"blind: decided once at {n} picks (have {len(picks)}); interim results hidden"}
@@ -768,10 +790,14 @@ def _picks_vs_bot(c, h, seed):
     last_at = [at for at, wt, ps, _, _ in rows
                if wt == rule["would_trade"] and ps is not None and ps < rule["p_severe_loss_below"]][n - 1]
     bot = [net for at, _, _, dec, net in rows if dec == TRADED and at <= last_at]
-    if len(bot) < h["min_bot_entries"]:
+    if len(bot) < h["min_bot_entries"]:  # the window is fixed by the n-th pick, so this can never change
         return {**h, "trades_so_far": len(picks),
-                "verdict": f"blind: waiting for {h['min_bot_entries']} bot entries in the window (have {len(bot)})"}
+                "verdict": f"VOID: its window closed with {len(bot)} bot entries, fewer than the "
+                           f"{h['min_bot_entries']} required; superseded by predictor_low_risk_picks_beat_bot_window_150_bot"}
+    return _judge_picks(h, picks, bot, seed)
 
+
+def _judge_picks(h, picks, bot, seed):
     def side(vals):
         return {"trades": len(vals), "avg_net_return_pct": _r(sum(vals) / len(vals), 2),
                 "win_rate_pct": _r(100 * sum(v > 0 for v in vals) / len(vals), 1), "pnl_usd_at_100": _r(sum(vals), 2)}

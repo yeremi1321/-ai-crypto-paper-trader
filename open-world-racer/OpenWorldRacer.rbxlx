@@ -1,0 +1,4531 @@
+<roblox version="4">
+  <Item class="ReplicatedStorage" referent="0">
+    <Properties>
+      <string name="Name">ReplicatedStorage</string>
+    </Properties>
+    <Item class="Folder" referent="1">
+      <Properties>
+        <string name="Name">Shared</string>
+      </Properties>
+      <Item class="ModuleScript" referent="2">
+        <Properties>
+          <string name="Name">CarCatalog</string>
+          <string name="Source"><![CDATA[--!strict
+-- Fictional car roster and performance parts. Names and designs are original on
+-- purpose: real brands need licensing before publishing.
+
+export type Drivetrain = "FWD" | "RWD" | "AWD"
+
+export type CarStats = {
+	power: number, -- horsepower
+	weight: number, -- kg
+	grip: number, -- 0..1 tire grip
+	handling: number, -- 0..1 suspension / chassis response
+	topSpeed: number, -- studs per second at stock gearing
+	drivetrain: Drivetrain,
+}
+
+export type CarDef = {
+	id: string,
+	name: string,
+	archetype: string,
+	price: number,
+	engineSound: string, -- key into EngineAudio profiles
+	stats: CarStats,
+}
+
+export type PartDef = {
+	id: string,
+	slot: string,
+	name: string,
+	price: number,
+	-- Multipliers / additions applied on top of stock stats.
+	powerMul: number?,
+	weightAdd: number?,
+	gripAdd: number?,
+	handlingAdd: number?,
+	topSpeedMul: number?,
+}
+
+local CarCatalog = {}
+
+CarCatalog.StarterCarId = "kestrel"
+
+CarCatalog.Cars = {
+	kestrel = {
+		id = "kestrel",
+		name = "Kestrel Hatch",
+		archetype = "Lightweight hatchback",
+		price = 0,
+		engineSound = "inline4",
+		stats = { power = 110, weight = 980, grip = 0.62, handling = 0.70, topSpeed = 150, drivetrain = "FWD" },
+	},
+	aurelia = {
+		id = "aurelia",
+		name = "Aurelia Sedan",
+		archetype = "Luxury sedan",
+		price = 9000,
+		engineSound = "v6",
+		stats = { power = 240, weight = 1650, grip = 0.66, handling = 0.55, topSpeed = 175, drivetrain = "RWD" },
+	},
+	dune = {
+		id = "dune",
+		name = "Dune Runner",
+		archetype = "Off-road build",
+		price = 11000,
+		engineSound = "v6",
+		stats = { power = 260, weight = 1900, grip = 0.58, handling = 0.45, topSpeed = 160, drivetrain = "AWD" },
+	},
+	ronin = {
+		id = "ronin",
+		name = "Ronin RS",
+		archetype = "Japanese sports car",
+		price = 18000,
+		engineSound = "inline6turbo",
+		stats = { power = 280, weight = 1350, grip = 0.74, handling = 0.78, topSpeed = 195, drivetrain = "RWD" },
+	},
+	bulldog = {
+		id = "bulldog",
+		name = "Bulldog V8",
+		archetype = "Muscle car",
+		price = 20000,
+		engineSound = "v8",
+		stats = { power = 420, weight = 1700, grip = 0.64, handling = 0.52, topSpeed = 205, drivetrain = "RWD" },
+	},
+	vanta = {
+		id = "vanta",
+		name = "Vanta GT",
+		archetype = "Supercar",
+		price = 95000,
+		engineSound = "v10",
+		stats = { power = 620, weight = 1450, grip = 0.86, handling = 0.85, topSpeed = 250, drivetrain = "AWD" },
+	},
+} :: { [string]: CarDef }
+
+CarCatalog.Parts = {
+	engine1 = { id = "engine1", slot = "engine", name = "Street Engine Tune", price = 2500, powerMul = 1.10 },
+	engine2 = { id = "engine2", slot = "engine", name = "Sport Engine Build", price = 7000, powerMul = 1.22 },
+	engine3 = { id = "engine3", slot = "engine", name = "Race Engine Build", price = 16000, powerMul = 1.38 },
+	turbo = { id = "turbo", slot = "forced", name = "Turbo Kit", price = 9000, powerMul = 1.25, weightAdd = 25 },
+	tiresSport = { id = "tiresSport", slot = "tires", name = "Sport Tires", price = 1800, gripAdd = 0.06 },
+	tiresRace = { id = "tiresRace", slot = "tires", name = "Semi-Slick Tires", price = 5200, gripAdd = 0.12 },
+	tiresDrift = { id = "tiresDrift", slot = "tires", name = "Drift Compound", price = 2000, gripAdd = -0.08 },
+	suspension = { id = "suspension", slot = "suspension", name = "Coilovers", price = 3500, handlingAdd = 0.10 },
+	weight1 = { id = "weight1", slot = "weight", name = "Stripped Interior", price = 2200, weightAdd = -90 },
+	gearing = { id = "gearing", slot = "gearing", name = "Long Gearing", price = 3000, topSpeedMul = 1.08 },
+} :: { [string]: PartDef }
+
+function CarCatalog.getCar(id: string): CarDef?
+	return CarCatalog.Cars[id]
+end
+
+function CarCatalog.getPart(id: string): PartDef?
+	return CarCatalog.Parts[id]
+end
+
+-- Applies installed parts (one per slot) to a car's stock stats.
+function CarCatalog.applyParts(stock: CarStats, partIds: { string }): CarStats
+	local s: CarStats = {
+		power = stock.power,
+		weight = stock.weight,
+		grip = stock.grip,
+		handling = stock.handling,
+		topSpeed = stock.topSpeed,
+		drivetrain = stock.drivetrain,
+	}
+	local usedSlots: { [string]: boolean } = {}
+	for _, partId in partIds do
+		local part = CarCatalog.Parts[partId]
+		if part and not usedSlots[part.slot] then
+			usedSlots[part.slot] = true
+			s.power *= part.powerMul or 1
+			s.weight += part.weightAdd or 0
+			s.grip = math.clamp(s.grip + (part.gripAdd or 0), 0.3, 1)
+			s.handling = math.clamp(s.handling + (part.handlingAdd or 0), 0.2, 1)
+			s.topSpeed *= part.topSpeedMul or 1
+		end
+	end
+	-- More power raises the achievable top speed a little.
+	s.topSpeed *= (s.power / stock.power) ^ 0.25
+	return s
+end
+
+return CarCatalog
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="3">
+        <Properties>
+          <string name="Name">EngineAudio</string>
+          <string name="Source"><![CDATA[--!strict
+-- Simulated gearbox and engine sound parameters. The client feeds in speed and
+-- throttle; this returns gear, RPM and the pitch/volume to play, so engines
+-- rise with RPM, drop on upshifts and change character with upgrades.
+
+export type Profile = {
+	idleRpm: number,
+	redline: number,
+	gears: number,
+	basePitch: number, -- pitch at idle
+	pitchRange: number, -- extra pitch at redline
+	soundId: string,
+}
+
+local EngineAudio = {}
+
+-- Set soundId to an uploaded engine loop (rbxassetid://...). Empty = silent.
+EngineAudio.Profiles = {
+	inline4 = { idleRpm = 900, redline = 7200, gears = 5, basePitch = 0.9, pitchRange = 1.1, soundId = "" },
+	v6 = { idleRpm = 800, redline = 6800, gears = 6, basePitch = 0.8, pitchRange = 1.0, soundId = "" },
+	inline6turbo = { idleRpm = 850, redline = 7800, gears = 6, basePitch = 0.85, pitchRange = 1.15, soundId = "" },
+	v8 = { idleRpm = 700, redline = 6500, gears = 6, basePitch = 0.7, pitchRange = 0.9, soundId = "" },
+	v10 = { idleRpm = 1000, redline = 8700, gears = 7, basePitch = 0.95, pitchRange = 1.3, soundId = "" },
+} :: { [string]: Profile }
+
+export type EngineState = { gear: number, rpm: number, pitch: number, volume: number }
+
+-- Each gear covers a growing slice of top speed (short first gear, long top gear).
+function EngineAudio.gearFor(speedFrac: number, gears: number): (number, number)
+	speedFrac = math.clamp(speedFrac, 0, 1)
+	local total = 0
+	for g = 1, gears do
+		total += g
+	end
+	local upper = 0
+	for g = 1, gears do
+		local lower = upper
+		upper += g / total
+		if speedFrac <= upper or g == gears then
+			-- Fraction through this gear, starting at ~35% of the rev range after a shift.
+			local within = (speedFrac - lower) / (upper - lower)
+			local low = if g == 1 then 0 else 0.35
+			return g, low + (1 - low) * math.clamp(within, 0, 1)
+		end
+	end
+	return gears, 1
+end
+
+function EngineAudio.state(profile: Profile, speed: number, topSpeed: number, throttle: number, hasTurbo: boolean?): EngineState
+	local gear, revFrac = EngineAudio.gearFor(math.abs(speed) / math.max(topSpeed, 1), profile.gears)
+	-- Blipping the throttle at standstill still revs the engine.
+	revFrac = math.max(revFrac, math.abs(throttle) * 0.3)
+	local rpm = profile.idleRpm + (profile.redline - profile.idleRpm) * revFrac
+	local pitch = profile.basePitch + profile.pitchRange * revFrac + (if hasTurbo then 0.05 else 0)
+	local volume = 0.35 + 0.35 * revFrac + 0.3 * math.abs(throttle)
+	return { gear = gear, rpm = math.floor(rpm), pitch = pitch, volume = math.clamp(volume, 0, 1) }
+end
+
+return EngineAudio
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="4">
+        <Properties>
+          <string name="Name">Performance</string>
+          <string name="Source"><![CDATA[--!strict
+-- Performance rating (100..999) and class letters, used to keep races fair:
+-- a new player in a D-class hatch only meets other D-class cars.
+
+local CarCatalog = require("./CarCatalog")
+
+local Performance = {}
+
+export type ClassName = "D" | "C" | "B" | "A" | "S"
+
+-- Upper bound (inclusive) of each class, lowest first.
+Performance.Classes = {
+	{ name = "D" :: ClassName, max = 449 },
+	{ name = "C" :: ClassName, max = 549 },
+	{ name = "B" :: ClassName, max = 649 },
+	{ name = "A" :: ClassName, max = 799 },
+	{ name = "S" :: ClassName, max = 999 },
+}
+
+local CLASS_ORDER: { [string]: number } = {}
+for i, c in Performance.Classes do
+	CLASS_ORDER[c.name] = i
+end
+
+function Performance.rating(stats: CarCatalog.CarStats): number
+	local powerToWeight = stats.power / stats.weight -- ~0.1 (hatch) .. ~0.45 (supercar)
+	local accel = math.clamp(powerToWeight / 0.45, 0, 1.3)
+	local speed = math.clamp((stats.topSpeed - 120) / 150, 0, 1.3)
+	local cornering = stats.grip * 0.6 + stats.handling * 0.4
+	local awdBonus = if stats.drivetrain == "AWD" then 0.04 else 0
+
+	local score = accel * 0.40 + speed * 0.25 + cornering * 0.35 + awdBonus
+	return math.clamp(math.floor(100 + score * 830 + 0.5), 100, 999)
+end
+
+function Performance.classOf(rating: number): ClassName
+	for _, c in Performance.Classes do
+		if rating <= c.max then
+			return c.name
+		end
+	end
+	return "S"
+end
+
+function Performance.classRank(className: string): number
+	return CLASS_ORDER[className] or 0
+end
+
+-- A car may enter an event capped at `cap` if its class is not above the cap.
+function Performance.canEnter(rating: number, cap: ClassName?): boolean
+	if cap == nil then
+		return true
+	end
+	return Performance.classRank(Performance.classOf(rating)) <= Performance.classRank(cap)
+end
+
+function Performance.forBuild(carId: string, partIds: { string }): (number, ClassName)
+	local car = CarCatalog.getCar(carId)
+	assert(car, `unknown car {carId}`)
+	local r = Performance.rating(CarCatalog.applyParts(car.stats, partIds))
+	return r, Performance.classOf(r)
+end
+
+return Performance
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="5">
+        <Properties>
+          <string name="Name">PlayerProfile</string>
+          <string name="Source"><![CDATA[--!strict
+-- A player's saved state and every rule for changing it. Pure data so the
+-- server can validate purchases and garage changes in one tested place.
+
+local CarCatalog = require("./CarCatalog")
+local Progression = require("./Progression")
+
+export type OwnedCar = {
+	carId: string,
+	parts: { string }, -- installed part ids, one per slot
+	paint: { number }, -- r, g, b 0..255
+	builds: { [string]: { string } }, -- saved part setups: street/drag/drift/track
+}
+
+export type Profile = {
+	version: number,
+	cash: number,
+	cars: { OwnedCar },
+	activeCar: number, -- index into cars
+	partsInventory: { [string]: number }, -- owned but uninstalled parts
+	rep: { [string]: number }, -- district id -> reputation
+	discovered: { [string]: boolean },
+	garageBays: number,
+	stats: { races: number, wins: number },
+}
+
+local PlayerProfile = {}
+
+PlayerProfile.Version = 1
+PlayerProfile.BuildSlots = { "street", "drag", "drift", "track" }
+PlayerProfile.MaxGarageBays = 6
+PlayerProfile.BayPrices = { 0, 5000, 12000, 25000, 45000, 80000 } -- price to reach N bays
+
+local function newCar(carId: string): OwnedCar
+	return { carId = carId, parts = {}, paint = { 200, 200, 205 }, builds = {} }
+end
+
+function PlayerProfile.new(): Profile
+	return {
+		version = PlayerProfile.Version,
+		cash = Progression.StartingCash,
+		cars = { newCar(CarCatalog.StarterCarId) },
+		activeCar = 1,
+		partsInventory = {},
+		rep = {},
+		discovered = {},
+		garageBays = 1,
+		stats = { races = 0, wins = 0 },
+	}
+end
+
+-- Fills in any fields missing from older saves.
+function PlayerProfile.migrate(data: any): Profile
+	local fresh = PlayerProfile.new()
+	if type(data) ~= "table" then
+		return fresh
+	end
+	for k, v in fresh :: any do
+		if data[k] == nil then
+			data[k] = v
+		end
+	end
+	if #data.cars == 0 then
+		data.cars = fresh.cars
+	end
+	data.activeCar = math.clamp(data.activeCar, 1, #data.cars)
+	data.version = PlayerProfile.Version
+	return data
+end
+
+local function fail(err: string): (boolean, string)
+	return false, err
+end
+
+function PlayerProfile.buyCar(p: Profile, carId: string): (boolean, string?)
+	local car = CarCatalog.getCar(carId)
+	if not car then
+		return fail("Unknown car")
+	end
+	if #p.cars >= p.garageBays then
+		return fail("Garage is full - add a bay first")
+	end
+	if p.cash < car.price then
+		return fail("Not enough cash")
+	end
+	p.cash -= car.price
+	table.insert(p.cars, newCar(carId))
+	return true
+end
+
+function PlayerProfile.buyBay(p: Profile): (boolean, string?)
+	if p.garageBays >= PlayerProfile.MaxGarageBays then
+		return fail("Garage is fully expanded")
+	end
+	local price = PlayerProfile.BayPrices[p.garageBays + 1]
+	if p.cash < price then
+		return fail("Not enough cash")
+	end
+	p.cash -= price
+	p.garageBays += 1
+	return true
+end
+
+function PlayerProfile.buyPart(p: Profile, partId: string): (boolean, string?)
+	local part = CarCatalog.getPart(partId)
+	if not part then
+		return fail("Unknown part")
+	end
+	if p.cash < part.price then
+		return fail("Not enough cash")
+	end
+	p.cash -= part.price
+	p.partsInventory[partId] = (p.partsInventory[partId] or 0) + 1
+	return true
+end
+
+function PlayerProfile.givePart(p: Profile, partId: string)
+	p.partsInventory[partId] = (p.partsInventory[partId] or 0) + 1
+end
+
+-- Installs a part from inventory on a car, returning any part it replaces.
+function PlayerProfile.installPart(p: Profile, carIndex: number, partId: string): (boolean, string?)
+	local owned = p.cars[carIndex]
+	local part = CarCatalog.getPart(partId)
+	if not owned or not part then
+		return fail("Unknown car or part")
+	end
+	if (p.partsInventory[partId] or 0) <= 0 then
+		return fail("You don't own that part")
+	end
+	for i, installed in owned.parts do
+		local other = CarCatalog.getPart(installed)
+		if other and other.slot == part.slot then
+			table.remove(owned.parts, i)
+			PlayerProfile.givePart(p, installed)
+			break
+		end
+	end
+	p.partsInventory[partId] -= 1
+	table.insert(owned.parts, partId)
+	return true
+end
+
+function PlayerProfile.removePart(p: Profile, carIndex: number, partId: string): (boolean, string?)
+	local owned = p.cars[carIndex]
+	if not owned then
+		return fail("Unknown car")
+	end
+	for i, installed in owned.parts do
+		if installed == partId then
+			table.remove(owned.parts, i)
+			PlayerProfile.givePart(p, partId)
+			return true
+		end
+	end
+	return fail("Part not installed")
+end
+
+function PlayerProfile.saveBuild(p: Profile, carIndex: number, slot: string): (boolean, string?)
+	local owned = p.cars[carIndex]
+	if not owned or not table.find(PlayerProfile.BuildSlots, slot) then
+		return fail("Unknown car or build slot")
+	end
+	owned.builds[slot] = table.clone(owned.parts)
+	return true
+end
+
+-- Swaps to a saved build using only parts the player owns (installed or spare).
+function PlayerProfile.loadBuild(p: Profile, carIndex: number, slot: string): (boolean, string?)
+	local owned = p.cars[carIndex]
+	local build = owned and owned.builds[slot]
+	if not owned or not build then
+		return fail("No saved build in that slot")
+	end
+	for _, partId in table.clone(owned.parts) do
+		PlayerProfile.removePart(p, carIndex, partId)
+	end
+	for _, partId in build do
+		if (p.partsInventory[partId] or 0) > 0 then
+			PlayerProfile.installPart(p, carIndex, partId)
+		end
+	end
+	return true
+end
+
+function PlayerProfile.setPaint(p: Profile, carIndex: number, r: number, g: number, b: number): (boolean, string?)
+	local owned = p.cars[carIndex]
+	if not owned then
+		return fail("Unknown car")
+	end
+	local function c(v: number): number
+		return math.clamp(math.floor(tonumber(v) or 0), 0, 255)
+	end
+	owned.paint = { c(r), c(g), c(b) }
+	return true
+end
+
+function PlayerProfile.selectCar(p: Profile, carIndex: number): (boolean, string?)
+	if not p.cars[carIndex] then
+		return fail("Unknown car")
+	end
+	p.activeCar = carIndex
+	return true
+end
+
+function PlayerProfile.recordResult(p: Profile, district: string, kind: string, place: number, fieldSize: number, dnf: boolean): (number, number)
+	local cash = Progression.payout(kind, place, fieldSize, dnf)
+	local rep = Progression.repGain(place, fieldSize, dnf)
+	p.cash += cash
+	p.rep[district] = (p.rep[district] or 0) + rep
+	p.stats.races += 1
+	if place == 1 and not dnf then
+		p.stats.wins += 1
+	end
+	return cash, rep
+end
+
+-- Returns true the first time a discovery is found.
+function PlayerProfile.discover(p: Profile, discoveryId: string): boolean
+	if p.discovered[discoveryId] then
+		return false
+	end
+	p.discovered[discoveryId] = true
+	return true
+end
+
+return PlayerProfile
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="6">
+        <Properties>
+          <string name="Name">Progression</string>
+          <string name="Source"><![CDATA[--!strict
+-- Cash payouts and per-district street reputation.
+-- Winning on the Harbor Ring makes you known there; the drag strip keeps its
+-- own scene, so reputation is tracked per district.
+
+local Progression = {}
+
+Progression.StartingCash = 3000
+
+Progression.RepTiers = {
+	{ name = "Unknown", min = 0 },
+	{ name = "Regular", min = 100 },
+	{ name = "Known", min = 350 },
+	{ name = "Respected", min = 800 },
+	{ name = "Legend", min = 1600 },
+}
+
+local BASE_PAYOUT: { [string]: number } = {
+	circuit = 1800,
+	sprint = 1400,
+	drag = 900,
+	flash = 1600,
+	midnight = 3000,
+}
+
+-- Share of the base payout by finishing place.
+local PLACE_SHARE = { 1.0, 0.6, 0.4, 0.25 }
+local MIN_SHARE = 0.15
+
+-- Bigger fields pay more, capped so solo play is still worth it.
+local function fieldMultiplier(fieldSize: number): number
+	return 1 + math.min(math.max(fieldSize - 1, 0), 7) * 0.1
+end
+
+function Progression.payout(kind: string, place: number, fieldSize: number, dnf: boolean?): number
+	if dnf then
+		return 0
+	end
+	local base = BASE_PAYOUT[kind] or BASE_PAYOUT.sprint
+	local share = PLACE_SHARE[place] or MIN_SHARE
+	return math.floor(base * share * fieldMultiplier(fieldSize) + 0.5)
+end
+
+function Progression.repGain(place: number, fieldSize: number, dnf: boolean?): number
+	if dnf then
+		return 0
+	end
+	-- Beating people counts more than just showing up.
+	local beaten = math.max(fieldSize - place, 0)
+	local base = if place == 1 then 30 else 10
+	return base + beaten * 8
+end
+
+function Progression.tierFor(rep: number): string
+	local tier = Progression.RepTiers[1].name
+	for _, t in Progression.RepTiers do
+		if rep >= t.min then
+			tier = t.name
+		end
+	end
+	return tier
+end
+
+-- Street name shown over a player's car: their best district.
+function Progression.title(repByDistrict: { [string]: number }, districtNames: { [string]: string }): string
+	local bestId, bestRep = nil :: string?, 0
+	for id, rep in repByDistrict do
+		if rep > bestRep or (rep == bestRep and bestId ~= nil and id < bestId) then
+			bestId, bestRep = id, rep
+		end
+	end
+	if not bestId or bestRep < Progression.RepTiers[2].min then
+		return "Newcomer"
+	end
+	return `{Progression.tierFor(bestRep)} of {districtNames[bestId] or bestId}`
+end
+
+return Progression
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="7">
+        <Properties>
+          <string name="Name">RaceLogic</string>
+          <string name="Source"><![CDATA[--!strict
+-- Engine-agnostic race state: checkpoint order, laps, standings and results.
+-- The server feeds it checkpoint touches; it never touches Roblox instances,
+-- so it can be unit tested outside Studio.
+
+export type Racer = {
+	id: number, -- UserId
+	name: string,
+	nextCheckpoint: number, -- 1-based index into the lap's checkpoints
+	lap: number,
+	progress: number, -- total checkpoints passed
+	lastCheckpointTime: number,
+	finishTime: number?, -- seconds since race start
+	dnf: boolean,
+}
+
+export type Race = {
+	eventId: string,
+	checkpointCount: number,
+	laps: number,
+	startTime: number,
+	timeLimit: number,
+	racers: { [number]: Racer },
+	finishOrder: { number },
+}
+
+export type Placing = { id: number, name: string, place: number, time: number?, dnf: boolean }
+
+local RaceLogic = {}
+
+function RaceLogic.new(eventId: string, checkpointCount: number, laps: number?, startTime: number, timeLimit: number?): Race
+	assert(checkpointCount >= 1, "race needs at least one checkpoint")
+	return {
+		eventId = eventId,
+		checkpointCount = checkpointCount,
+		laps = laps or 1,
+		startTime = startTime,
+		timeLimit = timeLimit or 300,
+		racers = {},
+		finishOrder = {},
+	}
+end
+
+function RaceLogic.addRacer(race: Race, id: number, name: string)
+	race.racers[id] = {
+		id = id,
+		name = name,
+		nextCheckpoint = 1,
+		lap = 1,
+		progress = 0,
+		lastCheckpointTime = race.startTime,
+		dnf = false,
+	}
+end
+
+function RaceLogic.removeRacer(race: Race, id: number)
+	local r = race.racers[id]
+	if r and not r.finishTime then
+		r.dnf = true
+	end
+end
+
+-- Returns "ignored" | "checkpoint" | "lap" | "finished".
+-- Only the expected next checkpoint counts, so skipping one is impossible.
+function RaceLogic.hitCheckpoint(race: Race, id: number, index: number, now: number): string
+	local r = race.racers[id]
+	if not r or r.dnf or r.finishTime or index ~= r.nextCheckpoint then
+		return "ignored"
+	end
+
+	r.progress += 1
+	r.lastCheckpointTime = now
+
+	if index < race.checkpointCount then
+		r.nextCheckpoint += 1
+		return "checkpoint"
+	end
+
+	if r.lap < race.laps then
+		r.lap += 1
+		r.nextCheckpoint = 1
+		return "lap"
+	end
+
+	r.finishTime = now - race.startTime
+	table.insert(race.finishOrder, id)
+	return "finished"
+end
+
+-- Marks everyone still driving past the time limit as DNF.
+function RaceLogic.tick(race: Race, now: number)
+	if now - race.startTime < race.timeLimit then
+		return
+	end
+	for _, r in race.racers do
+		if not r.finishTime then
+			r.dnf = true
+		end
+	end
+end
+
+function RaceLogic.isOver(race: Race): boolean
+	for _, r in race.racers do
+		if not r.finishTime and not r.dnf then
+			return false
+		end
+	end
+	return true
+end
+
+-- Live standings: finishers by finish order, then drivers still racing by
+-- progress (ties broken by who reached the checkpoint first), then DNFs.
+function RaceLogic.standings(race: Race): { Placing }
+	local list: { Racer } = {}
+	for _, r in race.racers do
+		table.insert(list, r)
+	end
+
+	local finishIndex: { [number]: number } = {}
+	for i, id in race.finishOrder do
+		finishIndex[id] = i
+	end
+
+	table.sort(list, function(a: Racer, b: Racer): boolean
+		local fa, fb = finishIndex[a.id], finishIndex[b.id]
+		if fa and fb then
+			return fa < fb
+		elseif fa or fb then
+			return fa ~= nil
+		end
+		if a.dnf ~= b.dnf then
+			return not a.dnf
+		end
+		if a.progress ~= b.progress then
+			return a.progress > b.progress
+		end
+		if a.lastCheckpointTime ~= b.lastCheckpointTime then
+			return a.lastCheckpointTime < b.lastCheckpointTime
+		end
+		return a.id < b.id
+	end)
+
+	local out: { Placing } = {}
+	for i, r in list do
+		table.insert(out, { id = r.id, name = r.name, place = i, time = r.finishTime, dnf = r.dnf })
+	end
+	return out
+end
+
+function RaceLogic.totalCheckpoints(race: Race): number
+	return race.checkpointCount * race.laps
+end
+
+return RaceLogic
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="8">
+        <Properties>
+          <string name="Name">Records</string>
+          <string name="Source"><![CDATA[--!strict
+-- Local leaderboards posted at each racing spot: best race time per player,
+-- or best score (speed trap, drift zone) when `descending` is set.
+
+export type Entry = { userId: number, name: string, time: number, carId: string }
+
+local Records = {}
+
+Records.MaxEntries = 10
+
+-- Inserts or improves a player's entry. Returns the new 1-based rank, or nil if
+-- it did not make the board (or was not a personal best).
+function Records.submit(board: { Entry }, entry: Entry, maxEntries: number?, descending: boolean?): number?
+	local limit = maxEntries or Records.MaxEntries
+	local function better(a: number, b: number): boolean
+		if descending then
+			return a > b
+		end
+		return a < b
+	end
+
+	for i, e in board do
+		if e.userId == entry.userId then
+			if not better(entry.time, e.time) then
+				return nil
+			end
+			table.remove(board, i)
+			break
+		end
+	end
+
+	local rank = #board + 1
+	for i, e in board do
+		if better(entry.time, e.time) then
+			rank = i
+			break
+		end
+	end
+
+	if rank > limit then
+		return nil
+	end
+
+	table.insert(board, rank, entry)
+	while #board > limit do
+		table.remove(board)
+	end
+	return rank
+end
+
+function Records.formatTime(seconds: number): string
+	local m = math.floor(seconds / 60)
+	local s = seconds - m * 60
+	return string.format("%d:%06.3f", m, s)
+end
+
+return Records
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="9">
+        <Properties>
+          <string name="Name">RemoteNames</string>
+          <string name="Source"><![CDATA[--!strict
+-- Names of every RemoteEvent the server creates under ReplicatedStorage.Remotes.
+-- (World state - flash race, midnight meet, rain - is a JSON attribute
+-- "WorldState" on ReplicatedStorage instead, so late joiners see it.)
+
+return {
+	-- server -> client
+	ProfileUpdated = "ProfileUpdated", -- (summary)
+	Notify = "Notify", -- (text, kind)
+	RaceState = "RaceState", -- (state table or nil)
+	ChallengeReceived = "ChallengeReceived", -- (fromUserId, fromName, destinationName)
+	OpenShop = "OpenShop", -- (placeKind)
+
+	-- client -> server
+	ShopAction = "ShopAction", -- (action, ...)
+	Challenge = "Challenge", -- (targetUserId)
+	ChallengeReply = "ChallengeReply", -- (fromUserId, accepted)
+	RespawnCar = "RespawnCar", -- ()
+	Dev = "Dev", -- (command) Studio only: test shortcuts, ignored on live servers
+}
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="10">
+        <Properties>
+          <string name="Name">WorldClock</string>
+          <string name="Source"><![CDATA[--!strict
+-- Deterministic world schedule derived from Unix time: time of day, weather,
+-- flash races and the nightly midnight meet. Every server computes the same
+-- answer for the same moment, so friends in different servers can compare
+-- clues and all servers agree on where tonight's meet is.
+
+local WorldMap = require("./WorldMap")
+
+local WorldClock = {}
+
+WorldClock.DayLength = 20 * 60 -- real seconds per in-game day
+WorldClock.FlashWindow = 150 -- a flash race may appear once per window
+WorldClock.FlashDuration = 90 -- how long it stays open to join
+WorldClock.FlashChance = 0.7
+WorldClock.MeetOpensAt = 23.5 -- game hour
+WorldClock.MeetClosesAt = 2.5 -- game hour (next day)
+WorldClock.ClueFrom = 18 -- game hour when the day's clue is posted
+
+local MOD = 2147483647
+
+-- Small integer hash (MINSTD steps plus xor mixing), exact in doubles.
+function WorldClock.hash(n: number): number
+	local x = (math.floor(math.abs(n)) % (MOD - 1)) + 1
+	x = (x * 48271) % MOD
+	x = bit32.bxor(x, bit32.rshift(x, 11))
+	x = (x * 48271) % MOD
+	x = bit32.bxor(x, bit32.rshift(x, 7))
+	return (x * 48271) % MOD
+end
+
+-- 0..1 pseudo-random value for a seed.
+function WorldClock.unit(n: number): number
+	return (WorldClock.hash(n) % 100000) / 100000
+end
+
+function WorldClock.dayIndex(t: number): number
+	return math.floor(t / WorldClock.DayLength)
+end
+
+function WorldClock.clockTime(t: number): number
+	return (t % WorldClock.DayLength) / WorldClock.DayLength * 24
+end
+
+function WorldClock.isNight(t: number): boolean
+	local h = WorldClock.clockTime(t)
+	return h >= 19 or h < 6
+end
+
+function WorldClock.isRaining(t: number): boolean
+	local day = WorldClock.dayIndex(t)
+	if WorldClock.unit(day * 31 + 5) > 0.3 then
+		return false
+	end
+	-- Rainy days get one shower from the day's start hour for 5 game hours.
+	local startHour = math.floor(WorldClock.unit(day * 31 + 6) * 19)
+	local h = WorldClock.clockTime(t)
+	return h >= startHour and h < startHour + 5
+end
+
+export type Flash = {
+	spotId: string,
+	spotName: string,
+	eventId: string,
+	opensAt: number,
+	closesAt: number,
+}
+
+-- The flash race active at time t, if any.
+function WorldClock.flashRace(t: number): Flash?
+	local window = math.floor(t / WorldClock.FlashWindow)
+	local opensAt = window * WorldClock.FlashWindow
+	if t >= opensAt + WorldClock.FlashDuration then
+		return nil
+	end
+	if WorldClock.unit(window * 13 + 1) > WorldClock.FlashChance then
+		return nil
+	end
+	local spots = WorldMap.FlashSpots
+	local spot = spots[WorldClock.hash(window * 13 + 2) % #spots + 1]
+	return {
+		spotId = spot.id,
+		spotName = spot.name,
+		eventId = spot.eventId,
+		opensAt = opensAt,
+		closesAt = opensAt + WorldClock.FlashDuration,
+	}
+end
+
+export type Meet = {
+	spotId: string,
+	spotName: string,
+	clue: string,
+	featuredEventId: string,
+	dayIndex: number,
+	phase: "hidden" | "clue" | "open",
+}
+
+local function sortedEventIds(): { string }
+	local ids = {}
+	for id in WorldMap.Events do
+		table.insert(ids, id)
+	end
+	table.sort(ids)
+	return ids
+end
+
+function WorldClock.meetForDay(dayIndex: number): (string, string)
+	local spots = WorldMap.MidnightSpots
+	local spot = spots[WorldClock.hash(dayIndex * 7 + 3) % #spots + 1]
+	local ids = sortedEventIds()
+	local eventId = ids[WorldClock.hash(dayIndex * 7 + 4) % #ids + 1]
+	return spot.id, eventId
+end
+
+-- Tonight's meet as seen at time t. The meet that opens late on day N keeps
+-- running into the early hours of day N+1.
+function WorldClock.midnightMeet(t: number): Meet
+	local h = WorldClock.clockTime(t)
+	local day = WorldClock.dayIndex(t)
+	local phase: "hidden" | "clue" | "open" = "hidden"
+
+	if h < WorldClock.MeetClosesAt then
+		day -= 1
+		phase = "open"
+	elseif h >= WorldClock.MeetOpensAt then
+		phase = "open"
+	elseif h >= WorldClock.ClueFrom then
+		phase = "clue"
+	end
+
+	local spotId, eventId = WorldClock.meetForDay(day)
+	local spotName, clue = spotId, ""
+	for _, s in WorldMap.MidnightSpots do
+		if s.id == spotId then
+			spotName, clue = s.name, s.clue
+		end
+	end
+
+	return {
+		spotId = spotId,
+		spotName = spotName,
+		clue = clue,
+		featuredEventId = eventId,
+		dayIndex = day,
+		phase = phase,
+	}
+end
+
+return WorldClock
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="11">
+        <Properties>
+          <string name="Name">WorldMap</string>
+          <string name="Source"><![CDATA[--!strict
+-- The whole playable map as data. The server builds roads and landmarks from
+-- this at startup, so the first playable version needs no hand-built terrain,
+-- and a hand-built map can later replace WorldBuilder while keeping this layout.
+--
+-- Coordinates are {x, z} in studs on flat ground (y = 0).
+-- Layout (first playable slice):
+--   Downtown grid in the middle, wrapped by an octagonal highway loop.
+--   East off the highway: the Harbor Ring circuit. West: the drag strip.
+
+export type Point = { x: number, z: number }
+export type Road = { a: Point, b: Point, width: number, kind: string }
+
+export type EventDef = {
+	id: string,
+	name: string,
+	kind: "circuit" | "sprint" | "drag",
+	district: string,
+	classCap: string?,
+	laps: number?,
+	start: Point,
+	heading: Point, -- direction the grid faces
+	checkpoints: { Point }, -- last one is the finish (for circuits, the start/finish line)
+}
+
+export type Place = {
+	id: string,
+	kind: "garage" | "dealership" | "tuning" | "meet" | "photo",
+	name: string,
+	pos: Point,
+	district: string,
+}
+
+export type Discovery = {
+	id: string,
+	kind: "speedTrap" | "driftZone" | "hiddenPart" | "scenic",
+	name: string,
+	pos: Point,
+	radius: number,
+	district: string,
+	reward: string?, -- part id for hidden parts
+}
+
+local WorldMap = {}
+
+local function p(x: number, z: number): Point
+	return { x = x, z = z }
+end
+
+WorldMap.p = p
+
+---------------------------------------------------------------------------
+-- Districts (used for reputation and for the map screen)
+---------------------------------------------------------------------------
+WorldMap.Districts = {
+	downtown = { id = "downtown", name = "Downtown", center = p(0, 0), radius = 520, style = "Tight corners, traffic, sprints" },
+	highway = { id = "highway", name = "Highway Loop", center = p(0, 0), radius = 980, style = "Top speed runs" },
+	circuit = { id = "circuit", name = "Harbor Ring", center = p(1600, 0), radius = 450, style = "Clean laps" },
+	dragstrip = { id = "dragstrip", name = "Westside Strip", center = p(-1300, 0), radius = 500, style = "Launch and gearing" },
+}
+
+-- Order matters: smaller, more specific districts are checked first.
+local DISTRICT_ORDER = { "circuit", "dragstrip", "downtown", "highway" }
+
+function WorldMap.districtAt(pos: Point): string
+	for _, id in DISTRICT_ORDER do
+		local d = WorldMap.Districts[id]
+		local dx, dz = pos.x - d.center.x, pos.z - d.center.z
+		if dx * dx + dz * dz <= d.radius * d.radius then
+			return id
+		end
+	end
+	return "highway"
+end
+
+---------------------------------------------------------------------------
+-- Roads
+---------------------------------------------------------------------------
+local GRID_MIN, GRID_MAX, GRID_STEP = -360, 360, 120
+local HIGHWAY_R = 900
+
+WorldMap.Grid = { min = GRID_MIN, max = GRID_MAX, step = GRID_STEP }
+WorldMap.HighwayRadius = HIGHWAY_R
+
+local function octagon(cx: number, cz: number, r: number): { Point }
+	local pts = {}
+	for i = 0, 7 do
+		local a = math.rad(i * 45)
+		table.insert(pts, p(math.floor(cx + r * math.cos(a) + 0.5), math.floor(cz + r * math.sin(a) + 0.5)))
+	end
+	return pts
+end
+
+WorldMap.HighwayPoints = octagon(0, 0, HIGHWAY_R)
+
+WorldMap.CircuitPoints = {
+	p(1300, 0),
+	p(1350, -300),
+	p(1600, -380),
+	p(1850, -250),
+	p(1900, 50),
+	p(1750, 300),
+	p(1500, 320),
+	p(1370, 200),
+}
+
+WorldMap.DragStrip = { a = p(-1300, 400), b = p(-1300, -400) }
+
+local function buildRoads(): { Road }
+	local roads: { Road } = {}
+	local function add(a: Point, b: Point, width: number, kind: string)
+		table.insert(roads, { a = a, b = b, width = width, kind = kind })
+	end
+
+	-- Downtown grid
+	for v = GRID_MIN, GRID_MAX, GRID_STEP do
+		add(p(v, GRID_MIN), p(v, GRID_MAX), 28, "street")
+		add(p(GRID_MIN, v), p(GRID_MAX, v), 28, "street")
+	end
+
+	-- Highway loop
+	local hw = WorldMap.HighwayPoints
+	for i = 1, #hw do
+		add(hw[i], hw[i % #hw + 1], 48, "highway")
+	end
+
+	-- Ramps from the four edges of downtown out to the highway
+	add(p(GRID_MAX, 0), p(HIGHWAY_R, 0), 32, "ramp")
+	add(p(GRID_MIN, 0), p(-HIGHWAY_R, 0), 32, "ramp")
+	add(p(0, GRID_MAX), p(0, HIGHWAY_R), 32, "ramp")
+	add(p(0, GRID_MIN), p(0, -HIGHWAY_R), 32, "ramp")
+
+	-- Circuit and its access road
+	add(p(HIGHWAY_R, 0), WorldMap.CircuitPoints[1], 32, "ramp")
+	local cp = WorldMap.CircuitPoints
+	for i = 1, #cp do
+		add(cp[i], cp[i % #cp + 1], 40, "track")
+	end
+
+	-- Drag strip and its access road
+	add(p(-HIGHWAY_R, 0), p(WorldMap.DragStrip.a.x, 0), 32, "ramp")
+	add(WorldMap.DragStrip.a, WorldMap.DragStrip.b, 40, "strip")
+
+	return roads
+end
+
+WorldMap.Roads = buildRoads()
+
+---------------------------------------------------------------------------
+-- Places you drive to
+---------------------------------------------------------------------------
+WorldMap.Places = {
+	garage = { id = "garage", kind = "garage", name = "Your Garage", pos = p(-300, -340), district = "downtown" },
+	dealership = { id = "dealership", kind = "dealership", name = "Crown Motors", pos = p(180, -340), district = "downtown" },
+	tuning = { id = "tuning", kind = "tuning", name = "Torque Lab Tuning", pos = p(-180, 140), district = "downtown" },
+	meetGas = { id = "meetGas", kind = "meet", name = "Night Owl Gas", pos = p(300, 340), district = "downtown" },
+	meetStrip = { id = "meetStrip", kind = "meet", name = "Strip Pit Lane", pos = p(-1230, 0), district = "dragstrip" },
+	photoHarbor = { id = "photoHarbor", kind = "photo", name = "Harbor Overlook", pos = p(1600, -420), district = "circuit" },
+} :: { [string]: Place }
+
+---------------------------------------------------------------------------
+-- Fixed events (flash races and the midnight meet reuse these routes)
+---------------------------------------------------------------------------
+WorldMap.Events = {
+	harborRing = {
+		id = "harborRing",
+		name = "Harbor Ring",
+		kind = "circuit",
+		district = "circuit",
+		laps = 2,
+		start = p(1320, -100),
+		heading = p(1350 - 1300, -300 - 0),
+		checkpoints = { p(1350, -300), p(1600, -380), p(1850, -250), p(1900, 50), p(1750, 300), p(1500, 320), p(1370, 200), p(1300, 0) },
+	},
+	downtownSprint = {
+		id = "downtownSprint",
+		name = "Downtown Sprint",
+		kind = "sprint",
+		district = "downtown",
+		start = p(-360, -330),
+		heading = p(0, 1),
+		checkpoints = { p(-360, 120), p(0, 120), p(0, -240), p(360, -240), p(360, 360) },
+	},
+	highwayRun = {
+		id = "highwayRun",
+		name = "Highway Run",
+		kind = "sprint",
+		district = "highway",
+		start = p(900, 60),
+		heading = p(0, 1),
+		checkpoints = {
+			WorldMap.HighwayPoints[2],
+			WorldMap.HighwayPoints[3],
+			WorldMap.HighwayPoints[4],
+			WorldMap.HighwayPoints[5],
+			WorldMap.HighwayPoints[6],
+		},
+	},
+	westsideDrag = {
+		id = "westsideDrag",
+		name = "Westside Quarter",
+		kind = "drag",
+		district = "dragstrip",
+		start = p(-1300, 360),
+		heading = p(0, -1),
+		checkpoints = { p(-1300, -360) },
+	},
+} :: { [string]: EventDef }
+
+-- Places where flash races can pop up, each tied to a route that starts nearby.
+WorldMap.FlashSpots = {
+	{ id = "tunnelMouth", name = "Tunnel Mouth", pos = p(-360, -330), eventId = "downtownSprint" },
+	{ id = "overpass", name = "East Overpass", pos = p(900, 60), eventId = "highwayRun" },
+	{ id = "stripLot", name = "Strip Staging Lot", pos = p(-1300, 360), eventId = "westsideDrag" },
+	{ id = "harborGate", name = "Harbor Gate", pos = p(1320, -100), eventId = "harborRing" },
+}
+
+-- Secret midnight meet locations with the clue players get during the day.
+WorldMap.MidnightSpots = {
+	{ id = "rooftop", name = "Parking Garage Rooftop", pos = p(120, 0), clue = "Where downtown's cars sleep, look up." },
+	{ id = "docksLot", name = "Old Harbor Lot", pos = p(1600, 0), clue = "Inside the ring, where the gulls land." },
+	{ id = "underpass", name = "West Underpass", pos = p(-900, 60), clue = "Under the highway, facing the sunset." },
+	{ id = "gasOwl", name = "Night Owl Forecourt", pos = p(300, 340), clue = "The owl stays open late." },
+}
+
+WorldMap.Discoveries = {
+	{ id = "trapRamp", kind = "speedTrap", name = "East Ramp Camera", pos = p(640, 0), radius = 30, district = "highway" },
+	{ id = "trapStrip", kind = "speedTrap", name = "Strip Trap", pos = p(-1300, -300), radius = 30, district = "dragstrip" },
+	{ id = "driftHarbor", kind = "driftZone", name = "Harbor Hairpin", pos = p(1600, -380), radius = 80, district = "circuit" },
+	{ id = "partAlley", kind = "hiddenPart", name = "Alley Stash", pos = p(-240, 60), radius = 14, district = "downtown", reward = "tiresSport" },
+	{ id = "partUnder", kind = "hiddenPart", name = "Underpass Stash", pos = p(-630, -630), radius = 14, district = "highway", reward = "weight1" },
+	{ id = "scenicNorth", kind = "scenic", name = "North Bend", pos = WorldMap.HighwayPoints[3], radius = 60, district = "highway" },
+} :: { Discovery }
+
+return WorldMap
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="ServerScriptService" referent="12">
+    <Properties>
+      <string name="Name">ServerScriptService</string>
+    </Properties>
+    <Item class="Folder" referent="13">
+      <Properties>
+        <string name="Name">Server</string>
+      </Properties>
+      <Item class="ModuleScript" referent="14">
+        <Properties>
+          <string name="Name">DataService</string>
+          <string name="Source"><![CDATA[-- Loads and saves player profiles and the per-spot leaderboards.
+-- Falls back to in-memory data when DataStores are unavailable (e.g. Studio
+-- without "Enable Studio Access to API Services"), so the game still runs.
+
+local DataStoreService = game:GetService("DataStoreService")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Shared = ReplicatedStorage.Shared
+local PlayerProfile = require(Shared.PlayerProfile)
+local Records = require(Shared.Records)
+
+local DataService = {}
+
+local PROFILE_STORE = "Profiles_v1"
+local RECORD_STORE = "Records_v1"
+local AUTOSAVE_SECONDS = 90
+
+local profileStore, recordStore
+do
+	local ok = pcall(function()
+		profileStore = DataStoreService:GetDataStore(PROFILE_STORE)
+		recordStore = DataStoreService:GetDataStore(RECORD_STORE)
+	end)
+	if not ok then
+		warn("[DataService] DataStores unavailable; progress will not be saved this session")
+	end
+end
+
+local profiles: { [Player]: PlayerProfile.Profile } = {}
+local loaded = Instance.new("BindableEvent")
+local boards: { [string]: { Records.Entry } } = {}
+
+local function retry<T>(fn: () -> T): (boolean, T?)
+	for attempt = 1, 3 do
+		local ok, result = pcall(fn)
+		if ok then
+			return true, result
+		end
+		warn(`[DataService] attempt {attempt} failed: {result}`)
+		task.wait(attempt * 2)
+	end
+	return false, nil
+end
+
+local function key(player: Player): string
+	return `u{player.UserId}`
+end
+
+DataService.ProfileLoaded = loaded.Event
+
+function DataService.get(player: Player): PlayerProfile.Profile?
+	return profiles[player]
+end
+
+-- Yields until the player's profile is ready (or the player leaves).
+function DataService.waitFor(player: Player): PlayerProfile.Profile?
+	while player.Parent and not profiles[player] do
+		loaded.Event:Wait()
+	end
+	return profiles[player]
+end
+
+function DataService.save(player: Player)
+	local profile = profiles[player]
+	if not profile or not profileStore then
+		return
+	end
+	retry(function()
+		profileStore:SetAsync(key(player), profile, { player.UserId })
+	end)
+end
+
+local function onPlayerAdded(player: Player)
+	local data = nil
+	if profileStore then
+		local ok, result = retry(function()
+			return profileStore:GetAsync(key(player))
+		end)
+		if ok then
+			data = result
+		elseif RunService:IsStudio() then
+			warn("[DataService] Studio has no DataStore access; running without saves")
+			profileStore, recordStore = nil, nil
+		else
+			player:Kick("Could not load your garage. Please rejoin.")
+			return
+		end
+	end
+	if not player.Parent then
+		return
+	end
+	profiles[player] = PlayerProfile.migrate(data)
+	loaded:Fire(player)
+end
+
+local function onPlayerRemoving(player: Player)
+	DataService.save(player)
+	profiles[player] = nil
+end
+
+-- Leaderboards -------------------------------------------------------------
+
+function DataService.getBoard(boardId: string): { Records.Entry }
+	if not boards[boardId] then
+		boards[boardId] = {}
+		if recordStore then
+			local ok, result = retry(function()
+				return recordStore:GetAsync(boardId)
+			end)
+			if ok and type(result) == "table" then
+				boards[boardId] = result
+			end
+		end
+	end
+	return boards[boardId]
+end
+
+-- Submits to the local copy immediately and merges into the saved board.
+function DataService.submitRecord(boardId: string, entry: Records.Entry, descending: boolean?): number?
+	local rank = Records.submit(DataService.getBoard(boardId), entry, nil, descending)
+	if rank and recordStore then
+		task.spawn(retry, function()
+			recordStore:UpdateAsync(boardId, function(saved)
+				saved = if type(saved) == "table" then saved else {}
+				Records.submit(saved, entry, nil, descending)
+				boards[boardId] = saved
+				return saved
+			end)
+		end)
+	end
+	return rank
+end
+
+function DataService.start()
+	Players.PlayerAdded:Connect(onPlayerAdded)
+	Players.PlayerRemoving:Connect(onPlayerRemoving)
+	for _, player in Players:GetPlayers() do
+		task.spawn(onPlayerAdded, player)
+	end
+
+	task.spawn(function()
+		while true do
+			task.wait(AUTOSAVE_SECONDS)
+			for player in profiles do
+				task.spawn(DataService.save, player)
+			end
+		end
+	end)
+
+	game:BindToClose(function()
+		local pending = 0
+		for player in profiles do
+			pending += 1
+			task.spawn(function()
+				DataService.save(player)
+				pending -= 1
+			end)
+		end
+		local deadline = os.clock() + 25
+		while pending > 0 and os.clock() < deadline do
+			task.wait(0.5)
+		end
+	end)
+end
+
+return DataService
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="15">
+        <Properties>
+          <string name="Name">DevService</string>
+          <string name="Source"><![CDATA[-- Test shortcuts for Roblox Studio only. Live servers ignore every request, so
+-- this can never be used to cheat in a published game.
+--   F6  skip to dusk (meet clue)     F7  skip to the midnight meet
+--   F8  open a flash race now        F9  +$50,000
+
+local RunService = game:GetService("RunService")
+
+local DataService = require(script.Parent.DataService)
+local GarageService = require(script.Parent.GarageService)
+local Net = require(script.Parent.Net)
+local WorldEventService = require(script.Parent.WorldEventService)
+
+local DevService = {}
+
+local COMMANDS: { [string]: (Player) -> string } = {
+	dusk = function()
+		WorldEventService.skipToHour(18.2)
+		return "Skipped to dusk - the meet clue is up."
+	end,
+	meet = function()
+		WorldEventService.skipToHour(23.55)
+		return "Skipped to 23:30 - the midnight meet is opening."
+	end,
+	flash = function()
+		WorldEventService.flashNow()
+		return "Flash race opened."
+	end,
+	cash = function(player)
+		local profile = DataService.get(player)
+		if profile then
+			profile.cash += 50000
+			GarageService.pushProfile(player)
+		end
+		return "+$50,000"
+	end,
+}
+
+function DevService.start()
+	Net.Dev.OnServerEvent:Connect(function(player, command)
+		if not RunService:IsStudio() then
+			return
+		end
+		local run = COMMANDS[tostring(command)]
+		if run then
+			Net.Notify:FireClient(player, `[Dev] {run(player)}`, "info")
+		end
+	end)
+end
+
+return DevService
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="16">
+        <Properties>
+          <string name="Name">DiscoveryService</string>
+          <string name="Source"><![CDATA[-- Things to find between races: speed traps, drift zones, hidden parts and
+-- scenic roads. Scores go on local leaderboards at each spot.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Shared = ReplicatedStorage.Shared
+local CarCatalog = require(Shared.CarCatalog)
+local PlayerProfile = require(Shared.PlayerProfile)
+local WorldMap = require(Shared.WorldMap)
+
+local DataService = require(script.Parent.DataService)
+local GarageService = require(script.Parent.GarageService)
+local Net = require(script.Parent.Net)
+
+local DiscoveryService = {}
+
+local STEP = 0.2
+local STUDS_TO_MPH = 0.28 * 2.237 -- 1 stud ~ 0.28 m
+local SCENIC_REWARD = 250
+local DRIFT_MIN_SPEED = 30
+local DRIFT_MIN_ANGLE = math.rad(12)
+
+type DriftRun = { zoneId: string, score: number }
+local drifts: { [Player]: DriftRun } = {}
+local insideTrap: { [Player]: string } = {}
+
+local function flatDist(a: Vector3, pt: WorldMap.Point): number
+	return Vector3.new(a.X - pt.x, 0, a.Z - pt.z).Magnitude
+end
+
+local function mph(speed: number): number
+	return math.floor(speed * STUDS_TO_MPH + 0.5)
+end
+
+local function firstFind(player: Player, d: WorldMap.Discovery)
+	local profile = DataService.get(player)
+	if not profile or not PlayerProfile.discover(profile, d.id) then
+		return
+	end
+	if d.kind == "hiddenPart" and d.reward then
+		PlayerProfile.givePart(profile, d.reward)
+		local part = CarCatalog.getPart(d.reward)
+		Net.Notify:FireClient(player, `Found a stash: {part and part.name or d.reward}! Install it at your garage.`, "discovery")
+	elseif d.kind == "scenic" then
+		profile.cash += SCENIC_REWARD
+		Net.Notify:FireClient(player, `Scenic road discovered: {d.name} (+${SCENIC_REWARD})`, "discovery")
+	else
+		Net.Notify:FireClient(player, `Discovered {d.name}`, "discovery")
+	end
+	GarageService.pushProfile(player)
+end
+
+local function endDrift(player: Player)
+	local run = drifts[player]
+	drifts[player] = nil
+	if not run or run.score < 100 then
+		return
+	end
+	local score = math.floor(run.score)
+	local car = GarageService.getCar(player)
+	local rank = DataService.submitRecord(`drift:{run.zoneId}`, {
+		userId = player.UserId,
+		name = player.DisplayName,
+		time = score,
+		carId = if car then car:GetAttribute("CarId") else "",
+	}, true)
+	local profile = DataService.get(player)
+	if profile then
+		profile.cash += math.floor(score / 20)
+		GarageService.pushProfile(player)
+	end
+	Net.Notify:FireClient(player, `Drift score {score}` .. (if rank then ` - #{rank} here!` else ""), "discovery")
+end
+
+local function stepPlayer(player: Player)
+	if not GarageService.isDriving(player) then
+		endDrift(player)
+		insideTrap[player] = nil
+		return
+	end
+	local car = GarageService.getCar(player)
+	local root = car and car.PrimaryPart
+	if not root then
+		return
+	end
+	local pos = root.Position
+	local vel = root.AssemblyLinearVelocity
+	local flatVel = Vector3.new(vel.X, 0, vel.Z)
+	local speed = flatVel.Magnitude
+
+	local inDriftZone: string? = nil
+	for _, d in WorldMap.Discoveries do
+		if flatDist(pos, d.pos) > d.radius then
+			if insideTrap[player] == d.id then
+				insideTrap[player] = nil
+			end
+			continue
+		end
+		firstFind(player, d)
+
+		if d.kind == "speedTrap" and insideTrap[player] ~= d.id then
+			insideTrap[player] = d.id
+			local value = mph(speed)
+			local rank = DataService.submitRecord(`trap:{d.id}`, {
+				userId = player.UserId,
+				name = player.DisplayName,
+				time = value,
+				carId = car:GetAttribute("CarId"),
+			}, true)
+			Net.Notify:FireClient(player, `{d.name}: {value} mph` .. (if rank then ` - #{rank} here!` else ""), "trap")
+		elseif d.kind == "driftZone" then
+			inDriftZone = d.id
+			local run = drifts[player]
+			if not run or run.zoneId ~= d.id then
+				run = { zoneId = d.id, score = 0 }
+				drifts[player] = run
+			end
+			if speed >= DRIFT_MIN_SPEED then
+				local look = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z).Unit
+				local angle = math.acos(math.clamp(look:Dot(flatVel.Unit), -1, 1))
+				if angle >= DRIFT_MIN_ANGLE and angle <= math.rad(100) then
+					run.score += speed * math.sin(angle) * STEP
+				end
+			end
+		end
+	end
+
+	if not inDriftZone and drifts[player] then
+		endDrift(player)
+	end
+end
+
+function DiscoveryService.start()
+	Players.PlayerRemoving:Connect(function(player)
+		drifts[player] = nil
+		insideTrap[player] = nil
+	end)
+	task.spawn(function()
+		while true do
+			task.wait(STEP)
+			for _, player in Players:GetPlayers() do
+				local ok, err = pcall(stepPlayer, player)
+				if not ok then
+					warn("[DiscoveryService]", err)
+				end
+			end
+		end
+	end)
+end
+
+return DiscoveryService
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="17">
+        <Properties>
+          <string name="Name">GarageService</string>
+          <string name="Source"><![CDATA[-- Owns each player's current car and every garage / shop action.
+-- Shops are physical: actions only work while you are parked at the matching
+-- place, so buying a car means driving to the dealership.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local Shared = ReplicatedStorage.Shared
+local CarCatalog = require(Shared.CarCatalog)
+local Performance = require(Shared.Performance)
+local PlayerProfile = require(Shared.PlayerProfile)
+local Progression = require(Shared.Progression)
+local WorldMap = require(Shared.WorldMap)
+
+local DataService = require(script.Parent.DataService)
+local Net = require(script.Parent.Net)
+local VehicleFactory = require(script.Parent.VehicleFactory)
+
+local GarageService = {}
+
+local SHOP_RANGE = 70
+local carsFolder = Instance.new("Folder")
+carsFolder.Name = "Cars"
+carsFolder.Parent = Workspace
+
+local cars: { [Player]: Model } = {}
+local busy: { [Player]: boolean } = {} -- set while a player is racing
+
+-- Which place kinds allow which actions.
+local ACTION_PLACES: { [string]: { string } } = {
+	buyCar = { "dealership" },
+	buyBay = { "garage" },
+	select = { "garage" },
+	buyPart = { "tuning" },
+	install = { "tuning", "garage" },
+	remove = { "tuning", "garage" },
+	saveBuild = { "tuning", "garage" },
+	loadBuild = { "tuning", "garage" },
+	paint = { "tuning", "garage" },
+}
+
+local function districtNames(): { [string]: string }
+	local names = {}
+	for id, d in WorldMap.Districts do
+		names[id] = d.name
+	end
+	return names
+end
+
+function GarageService.getCar(player: Player): Model?
+	local car = cars[player]
+	if car and car.Parent then
+		return car
+	end
+	return nil
+end
+
+-- Position used for proximity checks: the car if driving, else the character.
+function GarageService.position(player: Player): Vector3?
+	local car = GarageService.getCar(player)
+	local seat = car and car:FindFirstChild("DriveSeat") :: VehicleSeat?
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if seat and seat.Occupant and seat.Occupant.Parent == character and car.PrimaryPart then
+		return car.PrimaryPart.Position
+	end
+	return root and root.Position
+end
+
+function GarageService.isDriving(player: Player): boolean
+	local car = GarageService.getCar(player)
+	local seat = car and car:FindFirstChild("DriveSeat") :: VehicleSeat?
+	return seat ~= nil and seat.Occupant ~= nil and seat.Occupant.Parent == player.Character
+end
+
+function GarageService.setBusy(player: Player, value: boolean)
+	busy[player] = value or nil
+end
+
+function GarageService.nearPlaceKind(player: Player, kinds: { string }): boolean
+	local pos = GarageService.position(player)
+	if not pos then
+		return false
+	end
+	for _, place in WorldMap.Places do
+		if table.find(kinds, place.kind) then
+			local d = Vector3.new(place.pos.x, pos.Y, place.pos.z) - pos
+			if d.Magnitude <= SHOP_RANGE then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+function GarageService.pushProfile(player: Player)
+	local p = DataService.get(player)
+	if not p then
+		return
+	end
+	local carList = {}
+	for i, owned in p.cars do
+		local def = CarCatalog.getCar(owned.carId)
+		local rating, class = Performance.forBuild(owned.carId, owned.parts)
+		local builds = {}
+		for slot in owned.builds do
+			table.insert(builds, slot)
+		end
+		carList[i] = {
+			carId = owned.carId,
+			name = def and def.name or owned.carId,
+			parts = owned.parts,
+			paint = owned.paint,
+			rating = rating,
+			class = class,
+			builds = builds,
+		}
+	end
+	local rep = {}
+	for id, d in WorldMap.Districts do
+		local value = p.rep[id] or 0
+		rep[id] = { name = d.name, rep = value, tier = Progression.tierFor(value) }
+	end
+	Net.ProfileUpdated:FireClient(player, {
+		cash = p.cash,
+		title = Progression.title(p.rep, districtNames()),
+		rep = rep,
+		cars = carList,
+		activeCar = p.activeCar,
+		inventory = p.partsInventory,
+		garageBays = p.garageBays,
+		nextBayPrice = PlayerProfile.BayPrices[p.garageBays + 1],
+		stats = p.stats,
+	})
+	player:SetAttribute("StreetTitle", Progression.title(p.rep, districtNames()))
+end
+
+-- Cars come out onto the street in front of the garage, one parking slot
+-- per spawn so players joining together don't land on top of each other.
+local GARAGE_SLOTS = 6
+local nextSlot = 0
+local function garageSpawnCFrame(): CFrame
+	local g = WorldMap.Places.garage.pos
+	nextSlot = nextSlot % GARAGE_SLOTS + 1
+	local x = g.x - 40 + (nextSlot - 1) * 16
+	local pos = Vector3.new(x, 0.5, g.z - 20)
+	return CFrame.lookAt(pos, pos + Vector3.new(0, 0, -1))
+end
+
+function GarageService.despawn(player: Player)
+	local car = cars[player]
+	if car then
+		car:Destroy()
+		cars[player] = nil
+	end
+end
+
+function GarageService.spawnCar(player: Player, at: CFrame?): Model?
+	local p = DataService.get(player)
+	if not p then
+		return nil
+	end
+	GarageService.despawn(player)
+	local owned = p.cars[p.activeCar]
+	local car = VehicleFactory.build(owned, player.UserId, at or garageSpawnCFrame(), carsFolder)
+	cars[player] = car
+
+	local seat = car:FindFirstChild("DriveSeat") :: VehicleSeat
+	local prompt = seat:FindFirstChild("DrivePrompt") :: ProximityPrompt
+	prompt.Triggered:Connect(function(who)
+		local humanoid = who.Character and who.Character:FindFirstChildOfClass("Humanoid")
+		if who == player and humanoid and not seat.Occupant then
+			seat:Sit(humanoid)
+		end
+	end)
+	seat:GetPropertyChangedSignal("Occupant"):Connect(function()
+		local occupant = seat.Occupant
+		local driver = occupant and Players:GetPlayerFromCharacter(occupant.Parent)
+		if occupant and driver ~= player then
+			-- Only the owner drives; passengers can come later with extra seats.
+			occupant.Sit = false
+			return
+		end
+		prompt.Enabled = occupant == nil
+		if car.PrimaryPart and car.PrimaryPart:CanSetNetworkOwnership() then
+			car.PrimaryPart:SetNetworkOwner(if driver then driver else nil)
+		end
+	end)
+	return car
+end
+
+-- Rebuilds the car in place (after tuning or paint) keeping the driver seated.
+local function refreshCar(player: Player)
+	local car = GarageService.getCar(player)
+	local wasDriving = GarageService.isDriving(player)
+	local at = if car and car.PrimaryPart then car.PrimaryPart.CFrame - Vector3.new(0, 1.8, 0) else nil
+	local newCar = GarageService.spawnCar(player, at)
+	local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	if wasDriving and newCar and humanoid then
+		(newCar:FindFirstChild("DriveSeat") :: VehicleSeat):Sit(humanoid)
+	end
+end
+
+-- Puts a stuck or flipped car back on its wheels where it is; with no car
+-- (or when parked at the garage), brings the active car out of the garage.
+function GarageService.resetCar(player: Player)
+	local car = GarageService.getCar(player)
+	if not car or not car.PrimaryPart or (not busy[player] and GarageService.nearPlaceKind(player, { "garage" })) then
+		GarageService.spawnCar(player)
+		return
+	end
+	local cf = car.PrimaryPart.CFrame
+	local look = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+	if look.Magnitude < 0.1 then
+		look = Vector3.zAxis
+	end
+	local pos = cf.Position + Vector3.new(0, 4, 0)
+	car:PivotTo(CFrame.lookAt(pos, pos + look))
+	car.PrimaryPart.AssemblyLinearVelocity = Vector3.zero
+	car.PrimaryPart.AssemblyAngularVelocity = Vector3.zero
+end
+
+local function handleShop(player: Player, action: string, a: any, b: any, c: any, d: any)
+	local p = DataService.get(player)
+	local places = ACTION_PLACES[action]
+	if not p or not places then
+		return
+	end
+	if not GarageService.nearPlaceKind(player, places) then
+		Net.Notify:FireClient(player, "Drive to the right shop for that.", "error")
+		return
+	end
+	if busy[player] and action ~= "buyPart" then
+		Net.Notify:FireClient(player, "Finish your race first.", "error")
+		return
+	end
+
+	local ok, err
+	local changesCar = false
+	if action == "buyCar" then
+		ok, err = PlayerProfile.buyCar(p, tostring(a))
+	elseif action == "buyBay" then
+		ok, err = PlayerProfile.buyBay(p)
+	elseif action == "select" then
+		ok, err = PlayerProfile.selectCar(p, tonumber(a) or 0)
+		changesCar = true
+	elseif action == "buyPart" then
+		ok, err = PlayerProfile.buyPart(p, tostring(a))
+	elseif action == "install" then
+		ok, err = PlayerProfile.installPart(p, p.activeCar, tostring(a))
+		changesCar = true
+	elseif action == "remove" then
+		ok, err = PlayerProfile.removePart(p, p.activeCar, tostring(a))
+		changesCar = true
+	elseif action == "saveBuild" then
+		ok, err = PlayerProfile.saveBuild(p, p.activeCar, tostring(a))
+	elseif action == "loadBuild" then
+		ok, err = PlayerProfile.loadBuild(p, p.activeCar, tostring(a))
+		changesCar = true
+	elseif action == "paint" then
+		ok, err = PlayerProfile.setPaint(p, p.activeCar, tonumber(a) or 0, tonumber(b) or 0, tonumber(c) or 0)
+		changesCar = true
+	end
+
+	if ok then
+		if changesCar then
+			refreshCar(player)
+		end
+		GarageService.pushProfile(player)
+	else
+		Net.Notify:FireClient(player, err or "Can't do that", "error")
+	end
+end
+
+function GarageService.start()
+	Net.ShopAction.OnServerEvent:Connect(handleShop)
+	Net.RespawnCar.OnServerEvent:Connect(GarageService.resetCar)
+
+	-- Walking or driving up to a shop pad opens its menu.
+	local places = Workspace:WaitForChild("World"):WaitForChild("Places")
+	for _, pad in places:GetChildren() do
+		local prompt = pad:FindFirstChildOfClass("ProximityPrompt")
+		if prompt then
+			prompt.Triggered:Connect(function(player)
+				Net.OpenShop:FireClient(player, pad:GetAttribute("PlaceKind"))
+			end)
+		end
+	end
+
+	local function onPlayer(player: Player)
+		task.spawn(function()
+			if not DataService.waitFor(player) then
+				return
+			end
+			GarageService.spawnCar(player)
+			GarageService.pushProfile(player)
+		end)
+	end
+	Players.PlayerAdded:Connect(onPlayer)
+	for _, player in Players:GetPlayers() do
+		onPlayer(player)
+	end
+	Players.PlayerRemoving:Connect(function(player)
+		GarageService.despawn(player)
+		busy[player] = nil
+	end)
+end
+
+return GarageService
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="Script" referent="18">
+        <Properties>
+          <string name="Name">Main</string>
+          <token name="RunContext">0</token>
+          <string name="Source"><![CDATA[-- Server entry point. Order matters: data first, then the world, then the
+-- services that place cars and races in it.
+
+local DataService = require(script.Parent.DataService)
+local WorldBuilder = require(script.Parent.WorldBuilder)
+local GarageService = require(script.Parent.GarageService)
+local RaceService = require(script.Parent.RaceService)
+local WorldEventService = require(script.Parent.WorldEventService)
+local DiscoveryService = require(script.Parent.DiscoveryService)
+local DevService = require(script.Parent.DevService)
+
+DataService.start()
+WorldBuilder.build()
+GarageService.start()
+RaceService.start()
+WorldEventService.start()
+DiscoveryService.start()
+DevService.start()
+
+-- One line to look for in Studio's Output window: if you see it, every
+-- service started without an error.
+local world = workspace:FindFirstChild("World")
+print(`[OpenWorldRacer] server ready - {world and #world:GetDescendants() or 0} map objects built`)
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="19">
+        <Properties>
+          <string name="Name">Net</string>
+          <string name="Source"><![CDATA[-- Creates the RemoteEvents listed in Shared.RemoteNames under ReplicatedStorage.Remotes.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RemoteNames = require(ReplicatedStorage.Shared.RemoteNames)
+
+local folder = Instance.new("Folder")
+folder.Name = "Remotes"
+
+local Net: { [string]: RemoteEvent } = {}
+for name in RemoteNames do
+	local remote = Instance.new("RemoteEvent")
+	remote.Name = name
+	remote.Parent = folder
+	Net[name] = remote
+end
+
+folder.Parent = ReplicatedStorage
+
+return Net
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="20">
+        <Properties>
+          <string name="Name">RaceService</string>
+          <string name="Source"><![CDATA[-- Races happen on the map itself. Drive into an event's start zone to join its
+-- lobby; flash races and the midnight meet open temporary zones; any two
+-- drivers can challenge each other to a race to a landmark across the city.
+-- Lobbies are capped at the class of the first car in, so builds stay fair.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local Shared = ReplicatedStorage.Shared
+local Performance = require(Shared.Performance)
+local PlayerProfile = require(Shared.PlayerProfile)
+local RaceLogic = require(Shared.RaceLogic)
+local Records = require(Shared.Records)
+local WorldMap = require(Shared.WorldMap)
+
+local DataService = require(script.Parent.DataService)
+local GarageService = require(script.Parent.GarageService)
+local Net = require(script.Parent.Net)
+
+local RaceService = {}
+
+local LOBBY_WAIT = 20 -- seconds a fixed event lobby waits for more drivers
+local COUNTDOWN = 3
+local ZONE_RADIUS = 30
+local CHECKPOINT_RADIUS = 40
+local FINISH_GRACE = 45 -- once someone finishes, the rest get this long
+local MAX_RACERS = 8
+local CHALLENGE_RANGE = 150
+local CHALLENGE_TIMEOUT = 20
+
+type Lobby = {
+	key: string,
+	eventId: string?,
+	name: string,
+	kind: string, -- "event" | "flash" | "midnight" | "challenge"
+	payoutKind: string,
+	district: string,
+	zone: Vector3?,
+	zoneRadius: number,
+	classCap: string?,
+	members: { Player },
+	startsAt: number,
+	route: { WorldMap.Point },
+	laps: number,
+	gridStart: WorldMap.Point?,
+	gridHeading: WorldMap.Point?,
+	boardId: string?,
+	persistent: boolean, -- fixed event lobbies vanish when empty
+}
+
+type ActiveRace = {
+	lobby: Lobby,
+	race: RaceLogic.Race,
+	members: { [number]: Player },
+	lastBroadcast: number,
+}
+
+local lobbies: { [string]: Lobby } = {}
+local races: { ActiveRace } = {}
+local playerLobby: { [Player]: Lobby } = {}
+local playerRace: { [Player]: ActiveRace } = {}
+local pendingChallenges: { [Player]: { from: Player, expires: number, dest: WorldMap.Place } } = {}
+local rejectedUntil: { [Player]: number } = {} -- stops repeat class-cap messages
+local boardGuis: { [string]: TextLabel } = {}
+
+local function now(): number
+	return Workspace:GetServerTimeNow()
+end
+
+local function flat(pt: WorldMap.Point): Vector3
+	return Vector3.new(pt.x, 0, pt.z)
+end
+
+local function flatDist(a: Vector3, b: Vector3): number
+	return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude
+end
+
+local function carClass(player: Player): (string?, number?)
+	local car = GarageService.getCar(player)
+	if not car then
+		return nil
+	end
+	return car:GetAttribute("Class"), car:GetAttribute("Rating")
+end
+
+---------------------------------------------------------------------------
+-- Lobbies
+---------------------------------------------------------------------------
+
+local function eventLobby(eventId: string, key: string, kind: string, startsAt: number): Lobby
+	local ev = WorldMap.Events[eventId]
+	return {
+		key = key,
+		eventId = eventId,
+		name = ev.name,
+		kind = kind,
+		payoutKind = if kind == "event" then ev.kind else kind,
+		district = ev.district,
+		zone = flat(ev.start),
+		zoneRadius = ZONE_RADIUS,
+		members = {},
+		startsAt = startsAt,
+		route = ev.checkpoints,
+		laps = ev.laps or 1,
+		gridStart = ev.start,
+		gridHeading = ev.heading,
+		boardId = `event:{eventId}`,
+		persistent = kind == "event",
+	}
+end
+
+local function leaveLobby(player: Player, reason: string?)
+	local lobby = playerLobby[player]
+	if not lobby then
+		return
+	end
+	local i = table.find(lobby.members, player)
+	if i then
+		table.remove(lobby.members, i)
+	end
+	playerLobby[player] = nil
+	Net.RaceState:FireClient(player, nil)
+	if reason then
+		Net.Notify:FireClient(player, reason, "info")
+	end
+	if lobby.persistent and #lobby.members == 0 then
+		lobbies[lobby.key] = nil
+	end
+end
+
+local function lobbyState(lobby: Lobby)
+	return {
+		phase = "lobby",
+		name = lobby.name,
+		kind = lobby.kind,
+		classCap = lobby.classCap,
+		startsAt = lobby.startsAt,
+		drivers = #lobby.members,
+	}
+end
+
+local function joinLobby(player: Player, lobby: Lobby): boolean
+	if #lobby.members >= MAX_RACERS then
+		return false
+	end
+	local class = carClass(player)
+	if not class then
+		return false
+	end
+	if lobby.classCap and Performance.classRank(class) > Performance.classRank(lobby.classCap) then
+		rejectedUntil[player] = now() + 6
+		Net.Notify:FireClient(player, `{lobby.name} is running Class {lobby.classCap}. Your car is Class {class}.`, "error")
+		return false
+	end
+	lobby.classCap = lobby.classCap or class
+	table.insert(lobby.members, player)
+	playerLobby[player] = lobby
+	Net.Notify:FireClient(player, `Joined {lobby.name} (Class {lobby.classCap}). Stay in the zone.`, "race")
+	for _, member in lobby.members do
+		Net.RaceState:FireClient(member, lobbyState(lobby))
+	end
+	return true
+end
+
+-- Opens a temporary lobby (flash race or midnight meet). Returns the lobby.
+function RaceService.openSpecial(opts: {
+	key: string,
+	eventId: string,
+	kind: string,
+	zone: WorldMap.Point,
+	zoneRadius: number?,
+	startsAt: number,
+	leadIn: boolean?,
+	name: string?,
+}): Lobby
+	if lobbies[opts.key] then
+		return lobbies[opts.key]
+	end
+	local lobby = eventLobby(opts.eventId, opts.key, opts.kind, opts.startsAt)
+	lobby.zone = flat(opts.zone)
+	lobby.zoneRadius = opts.zoneRadius or ZONE_RADIUS
+	lobby.name = opts.name or lobby.name
+	if opts.leadIn then
+		-- Meet-to-race: everyone drives together from the meet to the start line.
+		local ev = WorldMap.Events[opts.eventId]
+		local route = { ev.start }
+		for _, cp in ev.checkpoints do
+			table.insert(route, cp)
+		end
+		lobby.route = route
+		lobby.laps = 1
+		lobby.gridStart = nil
+		lobby.boardId = nil
+	end
+	lobbies[opts.key] = lobby
+	return lobby
+end
+
+function RaceService.hasLobby(key: string): boolean
+	return lobbies[key] ~= nil
+end
+
+---------------------------------------------------------------------------
+-- Racing
+---------------------------------------------------------------------------
+
+local function placeOnGrid(lobby: Lobby)
+	local start, heading = lobby.gridStart, lobby.gridHeading
+	if not start or not heading then
+		return
+	end
+	local dir = Vector3.new(heading.x, 0, heading.z).Unit
+	local side = dir:Cross(Vector3.yAxis)
+	for i, player in lobby.members do
+		local car = GarageService.getCar(player)
+		if car and car.PrimaryPart then
+			local row, col = (i - 1) // 2, (i - 1) % 2
+			local pos = flat(start) - dir * (row * 18) + side * (col * 12 - 6) + Vector3.new(0, 2.3, 0)
+			car:PivotTo(CFrame.lookAt(pos, pos + dir))
+			car.PrimaryPart.AssemblyLinearVelocity = Vector3.zero
+			car.PrimaryPart.AssemblyAngularVelocity = Vector3.zero
+			car.PrimaryPart.Anchored = true
+		end
+	end
+end
+
+local function releaseGrid(active: ActiveRace)
+	for _, player in active.members do
+		local car = GarageService.getCar(player)
+		if car and car.PrimaryPart then
+			car.PrimaryPart.Anchored = false
+		end
+	end
+end
+
+local function startRace(lobby: Lobby)
+	lobbies[lobby.key] = nil
+	local startTime = now() + COUNTDOWN
+	local race = RaceLogic.new(lobby.key, #lobby.route, lobby.laps, startTime, 300)
+	local active: ActiveRace = { lobby = lobby, race = race, members = {}, lastBroadcast = 0 }
+
+	for _, player in lobby.members do
+		playerLobby[player] = nil
+		playerRace[player] = active
+		active.members[player.UserId] = player
+		RaceLogic.addRacer(race, player.UserId, player.DisplayName)
+		GarageService.setBusy(player, true)
+	end
+	placeOnGrid(lobby)
+	task.delay(COUNTDOWN, releaseGrid, active)
+	table.insert(races, active)
+end
+
+local function raceState(active: ActiveRace, player: Player)
+	local race, lobby = active.race, active.lobby
+	local racer = race.racers[player.UserId]
+	local standings = RaceLogic.standings(race)
+	local place, top = 0, {}
+	for _, s in standings do
+		if s.id == player.UserId then
+			place = s.place
+		end
+		if #top < 8 then
+			table.insert(top, { name = s.name, time = s.time, dnf = s.dnf })
+		end
+	end
+	local nextPt = lobby.route[racer.nextCheckpoint]
+	local afterPt = lobby.route[racer.nextCheckpoint + 1]
+	return {
+		phase = "racing",
+		name = lobby.name,
+		kind = lobby.kind,
+		startTime = race.startTime,
+		timeLimit = race.startTime + race.timeLimit,
+		lap = racer.lap,
+		laps = race.laps,
+		checkpoint = racer.nextCheckpoint,
+		checkpoints = race.checkpointCount,
+		isFinishNext = racer.nextCheckpoint == race.checkpointCount and racer.lap == race.laps,
+		next = nextPt and { x = nextPt.x, z = nextPt.z },
+		after = afterPt and { x = afterPt.x, z = afterPt.z },
+		place = place,
+		field = #standings,
+		standings = top,
+		finished = racer.finishTime,
+		dnf = racer.dnf,
+	}
+end
+
+local function updateBoardGui(boardId: string)
+	local label = boardGuis[boardId]
+	if not label then
+		return
+	end
+	local lines = {}
+	for i, e in DataService.getBoard(boardId) do
+		if i > 5 then
+			break
+		end
+		table.insert(lines, `{i}. {e.name}  {Records.formatTime(e.time)}`)
+	end
+	label.Text = if #lines == 0 then "No times yet.\nBe the first." else table.concat(lines, "\n")
+end
+
+local function finishRace(active: ActiveRace)
+	local lobby, race = active.lobby, active.race
+	local standings = RaceLogic.standings(race)
+	local field = #standings
+	local summary = {}
+	for _, s in standings do
+		table.insert(summary, { name = s.name, place = s.place, time = s.time, dnf = s.dnf })
+	end
+
+	for _, s in standings do
+		local player = active.members[s.id]
+		playerRace[player] = nil
+		if player.Parent then
+			GarageService.setBusy(player, false)
+			local profile = DataService.get(player)
+			local cash, rep = 0, 0
+			if profile then
+				cash, rep = PlayerProfile.recordResult(profile, lobby.district, lobby.payoutKind, s.place, field, s.dnf)
+			end
+			local recordRank = nil
+			if not s.dnf and s.time and lobby.boardId then
+				local car = GarageService.getCar(player)
+				recordRank = DataService.submitRecord(lobby.boardId, {
+					userId = player.UserId,
+					name = player.DisplayName,
+					time = s.time,
+					carId = if car then car:GetAttribute("CarId") else "",
+				})
+			end
+			Net.RaceState:FireClient(player, {
+				phase = "results",
+				name = lobby.name,
+				results = summary,
+				place = s.place,
+				cash = cash,
+				rep = rep,
+				district = WorldMap.Districts[lobby.district].name,
+				recordRank = recordRank,
+			})
+			GarageService.pushProfile(player)
+		end
+	end
+	if lobby.boardId then
+		updateBoardGui(lobby.boardId)
+	end
+end
+
+local function stepRaces()
+	local t = now()
+	for i = #races, 1, -1 do
+		local active = races[i]
+		local race = active.race
+		if t >= race.startTime then
+			for userId, player in active.members do
+				local racer = race.racers[userId]
+				if not player.Parent then
+					RaceLogic.removeRacer(race, userId)
+				elseif not racer.finishTime and not racer.dnf then
+					local car = GarageService.getCar(player)
+					local target = active.lobby.route[racer.nextCheckpoint]
+					if car and car.PrimaryPart and target and flatDist(car.PrimaryPart.Position, flat(target)) <= CHECKPOINT_RADIUS then
+						local result = RaceLogic.hitCheckpoint(race, userId, racer.nextCheckpoint, t)
+						if result == "finished" then
+							race.timeLimit = math.min(race.timeLimit, (t - race.startTime) + FINISH_GRACE)
+							Net.Notify:FireClient(player, `Finished! {Records.formatTime(racer.finishTime :: number)}`, "race")
+						end
+					end
+				end
+			end
+			RaceLogic.tick(race, t)
+		end
+
+		if RaceLogic.isOver(race) then
+			table.remove(races, i)
+			finishRace(active)
+		elseif t - active.lastBroadcast >= 0.25 then
+			active.lastBroadcast = t
+			for _, player in active.members do
+				if player.Parent then
+					Net.RaceState:FireClient(player, raceState(active, player))
+				end
+			end
+		end
+	end
+end
+
+local function stepLobbies()
+	local t = now()
+
+	for _, player in Players:GetPlayers() do
+		if playerRace[player] then
+			continue
+		end
+		local driving = GarageService.isDriving(player)
+		local pos = GarageService.position(player)
+		local lobby = playerLobby[player]
+
+		if lobby then
+			if not driving then
+				leaveLobby(player, "You left your car, so you left the lobby.")
+			elseif lobby.zone and pos and flatDist(pos, lobby.zone) > lobby.zoneRadius * 2.5 then
+				leaveLobby(player, `Left {lobby.name}.`)
+			end
+		elseif driving and pos and t >= (rejectedUntil[player] or 0) then
+			-- Temporary lobbies (flash, meet) win over fixed event zones.
+			local best: Lobby? = nil
+			for _, l in lobbies do
+				if l.zone and flatDist(pos, l.zone) <= l.zoneRadius and (not best or best.persistent) then
+					best = l
+				end
+			end
+			if not best then
+				for id, ev in WorldMap.Events do
+					if flatDist(pos, flat(ev.start)) <= ZONE_RADIUS then
+						best = lobbies[`event:{id}`]
+						if not best then
+							best = eventLobby(id, `event:{id}`, "event", t + LOBBY_WAIT)
+							lobbies[best.key] = best
+						end
+						break
+					end
+				end
+			end
+			if best and t < best.startsAt then
+				joinLobby(player, best)
+				if best.persistent and #best.members == 0 then
+					lobbies[best.key] = nil
+				end
+			end
+		end
+	end
+
+	for key, lobby in lobbies do
+		if t >= lobby.startsAt then
+			if #lobby.members > 0 then
+				startRace(lobby)
+			else
+				lobbies[key] = nil
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Challenges: race anyone nearby to a landmark across the city
+---------------------------------------------------------------------------
+
+local function pickDestination(from: Vector3): WorldMap.Place
+	local options, farthest, farthestDist = {}, nil, -1
+	for _, place in WorldMap.Places do
+		local d = flatDist(from, flat(place.pos))
+		if d >= 500 and d <= 1600 then
+			table.insert(options, place)
+		end
+		if d > farthestDist then
+			farthest, farthestDist = place, d
+		end
+	end
+	if #options > 0 then
+		return options[math.random(1, #options)]
+	end
+	return farthest
+end
+
+local function canRace(player: Player): boolean
+	return GarageService.isDriving(player) and not playerRace[player] and not playerLobby[player]
+end
+
+local function onChallenge(player: Player, targetUserId: any)
+	local target = Players:GetPlayerByUserId(tonumber(targetUserId) or 0)
+	if not target or target == player then
+		return
+	end
+	if not canRace(player) or not canRace(target) then
+		Net.Notify:FireClient(player, "Both drivers need to be in their cars and not racing.", "error")
+		return
+	end
+	local a, b = GarageService.position(player), GarageService.position(target)
+	if not a or not b or flatDist(a, b) > CHALLENGE_RANGE then
+		Net.Notify:FireClient(player, "Pull up closer to challenge them.", "error")
+		return
+	end
+	local dest = pickDestination((a + b) / 2)
+	pendingChallenges[target] = { from = player, expires = now() + CHALLENGE_TIMEOUT, dest = dest }
+	Net.ChallengeReceived:FireClient(target, player.UserId, player.DisplayName, dest.name)
+	Net.Notify:FireClient(player, `Challenge sent to {target.DisplayName}.`, "info")
+end
+
+local function onChallengeReply(target: Player, fromUserId: any, accepted: any)
+	local pending = pendingChallenges[target]
+	pendingChallenges[target] = nil
+	if not pending or pending.from.UserId ~= tonumber(fromUserId) or now() > pending.expires then
+		return
+	end
+	local challenger = pending.from
+	if not accepted then
+		Net.Notify:FireClient(challenger, `{target.DisplayName} passed on your challenge.`, "info")
+		return
+	end
+	if not canRace(challenger) or not canRace(target) then
+		Net.Notify:FireClient(target, "The challenge fell through.", "error")
+		return
+	end
+	local dest = pending.dest
+	local lobby: Lobby = {
+		key = `challenge:{challenger.UserId}:{target.UserId}:{now()}`,
+		name = `Race to {dest.name}`,
+		kind = "challenge",
+		payoutKind = "sprint",
+		district = WorldMap.districtAt(dest.pos),
+		zoneRadius = 0,
+		members = {},
+		startsAt = now(),
+		route = { dest.pos },
+		laps = 1,
+		persistent = false,
+	}
+	for _, p in { challenger, target } do
+		table.insert(lobby.members, p)
+		Net.Notify:FireClient(p, `Race to {dest.name}! Any route you like.`, "race")
+	end
+	startRace(lobby)
+end
+
+---------------------------------------------------------------------------
+-- Start zones and leaderboard signs
+---------------------------------------------------------------------------
+
+local function buildEventMarkers()
+	local folder = Instance.new("Folder")
+	folder.Name = "EventStarts"
+	for id, ev in WorldMap.Events do
+		local disc = Instance.new("Part")
+		disc.Name = `Start_{id}`
+		disc.Shape = Enum.PartType.Cylinder
+		disc.Size = Vector3.new(0.2, ZONE_RADIUS * 2, ZONE_RADIUS * 2)
+		disc.CFrame = CFrame.new(ev.start.x, 0.35, ev.start.z) * CFrame.Angles(0, 0, math.rad(90))
+		disc.Anchored = true
+		disc.CanCollide = false
+		disc.Material = Enum.Material.Neon
+		disc.Color = Color3.fromRGB(255, 200, 40)
+		disc.Transparency = 0.6
+		disc.Parent = folder
+
+		-- Local records posted right at the spot.
+		local dir = Vector3.new(ev.heading.x, 0, ev.heading.z).Unit
+		local side = dir:Cross(Vector3.yAxis)
+		local signPos = Vector3.new(ev.start.x, 9, ev.start.z) + side * (ZONE_RADIUS + 6)
+		local sign = Instance.new("Part")
+		sign.Name = `Board_{id}`
+		sign.Size = Vector3.new(16, 12, 0.6)
+		sign.CFrame = CFrame.lookAt(signPos, signPos - side)
+		sign.Anchored = true
+		sign.Color = Color3.fromRGB(20, 20, 26)
+		sign.Parent = folder
+
+		local gui = Instance.new("SurfaceGui")
+		gui.Face = Enum.NormalId.Front
+		gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+		gui.PixelsPerStud = 30
+		gui.Parent = sign
+		local title = Instance.new("TextLabel")
+		title.Size = UDim2.fromScale(1, 0.22)
+		title.BackgroundTransparency = 1
+		title.Font = Enum.Font.GothamBlack
+		title.TextScaled = true
+		title.TextColor3 = Color3.fromRGB(255, 200, 40)
+		title.Text = `{ev.name} records`
+		title.Parent = gui
+		local body = Instance.new("TextLabel")
+		body.Position = UDim2.fromScale(0.05, 0.25)
+		body.Size = UDim2.fromScale(0.9, 0.7)
+		body.BackgroundTransparency = 1
+		body.Font = Enum.Font.GothamMedium
+		body.TextScaled = true
+		body.TextXAlignment = Enum.TextXAlignment.Left
+		body.TextYAlignment = Enum.TextYAlignment.Top
+		body.TextColor3 = Color3.new(1, 1, 1)
+		body.Parent = gui
+		boardGuis[`event:{id}`] = body
+		task.spawn(updateBoardGui, `event:{id}`)
+	end
+	folder.Parent = Workspace:WaitForChild("World")
+end
+
+function RaceService.isRacing(player: Player): boolean
+	return playerRace[player] ~= nil
+end
+
+function RaceService.start()
+	buildEventMarkers()
+	Net.Challenge.OnServerEvent:Connect(onChallenge)
+	Net.ChallengeReply.OnServerEvent:Connect(onChallengeReply)
+
+	Players.PlayerRemoving:Connect(function(player)
+		leaveLobby(player)
+		pendingChallenges[player] = nil
+		rejectedUntil[player] = nil
+		local active = playerRace[player]
+		if active then
+			RaceLogic.removeRacer(active.race, player.UserId)
+			playerRace[player] = nil
+		end
+	end)
+
+	task.spawn(function()
+		while true do
+			task.wait(0.1)
+			local ok, err = pcall(stepRaces)
+			if not ok then
+				warn("[RaceService] race step failed:", err)
+			end
+		end
+	end)
+	task.spawn(function()
+		while true do
+			task.wait(0.25)
+			local ok, err = pcall(stepLobbies)
+			if not ok then
+				warn("[RaceService] lobby step failed:", err)
+			end
+		end
+	end)
+end
+
+return RaceService
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="21">
+        <Properties>
+          <string name="Name">VehicleFactory</string>
+          <string name="Source"><![CDATA[-- Builds a drivable car from an owned-car record: a chassis, a painted body,
+-- a VehicleSeat, motor-driven wheels and servo steering. Tuning values are
+-- written as attributes; the driver's client (DriveController) reads them and
+-- drives the constraints, since the driver owns the car's physics.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Shared = ReplicatedStorage.Shared
+local CarCatalog = require(Shared.CarCatalog)
+local Performance = require(Shared.Performance)
+local PlayerProfile = require(Shared.PlayerProfile)
+
+local VehicleFactory = {}
+
+local WHEEL_RADIUS = 1.4
+local WHEEL_WIDTH = 1.2
+local TRACK_HALF = 3.9 -- wheel center distance from the car's centerline
+local AXLE_Z = 4.4 -- wheel center distance from the car's middle (front is -Z)
+
+local function weld(a: BasePart, b: BasePart)
+	local w = Instance.new("WeldConstraint")
+	w.Part0 = a
+	w.Part1 = b
+	w.Parent = a
+end
+
+local function attach(part: BasePart, name: string, cf: CFrame): Attachment
+	local a = Instance.new("Attachment")
+	a.Name = name
+	a.CFrame = cf
+	a.Parent = part
+	return a
+end
+
+local function newPart(model: Model, name: string, size: Vector3, cf: CFrame): Part
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Size = size
+	p.CFrame = cf
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Parent = model
+	return p
+end
+
+local function buildWheel(model: Model, chassis: BasePart, name: string, offset: Vector3, steer: boolean, driven: boolean, grip: number)
+	local origin = chassis.CFrame
+	local wheel = newPart(model, name, Vector3.new(WHEEL_WIDTH, WHEEL_RADIUS * 2, WHEEL_RADIUS * 2), origin * CFrame.new(offset))
+	wheel.Shape = Enum.PartType.Cylinder
+	wheel.Color = Color3.fromRGB(28, 28, 30)
+	wheel.CustomPhysicalProperties = PhysicalProperties.new(0.9, math.clamp(grip * 1.6, 0.4, 2), 0, 100, 1)
+
+	local noCollide = Instance.new("NoCollisionConstraint")
+	noCollide.Part0 = wheel
+	noCollide.Part1 = chassis
+	noCollide.Parent = wheel
+
+	-- Wheels spin around their local X axis (the car's lateral axis).
+	local hub: BasePart = chassis
+	local hubOffset = CFrame.new(offset)
+
+	if steer then
+		-- Knuckle turns around the vertical axis; the wheel spins on the knuckle.
+		local knuckle = newPart(model, `{name}Knuckle`, Vector3.new(0.4, 0.4, 0.4), origin * CFrame.new(offset))
+		knuckle.Transparency = 1
+		knuckle.CanCollide = false
+		local up = CFrame.Angles(0, 0, math.rad(90)) -- attachment X axis -> world up
+		local steerHinge = Instance.new("HingeConstraint")
+		steerHinge.Name = "Steer"
+		steerHinge.Attachment0 = attach(chassis, `{name}SteerA`, CFrame.new(offset) * up)
+		steerHinge.Attachment1 = attach(knuckle, "SteerB", up)
+		steerHinge.ActuatorType = Enum.ActuatorType.Servo
+		steerHinge.ServoMaxTorque = 1e6
+		steerHinge.AngularSpeed = 6
+		steerHinge.LimitsEnabled = true
+		steerHinge.LowerAngle = -45
+		steerHinge.UpperAngle = 45
+		steerHinge.Parent = knuckle
+		hub = knuckle
+		hubOffset = CFrame.new()
+	end
+
+	local axle = Instance.new("HingeConstraint")
+	axle.Name = "Axle"
+	axle.Attachment0 = attach(hub, `{name}AxleA`, hubOffset)
+	axle.Attachment1 = attach(wheel, "AxleB", CFrame.new())
+	-- Every wheel gets a motor so all four can brake; only driven wheels get drive torque.
+	axle.ActuatorType = Enum.ActuatorType.Motor
+	axle.MotorMaxTorque = 0
+	axle.AngularVelocity = 0
+	axle.Parent = wheel
+	axle:SetAttribute("Driven", driven)
+	axle:SetAttribute("Rear", offset.Z > 0)
+	return wheel
+end
+
+-- Builds and parents the car. `cf` is where the car's center should sit on the road.
+function VehicleFactory.build(owned: PlayerProfile.OwnedCar, ownerUserId: number, cf: CFrame, parent: Instance): Model
+	local def = CarCatalog.getCar(owned.carId) or CarCatalog.getCar(CarCatalog.StarterCarId)
+	local stats = CarCatalog.applyParts(def.stats, owned.parts)
+	local rating = Performance.rating(stats)
+	local paint = Color3.fromRGB(owned.paint[1], owned.paint[2], owned.paint[3])
+
+	local model = Instance.new("Model")
+	model.Name = `{def.name} ({ownerUserId})`
+
+	-- Chassis rides above wheel center so the body never scrapes.
+	local origin = cf + Vector3.new(0, WHEEL_RADIUS + 0.4, 0)
+	local chassis = newPart(model, "Chassis", Vector3.new(TRACK_HALF * 2 - WHEEL_WIDTH - 0.4, 0.8, 12), origin)
+	chassis.Transparency = 1
+	chassis.CustomPhysicalProperties = PhysicalProperties.new(1.2, 0.3, 0, 1, 1)
+	model.PrimaryPart = chassis
+
+	local body = newPart(model, "Body", Vector3.new(7.2, 2.2, 12.6), origin * CFrame.new(0, 1.3, 0))
+	body.Color = paint
+	body.Material = Enum.Material.SmoothPlastic
+	body.Massless = true
+	body.CanCollide = false -- the chassis is the collision hull; the body overlaps the wheels
+	weld(chassis, body)
+
+	local cabin = newPart(model, "Cabin", Vector3.new(6, 1.8, 5.5), origin * CFrame.new(0, 3.2, 0.8))
+	cabin.Color = Color3.fromRGB(20, 24, 30)
+	cabin.Material = Enum.Material.Glass
+	cabin.Transparency = 0.3
+	cabin.Massless = true
+	cabin.CanCollide = false
+	weld(chassis, cabin)
+
+	for _, side in { -1, 1 } do
+		local head = newPart(model, "Headlight", Vector3.new(1.4, 0.5, 0.2), origin * CFrame.new(side * 2.6, 1.4, -6.35))
+		head.Material = Enum.Material.Neon
+		head.Color = Color3.fromRGB(255, 250, 225)
+		head.Massless = true
+		head.CanCollide = false
+		weld(chassis, head)
+		local beam = Instance.new("SpotLight")
+		beam.Face = Enum.NormalId.Front
+		beam.Range = 60
+		beam.Angle = 50
+		beam.Brightness = 3
+		beam.Parent = head
+
+		local tail = newPart(model, "Taillight", Vector3.new(1.6, 0.4, 0.2), origin * CFrame.new(side * 2.6, 1.6, 6.35))
+		tail.Material = Enum.Material.Neon
+		tail.Color = Color3.fromRGB(220, 30, 40)
+		tail.Massless = true
+		tail.CanCollide = false
+		weld(chassis, tail)
+	end
+
+	local seat = Instance.new("VehicleSeat")
+	seat.Name = "DriveSeat"
+	seat.Size = Vector3.new(2, 1, 2)
+	seat.CFrame = origin * CFrame.new(-1.2, 1.9, 1)
+	seat.Transparency = 1
+	seat.MaxSpeed = 0 -- the drive controller handles propulsion
+	seat.Torque = 0
+	seat.HeadsUpDisplay = false
+	seat.Massless = true
+	seat.CanCollide = false
+	seat.Parent = model
+	weld(chassis, seat)
+
+	local drivePrompt = Instance.new("ProximityPrompt")
+	drivePrompt.Name = "DrivePrompt"
+	drivePrompt.ActionText = "Drive"
+	drivePrompt.ObjectText = def.name
+	drivePrompt.KeyboardKeyCode = Enum.KeyCode.F
+	drivePrompt.MaxActivationDistance = 14
+	drivePrompt.RequiresLineOfSight = false
+	drivePrompt.Parent = seat
+
+	local frontDriven = stats.drivetrain ~= "RWD"
+	local rearDriven = stats.drivetrain ~= "FWD"
+	local wheelY = -0.4
+	buildWheel(model, chassis, "FL", Vector3.new(-TRACK_HALF, wheelY, -AXLE_Z), true, frontDriven, stats.grip)
+	buildWheel(model, chassis, "FR", Vector3.new(TRACK_HALF, wheelY, -AXLE_Z), true, frontDriven, stats.grip)
+	buildWheel(model, chassis, "RL", Vector3.new(-TRACK_HALF, wheelY, AXLE_Z), false, rearDriven, stats.grip)
+	buildWheel(model, chassis, "RR", Vector3.new(TRACK_HALF, wheelY, AXLE_Z), false, rearDriven, stats.grip)
+
+	model:SetAttribute("OwnerUserId", ownerUserId)
+	model:SetAttribute("CarId", def.id)
+	model:SetAttribute("CarName", def.name)
+	model:SetAttribute("EngineSound", def.engineSound)
+	model:SetAttribute("HasTurbo", table.find(owned.parts, "turbo") ~= nil)
+	model:SetAttribute("TopSpeed", stats.topSpeed)
+	model:SetAttribute("PowerToWeight", stats.power / stats.weight)
+	model:SetAttribute("Handling", stats.handling)
+	model:SetAttribute("Drivetrain", stats.drivetrain)
+	model:SetAttribute("WheelRadius", WHEEL_RADIUS)
+	model:SetAttribute("Rating", rating)
+	model:SetAttribute("Class", Performance.classOf(rating))
+
+	model.Parent = parent
+	return model
+end
+
+return VehicleFactory
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="22">
+        <Properties>
+          <string name="Name">WorldBuilder</string>
+          <string name="Source"><![CDATA[-- Builds the first playable map from WorldMap data: ground, roads, a downtown
+-- skyline, street lights, and pads for every place you can drive to.
+-- Swap this out for a hand-built map later; keep WorldMap coordinates in sync.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local Shared = ReplicatedStorage.Shared
+local WorldMap = require(Shared.WorldMap)
+local WorldClock = require(Shared.WorldClock)
+
+local WorldBuilder = {}
+
+local ROAD_LAYER = { street = 0.2, ramp = 0.22, highway = 0.24, strip = 0.26, track = 0.28 }
+local ROAD_COLOR = {
+	street = Color3.fromRGB(52, 52, 56),
+	ramp = Color3.fromRGB(48, 48, 52),
+	highway = Color3.fromRGB(40, 40, 44),
+	strip = Color3.fromRGB(34, 34, 36),
+	track = Color3.fromRGB(44, 44, 48),
+}
+local PLACE_COLOR = {
+	garage = Color3.fromRGB(255, 170, 40),
+	dealership = Color3.fromRGB(80, 170, 255),
+	tuning = Color3.fromRGB(255, 70, 90),
+	meet = Color3.fromRGB(170, 90, 255),
+	photo = Color3.fromRGB(90, 230, 160),
+}
+
+local function v3(pt: WorldMap.Point, y: number): Vector3
+	return Vector3.new(pt.x, y, pt.z)
+end
+
+local function newPart(props: { [string]: any }): Part
+	local part = Instance.new("Part")
+	part.Anchored = true
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	for k, v in props do
+		(part :: any)[k] = v
+	end
+	return part
+end
+
+local function buildGround(parent: Instance)
+	local tile = 1000
+	for x = -2000, 2000, tile do
+		for z = -1500, 1000, tile do
+			newPart({
+				Name = "Ground",
+				Size = Vector3.new(tile, 2, tile),
+				Position = Vector3.new(x + tile / 2, -1, z + tile / 2),
+				Material = Enum.Material.Grass,
+				Color = Color3.fromRGB(70, 96, 62),
+				Parent = parent,
+			})
+		end
+	end
+end
+
+local function buildRoad(road: WorldMap.Road, parent: Instance)
+	local a, b = v3(road.a, 0), v3(road.b, 0)
+	local length = (b - a).Magnitude + road.width -- overlap corners
+	local top = ROAD_LAYER[road.kind] or 0.2
+	newPart({
+		Name = `Road_{road.kind}`,
+		Size = Vector3.new(road.width, 0.4, length),
+		CFrame = CFrame.lookAt((a + b) / 2, b) + Vector3.new(0, top - 0.2, 0),
+		Material = Enum.Material.Asphalt,
+		Color = ROAD_COLOR[road.kind] or ROAD_COLOR.street,
+		Parent = parent,
+	})
+end
+
+local function buildLights(parent: Instance)
+	local pts = WorldMap.HighwayPoints
+	for i = 1, #pts do
+		local a, b = v3(pts[i], 0), v3(pts[i % #pts + 1], 0)
+		local dir = (b - a).Unit
+		local side = dir:Cross(Vector3.yAxis) * 28
+		local steps = math.floor((b - a).Magnitude / 160)
+		for s = 1, steps do
+			local base = a + dir * (s * 160) + side
+			local pole = newPart({
+				Name = "StreetLight",
+				Size = Vector3.new(0.8, 18, 0.8),
+				Position = base + Vector3.new(0, 9, 0),
+				Color = Color3.fromRGB(90, 90, 95),
+				Parent = parent,
+			})
+			local lamp = newPart({
+				Name = "Lamp",
+				Size = Vector3.new(2, 0.6, 2),
+				Position = base + Vector3.new(0, 18.2, 0),
+				Material = Enum.Material.Neon,
+				Color = Color3.fromRGB(255, 214, 150),
+				Parent = pole,
+			})
+			local light = Instance.new("PointLight")
+			light.Range = 50
+			light.Brightness = 1.5
+			light.Color = lamp.Color
+			light.Parent = lamp
+		end
+	end
+end
+
+-- Returns true if something important sits inside this downtown block.
+local function blockHasLandmark(minX: number, minZ: number, size: number): boolean
+	local function inside(pt: WorldMap.Point): boolean
+		return pt.x >= minX and pt.x <= minX + size and pt.z >= minZ and pt.z <= minZ + size
+	end
+	for _, place in WorldMap.Places do
+		if inside(place.pos) then
+			return true
+		end
+	end
+	for _, d in WorldMap.Discoveries do
+		if inside(d.pos) then
+			return true
+		end
+	end
+	return false
+end
+
+local function buildSkyline(parent: Instance)
+	local grid = WorldMap.Grid
+	local margin = 20
+	for x = grid.min, grid.max - grid.step, grid.step do
+		for z = grid.min, grid.max - grid.step, grid.step do
+			local minX, minZ = x + margin, z + margin
+			local size = grid.step - margin * 2
+			if not blockHasLandmark(x, z, grid.step) then
+				local seed = WorldClock.hash(x * 7919 + z)
+				local height = 40 + seed % 160
+				local tint = 60 + seed % 50
+				newPart({
+					Name = "Building",
+					Size = Vector3.new(size, height, size),
+					Position = Vector3.new(minX + size / 2, height / 2, minZ + size / 2),
+					Material = Enum.Material.Concrete,
+					Color = Color3.fromRGB(tint, tint, tint + 12),
+					Parent = parent,
+				})
+				-- Lit windows band so the city reads at night.
+				newPart({
+					Name = "Windows",
+					Size = Vector3.new(size + 0.4, 3, size + 0.4),
+					Position = Vector3.new(minX + size / 2, height * 0.6, minZ + size / 2),
+					Material = Enum.Material.Neon,
+					Color = Color3.fromRGB(255, 230, 170),
+					Transparency = 0.35,
+					CanCollide = false,
+					Parent = parent,
+				})
+			end
+		end
+	end
+end
+
+local function buildPlace(place: WorldMap.Place, parent: Instance)
+	local color = PLACE_COLOR[place.kind] or Color3.new(1, 1, 1)
+	local pad = newPart({
+		Name = `Place_{place.id}`,
+		Size = Vector3.new(50, 0.3, 50),
+		Position = v3(place.pos, 0.3),
+		Material = Enum.Material.SmoothPlastic,
+		Color = Color3.fromRGB(62, 62, 66),
+		Parent = parent,
+	})
+	pad:SetAttribute("PlaceId", place.id)
+	pad:SetAttribute("PlaceKind", place.kind)
+
+	local edge = newPart({
+		Name = "Edge",
+		Size = Vector3.new(52, 0.2, 52),
+		Position = v3(place.pos, 0.2),
+		Material = Enum.Material.Neon,
+		Color = color,
+		Parent = pad,
+	})
+	edge.CanCollide = false
+
+	if place.kind ~= "photo" and place.kind ~= "meet" then
+		-- A simple storefront behind the pad.
+		newPart({
+			Name = "Building",
+			Size = Vector3.new(50, 22, 14),
+			Position = v3(place.pos, 11) + Vector3.new(0, 0, 32),
+			Material = Enum.Material.Brick,
+			Color = color:Lerp(Color3.new(0.2, 0.2, 0.22), 0.6),
+			Parent = pad,
+		})
+		local prompt = Instance.new("ProximityPrompt")
+		prompt.ActionText = if place.kind == "garage"
+			then "Open Garage"
+			elseif place.kind == "dealership" then "Browse Cars"
+			else "Tune Car"
+		prompt.ObjectText = place.name
+		prompt.KeyboardKeyCode = Enum.KeyCode.E
+		prompt.MaxActivationDistance = 45
+		prompt.RequiresLineOfSight = false
+		prompt.HoldDuration = 0.2
+		prompt.Parent = pad
+	end
+
+	if place.kind == "garage" then
+		local spawn = Instance.new("SpawnLocation")
+		spawn.Name = "GarageSpawn"
+		spawn.Anchored = true
+		spawn.Size = Vector3.new(8, 0.4, 8)
+		spawn.Position = v3(place.pos, 0.6) + Vector3.new(0, 0, 18)
+		spawn.Transparency = 1
+		spawn.Duration = 0
+		spawn.Neutral = true
+		spawn.Parent = pad
+	end
+end
+
+local function buildDragStrip(parent: Instance)
+	local ev = WorldMap.Events.westsideDrag
+	for _, pt in { ev.start, ev.checkpoints[#ev.checkpoints] } do
+		newPart({
+			Name = "StripLine",
+			Size = Vector3.new(40, 0.1, 2),
+			Position = v3(pt, 0.33),
+			Material = Enum.Material.Neon,
+			Color = Color3.new(1, 1, 1),
+			CanCollide = false,
+			Parent = parent,
+		})
+	end
+end
+
+local function buildGrandstand(parent: Instance)
+	-- Crowd seating beside the Harbor Ring start/finish.
+	newPart({
+		Name = "Grandstand",
+		Size = Vector3.new(20, 14, 120),
+		CFrame = CFrame.new(1250, 7, -40) * CFrame.Angles(0, 0, math.rad(-12)),
+		Material = Enum.Material.Metal,
+		Color = Color3.fromRGB(120, 120, 130),
+		Parent = parent,
+	})
+end
+
+function WorldBuilder.build(): Folder
+	local world = Instance.new("Folder")
+	world.Name = "World"
+
+	local ground = Instance.new("Folder")
+	ground.Name = "Ground"
+	ground.Parent = world
+	buildGround(ground)
+
+	local roads = Instance.new("Folder")
+	roads.Name = "Roads"
+	roads.Parent = world
+	for _, road in WorldMap.Roads do
+		buildRoad(road, roads)
+	end
+
+	local city = Instance.new("Folder")
+	city.Name = "City"
+	city.Parent = world
+	buildSkyline(city)
+	buildLights(city)
+	buildDragStrip(city)
+	buildGrandstand(city)
+
+	local places = Instance.new("Folder")
+	places.Name = "Places"
+	places.Parent = world
+	for _, place in WorldMap.Places do
+		buildPlace(place, places)
+	end
+
+	-- Remove the template baseplate if the place file still has one.
+	local baseplate = Workspace:FindFirstChild("Baseplate")
+	if baseplate then
+		baseplate:Destroy()
+	end
+
+	world.Parent = Workspace
+	return world
+end
+
+return WorldBuilder
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="23">
+        <Properties>
+          <string name="Name">WorldEventService</string>
+          <string name="Source"><![CDATA[-- Runs the living city: day/night, rain, flash races that pop up around the
+-- map, and the nightly midnight meet. Everything comes from WorldClock, so all
+-- servers agree on tonight's meet location.
+
+local HttpService = game:GetService("HttpService")
+local Lighting = game:GetService("Lighting")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local Shared = ReplicatedStorage.Shared
+local WorldClock = require(Shared.WorldClock)
+local WorldMap = require(Shared.WorldMap)
+
+local Net = require(script.Parent.Net)
+local RaceService = require(script.Parent.RaceService)
+
+local WorldEventService = {}
+
+local MEET_GATHER_SECONDS = 120 -- time to show off builds before the featured race (meet window is ~150s)
+local MEET_RADIUS = 80
+
+-- Studio-only shortcut: shifts the world clock so testers can jump to dusk or
+-- the midnight meet instead of waiting. Always 0 in live servers.
+local timeOffset = 0
+
+local lastFlashKey: string? = nil
+local lastMeetKey: string? = nil
+local lastState = ""
+
+local function spotById(list: { any }, id: string): any
+	for _, s in list do
+		if s.id == id then
+			return s
+		end
+	end
+	return nil
+end
+
+-- `t` is world time (real time + offset); anything a player counts down to
+-- must be converted back to real server time.
+local function toReal(worldT: number): number
+	return worldT - timeOffset
+end
+
+local function worldState(t: number)
+	local flash = WorldClock.flashRace(t)
+	local meet = WorldClock.midnightMeet(t)
+	local state = {
+		clock = WorldClock.clockTime(t),
+		raining = WorldClock.isRaining(t),
+		flash = nil :: any,
+		meet = {
+			phase = meet.phase,
+			clue = if meet.phase ~= "hidden" then meet.clue else nil,
+			-- The exact spot is only revealed once it opens; until then, follow the clue.
+			spotName = if meet.phase == "open" then meet.spotName else nil,
+			pos = nil :: any,
+			featured = WorldMap.Events[meet.featuredEventId].name,
+		},
+	}
+	if flash then
+		local spot = spotById(WorldMap.FlashSpots, flash.spotId)
+		state.flash = {
+			name = spot.name,
+			event = WorldMap.Events[flash.eventId].name,
+			closesAt = toReal(flash.closesAt),
+			pos = { x = spot.pos.x, z = spot.pos.z },
+		}
+	end
+	if meet.phase == "open" then
+		local spot = spotById(WorldMap.MidnightSpots, meet.spotId)
+		state.meet.pos = { x = spot.pos.x, z = spot.pos.z }
+	end
+	return state, flash, meet
+end
+
+local function step()
+	local realNow = Workspace:GetServerTimeNow()
+	local t = realNow + timeOffset
+	local state, flash, meet = worldState(t)
+
+	Lighting.ClockTime = state.clock
+	Workspace:SetAttribute("Raining", state.raining)
+
+	if flash then
+		local key = `flash:{flash.opensAt}`
+		if key ~= lastFlashKey then
+			lastFlashKey = key
+			local spot = spotById(WorldMap.FlashSpots, flash.spotId)
+			RaceService.openSpecial({
+				key = key,
+				eventId = flash.eventId,
+				kind = "flash",
+				zone = spot.pos,
+				startsAt = toReal(flash.closesAt),
+				name = `Flash: {spot.name}`,
+			})
+			for _, player in Players:GetPlayers() do
+				Net.Notify:FireClient(player, `Flash race at {spot.name}! Get there before it starts.`, "flash")
+			end
+		end
+	end
+
+	if meet.phase == "open" then
+		local key = `meet:{meet.dayIndex}`
+		if key ~= lastMeetKey then
+			lastMeetKey = key
+			local spot = spotById(WorldMap.MidnightSpots, meet.spotId)
+			RaceService.openSpecial({
+				key = key,
+				eventId = meet.featuredEventId,
+				kind = "midnight",
+				zone = spot.pos,
+				zoneRadius = MEET_RADIUS,
+				startsAt = realNow + MEET_GATHER_SECONDS,
+				leadIn = true,
+				name = `Midnight Meet: {WorldMap.Events[meet.featuredEventId].name}`,
+			})
+			for _, player in Players:GetPlayers() do
+				Net.Notify:FireClient(player, `The midnight meet is live at {spot.name}.`, "meet")
+			end
+		end
+	end
+
+	-- Published as an attribute so late joiners read it too. The clock is left
+	-- out so it only changes when something players care about changes.
+	state.clock = nil
+	local encoded = HttpService:JSONEncode(state)
+	if encoded ~= lastState then
+		lastState = encoded
+		ReplicatedStorage:SetAttribute("WorldState", encoded)
+	end
+end
+
+-- Studio testing: jump the world clock forward to the next time it reads `hour`.
+function WorldEventService.skipToHour(hour: number)
+	local t = Workspace:GetServerTimeNow() + timeOffset
+	local ahead = (hour - WorldClock.clockTime(t)) % 24
+	timeOffset += ahead / 24 * WorldClock.DayLength + 1
+end
+
+-- Studio testing: open a flash race right now at a random spot.
+function WorldEventService.flashNow()
+	local spot = WorldMap.FlashSpots[math.random(1, #WorldMap.FlashSpots)]
+	local realNow = Workspace:GetServerTimeNow()
+	RaceService.openSpecial({
+		key = `flash:dev:{realNow}`,
+		eventId = spot.eventId,
+		kind = "flash",
+		zone = spot.pos,
+		startsAt = realNow + 60,
+		name = `Flash: {spot.name}`,
+	})
+	for _, player in Players:GetPlayers() do
+		Net.Notify:FireClient(player, `[Dev] Flash race at {spot.name}, starts in 60s.`, "flash")
+	end
+end
+
+function WorldEventService.start()
+	task.spawn(function()
+		while true do
+			local ok, err = pcall(step)
+			if not ok then
+				warn("[WorldEventService]", err)
+			end
+			task.wait(1)
+		end
+	end)
+end
+
+return WorldEventService
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="StarterPlayer" referent="24">
+    <Properties>
+      <string name="Name">StarterPlayer</string>
+    </Properties>
+    <Item class="StarterPlayerScripts" referent="25">
+      <Properties>
+        <string name="Name">StarterPlayerScripts</string>
+      </Properties>
+      <Item class="Folder" referent="26">
+        <Properties>
+          <string name="Name">Client</string>
+        </Properties>
+        <Item class="ModuleScript" referent="27">
+          <Properties>
+            <string name="Name">Ambience</string>
+            <string name="Source"><![CDATA[-- Everything the player sees and hears around the car: engine notes that
+-- follow RPM for every nearby car, tire squeal, rain, map markers for places
+-- and events, and the next race checkpoint.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local EngineAudio = require(Shared:WaitForChild("EngineAudio"))
+local WorldMap = require(Shared:WaitForChild("WorldMap"))
+
+local Ambience = {}
+
+-- Upload looping sounds and paste their ids here. Empty = silent.
+local SOUNDS = {
+	tireSqueal = "",
+	rain = "",
+}
+
+local HEARING_RANGE = 300
+local player = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+
+---------------------------------------------------------------------------
+-- Engine and tire sounds
+---------------------------------------------------------------------------
+type CarAudio = { engine: Sound?, squeal: Sound?, lastSpeed: number }
+local carAudio: { [Model]: CarAudio } = {}
+
+local function makeSound(id: string, parent: Instance): Sound?
+	if id == "" then
+		return nil
+	end
+	local s = Instance.new("Sound")
+	s.SoundId = id
+	s.Looped = true
+	s.RollOffMaxDistance = HEARING_RANGE
+	s.Volume = 0
+	s.Parent = parent
+	s:Play()
+	return s
+end
+
+local function audioFor(car: Model): CarAudio?
+	local existing = carAudio[car]
+	if existing then
+		return existing
+	end
+	local chassis = car.PrimaryPart
+	local profile = EngineAudio.Profiles[car:GetAttribute("EngineSound") or "inline4"]
+	if not chassis or not profile then
+		return nil
+	end
+	local audio = {
+		engine = makeSound(profile.soundId, chassis),
+		squeal = makeSound(SOUNDS.tireSqueal, chassis),
+		lastSpeed = 0,
+	}
+	carAudio[car] = audio
+	return audio
+end
+
+local function stopAudio(car: Model)
+	local audio = carAudio[car]
+	if audio then
+		if audio.engine then
+			audio.engine:Destroy()
+		end
+		if audio.squeal then
+			audio.squeal:Destroy()
+		end
+		carAudio[car] = nil
+	end
+end
+
+-- Returns the local player's engine state for the speedometer.
+function Ambience.updateCars(dt: number, myCar: Model?): EngineAudio.EngineState?
+	local mine: EngineAudio.EngineState? = nil
+	local carsFolder = Workspace:FindFirstChild("Cars")
+	local camPos = camera.CFrame.Position
+
+	for car, _ in carAudio do
+		if not car.Parent or not car.PrimaryPart or (car.PrimaryPart.Position - camPos).Magnitude > HEARING_RANGE * 1.2 then
+			stopAudio(car)
+		end
+	end
+	if not carsFolder then
+		return nil
+	end
+
+	for _, car in carsFolder:GetChildren() do
+		local chassis = car:IsA("Model") and car.PrimaryPart
+		if not chassis or ((chassis.Position - camPos).Magnitude > HEARING_RANGE and car ~= myCar) then
+			continue
+		end
+		local audio = audioFor(car)
+		local profile = EngineAudio.Profiles[car:GetAttribute("EngineSound") or "inline4"]
+		if not audio or not profile then
+			continue
+		end
+		local vel = chassis.AssemblyLinearVelocity
+		local speed = Vector3.new(vel.X, 0, vel.Z).Magnitude
+		local throttle
+		if car == myCar then
+			local seat = car:FindFirstChild("DriveSeat") :: VehicleSeat?
+			throttle = if seat then seat.ThrottleFloat else 0
+		else
+			-- Other drivers: estimate throttle from how fast they are gaining speed.
+			throttle = math.clamp((speed - audio.lastSpeed) / math.max(dt, 1e-3) / 30, 0, 1)
+		end
+		audio.lastSpeed = speed
+
+		local state = EngineAudio.state(profile, speed, car:GetAttribute("TopSpeed") or 150, throttle, car:GetAttribute("HasTurbo"))
+		if audio.engine then
+			audio.engine.PlaybackSpeed = state.pitch
+			audio.engine.Volume = state.volume * (if Workspace:GetAttribute("Raining") then 0.85 else 1)
+		end
+		if audio.squeal then
+			local look = Vector3.new(chassis.CFrame.LookVector.X, 0, chassis.CFrame.LookVector.Z).Unit
+			local slip = if speed > 25 then 1 - math.abs(look:Dot(vel.Unit)) else 0
+			audio.squeal.Volume = math.clamp((slip - 0.08) * 4, 0, 0.8)
+		end
+		if car == myCar then
+			mine = state
+		end
+	end
+	return mine
+end
+
+---------------------------------------------------------------------------
+-- Rain
+---------------------------------------------------------------------------
+local rainPart = Instance.new("Part")
+rainPart.Name = "RainEmitter"
+rainPart.Anchored = true
+rainPart.CanCollide = false
+rainPart.CanQuery = false
+rainPart.Transparency = 1
+rainPart.Size = Vector3.new(120, 1, 120)
+local rain = Instance.new("ParticleEmitter")
+rain.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+rain.Color = ColorSequence.new(Color3.fromRGB(180, 200, 230))
+rain.Size = NumberSequence.new(0.12)
+rain.Transparency = NumberSequence.new(0.35)
+rain.Lifetime = NumberRange.new(1.2)
+rain.Speed = NumberRange.new(80)
+rain.EmissionDirection = Enum.NormalId.Bottom
+rain.Rate = 0
+rain.LightInfluence = 1
+rain.Parent = rainPart
+local rainSound = makeSound(SOUNDS.rain, rainPart)
+rainPart.Parent = Workspace
+
+function Ambience.updateWeather()
+	local raining = Workspace:GetAttribute("Raining") == true
+	rainPart.CFrame = CFrame.new(camera.CFrame.Position + Vector3.new(0, 45, 0))
+	rain.Rate = if raining then 900 else 0
+	if rainSound then
+		-- Rain sounds duller from inside the car.
+		local inCar = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		local seated = inCar and (inCar :: Humanoid).SeatPart ~= nil
+		rainSound.Volume = if raining then (if seated then 0.25 else 0.6) else 0
+	end
+end
+
+---------------------------------------------------------------------------
+-- Map markers
+---------------------------------------------------------------------------
+local markerFolder = Instance.new("Folder")
+markerFolder.Name = "Markers"
+markerFolder.Parent = Workspace
+
+local function marker(name: string, text: string, color: Color3, pos: Vector3, maxDistance: number?): BillboardGui
+	local anchor = Instance.new("Part")
+	anchor.Name = name
+	anchor.Anchored = true
+	anchor.CanCollide = false
+	anchor.CanQuery = false
+	anchor.CanTouch = false
+	anchor.Transparency = 1
+	anchor.Size = Vector3.one
+	anchor.Position = pos
+	anchor.Parent = markerFolder
+
+	local bb = Instance.new("BillboardGui")
+	bb.Size = UDim2.new(0, 200, 0, 36)
+	bb.AlwaysOnTop = true
+	bb.MaxDistance = maxDistance or 2500
+	bb.LightInfluence = 0
+	bb.Parent = anchor
+	local l = Instance.new("TextLabel")
+	l.Size = UDim2.fromScale(1, 1)
+	l.BackgroundTransparency = 1
+	l.Font = Enum.Font.GothamBlack
+	l.TextScaled = true
+	l.TextColor3 = color
+	l.TextStrokeTransparency = 0.3
+	l.Text = text
+	l.Parent = bb
+	return bb
+end
+
+local PLACE_COLORS = {
+	garage = Color3.fromRGB(255, 170, 40),
+	dealership = Color3.fromRGB(80, 170, 255),
+	tuning = Color3.fromRGB(255, 70, 90),
+	meet = Color3.fromRGB(170, 90, 255),
+	photo = Color3.fromRGB(90, 230, 160),
+}
+
+local flashMarker: BillboardGui? = nil
+local meetMarker: BillboardGui? = nil
+
+local function buildStaticMarkers()
+	for _, place in WorldMap.Places do
+		marker(`Place_{place.id}`, place.name, PLACE_COLORS[place.kind] or Color3.new(1, 1, 1), Vector3.new(place.pos.x, 30, place.pos.z))
+	end
+	for _, ev in WorldMap.Events do
+		marker(`Event_{ev.id}`, `{ev.name} ({ev.kind})`, Color3.fromRGB(255, 200, 40), Vector3.new(ev.start.x, 24, ev.start.z))
+	end
+	-- Discoveries only show up close, so they still feel like finds.
+	for _, d in WorldMap.Discoveries do
+		if d.kind == "speedTrap" or d.kind == "driftZone" then
+			marker(`Disc_{d.id}`, d.name, Color3.fromRGB(80, 190, 255), Vector3.new(d.pos.x, 16, d.pos.z), 260)
+		end
+	end
+end
+
+local function moveMarker(existing: BillboardGui?, name: string, text: string, color: Color3, pos: any): BillboardGui?
+	if not pos then
+		if existing then
+			(existing.Parent :: Instance):Destroy()
+		end
+		return nil
+	end
+	if existing then
+		(existing.Parent :: BasePart).Position = Vector3.new(pos.x, 40, pos.z);
+		(existing:FindFirstChildOfClass("TextLabel") :: TextLabel).Text = text
+		return existing
+	end
+	return marker(name, text, color, Vector3.new(pos.x, 40, pos.z), 5000)
+end
+
+function Ambience.setWorld(state: any)
+	flashMarker = moveMarker(flashMarker, "Flash", state.flash and `FLASH: {state.flash.event}` or "", Color3.fromRGB(255, 120, 40), state.flash and state.flash.pos)
+	meetMarker = moveMarker(meetMarker, "Meet", "MIDNIGHT MEET", Color3.fromRGB(180, 110, 255), state.meet and state.meet.pos)
+end
+
+---------------------------------------------------------------------------
+-- Race checkpoint
+---------------------------------------------------------------------------
+local function pillar(color: Color3, transparency: number): Part
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.Material = Enum.Material.Neon
+	p.Color = color
+	p.Transparency = transparency
+	p.Shape = Enum.PartType.Cylinder
+	p.Size = Vector3.new(60, 18, 18)
+	p.Parent = nil
+	return p
+end
+local nextPillar = pillar(Color3.fromRGB(255, 200, 40), 0.35)
+local afterPillar = pillar(Color3.fromRGB(255, 255, 255), 0.75)
+
+function Ambience.setCheckpoint(nextPt: any, afterPt: any, isFinish: boolean)
+	local up = CFrame.Angles(0, 0, math.rad(90))
+	if nextPt then
+		nextPillar.Color = if isFinish then Color3.fromRGB(80, 230, 120) else Color3.fromRGB(255, 200, 40)
+		nextPillar.CFrame = CFrame.new(nextPt.x, 30, nextPt.z) * up
+		nextPillar.Parent = Workspace
+	else
+		nextPillar.Parent = nil
+	end
+	if afterPt then
+		afterPillar.CFrame = CFrame.new(afterPt.x, 30, afterPt.z) * up
+		afterPillar.Parent = Workspace
+	else
+		afterPillar.Parent = nil
+	end
+end
+
+function Ambience.start()
+	buildStaticMarkers()
+end
+
+return Ambience
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="28">
+          <Properties>
+            <string name="Name">DriveController</string>
+            <string name="Source"><![CDATA[-- Drives the local player's car. The server gives the driver network
+-- ownership, so motor and servo changes made here are what move the car.
+--
+-- Controls: W/S or triggers throttle and brake, A/D steer, Left Shift (or
+-- gamepad B) handbrake, R resets a stuck car (or pulls a fresh one out at the
+-- garage). Space (jump) gets out of the car, as usual on Roblox.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+
+local DriveController = {}
+
+-- Hinge motors spin wheels around the car's lateral (+X) axis; with the car
+-- facing -Z, rolling forward is a negative angular velocity.
+local FORWARD_SIGN = -1
+local BRAKE_DECEL = 70 -- studs/s^2
+local ENGINE_BRAKE_DECEL = 6
+local REVERSE_FRACTION = 0.3
+
+local player = Players.LocalPlayer
+local handbrake = false
+
+type Wheel = { axle: HingeConstraint, driven: boolean, rear: boolean, steer: HingeConstraint? }
+local cachedCar: Model? = nil
+local wheels: { Wheel } = {}
+
+function DriveController.currentCar(): Model?
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local seat = humanoid and humanoid.SeatPart
+	if seat and seat:IsA("VehicleSeat") and seat.Name == "DriveSeat" and seat.Parent then
+		return seat.Parent :: Model
+	end
+	return nil
+end
+
+local function collectWheels(car: Model)
+	wheels = {}
+	for _, name in { "FL", "FR", "RL", "RR" } do
+		local wheel = car:FindFirstChild(name)
+		local axle = wheel and wheel:FindFirstChild("Axle") :: HingeConstraint?
+		if axle then
+			local knuckle = car:FindFirstChild(`{name}Knuckle`)
+			table.insert(wheels, {
+				axle = axle,
+				driven = axle:GetAttribute("Driven") == true,
+				rear = axle:GetAttribute("Rear") == true,
+				steer = knuckle and knuckle:FindFirstChild("Steer") :: HingeConstraint?,
+			})
+		end
+	end
+	cachedCar = car
+end
+
+local function drive(car: Model, seat: VehicleSeat)
+	if cachedCar ~= car then
+		collectWheels(car)
+	end
+	local chassis = car.PrimaryPart
+	if not chassis or chassis.Anchored then
+		return
+	end
+
+	local topSpeed = car:GetAttribute("TopSpeed") or 150
+	local ptw = car:GetAttribute("PowerToWeight") or 0.1
+	local handling = car:GetAttribute("Handling") or 0.6
+	local radius = car:GetAttribute("WheelRadius") or 1.4
+
+	local throttle = seat.ThrottleFloat
+	local steer = seat.SteerFloat
+	local forwardSpeed = chassis.AssemblyLinearVelocity:Dot(chassis.CFrame.LookVector)
+	local mass = chassis.AssemblyMass
+
+	local drivenCount = 0
+	for _, w in wheels do
+		if w.driven then
+			drivenCount += 1
+		end
+	end
+	drivenCount = math.max(drivenCount, 1)
+
+	local accel = 20 + 80 * math.clamp(ptw / 0.45, 0, 1.4)
+	local driveTorque = mass * accel * radius / drivenCount
+	local brakeTorque = mass * BRAKE_DECEL * radius / #wheels
+	local coastTorque = mass * ENGINE_BRAKE_DECEL * radius / #wheels
+
+	local braking = throttle ~= 0 and math.abs(forwardSpeed) > 3 and math.sign(throttle) ~= math.sign(forwardSpeed)
+	local targetSpeed = if throttle >= 0 then topSpeed * throttle else topSpeed * REVERSE_FRACTION * throttle
+
+	for _, w in wheels do
+		if handbrake and w.rear then
+			w.axle.AngularVelocity = 0
+			w.axle.MotorMaxTorque = brakeTorque * 2
+		elseif braking then
+			w.axle.AngularVelocity = 0
+			w.axle.MotorMaxTorque = brakeTorque
+		elseif throttle ~= 0 and w.driven then
+			w.axle.AngularVelocity = FORWARD_SIGN * targetSpeed / radius
+			w.axle.MotorMaxTorque = driveTorque
+		else
+			-- Coasting: let the wheel roll, with a little engine braking.
+			w.axle.AngularVelocity = FORWARD_SIGN * forwardSpeed / radius * 0.98
+			w.axle.MotorMaxTorque = coastTorque
+		end
+
+		if w.steer then
+			-- Less lock at speed keeps the car stable on the highway.
+			local maxAngle = 28 + 12 * handling
+			local angle = maxAngle / (1 + math.abs(forwardSpeed) / 70)
+			w.steer.TargetAngle = -steer * angle
+		end
+	end
+end
+
+function DriveController.start()
+	UserInputService.InputBegan:Connect(function(input, processed)
+		if processed then
+			return
+		end
+		if input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.ButtonB then
+			handbrake = true
+		elseif input.KeyCode == Enum.KeyCode.R or input.KeyCode == Enum.KeyCode.ButtonY then
+			Remotes.RespawnCar:FireServer()
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.ButtonB then
+			handbrake = false
+		end
+	end)
+
+	RunService.Heartbeat:Connect(function()
+		local car = DriveController.currentCar()
+		if car then
+			drive(car, car:FindFirstChild("DriveSeat") :: VehicleSeat)
+		else
+			cachedCar = nil
+		end
+	end)
+end
+
+function DriveController.setHandbrake(on: boolean)
+	handbrake = on
+end
+
+return DriveController
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="29">
+          <Properties>
+            <string name="Name">Hud</string>
+            <string name="Source"><![CDATA[-- On-screen HUD built in code: cash and street title, speedometer, race info,
+-- the world panel (flash races, midnight meet clue, weather), toasts,
+-- challenge invites and race results.
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Records = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Records"))
+
+local Hud = {}
+
+local player = Players.LocalPlayer
+local gui = Instance.new("ScreenGui")
+gui.Name = "Hud"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local ACCENT = {
+	info = Color3.fromRGB(230, 230, 235),
+	error = Color3.fromRGB(255, 110, 110),
+	race = Color3.fromRGB(255, 200, 40),
+	flash = Color3.fromRGB(255, 120, 40),
+	meet = Color3.fromRGB(180, 110, 255),
+	discovery = Color3.fromRGB(90, 230, 160),
+	trap = Color3.fromRGB(80, 190, 255),
+}
+
+local function frame(props: { [string]: any }): Frame
+	local f = Instance.new("Frame")
+	f.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+	f.BackgroundTransparency = 0.25
+	f.BorderSizePixel = 0
+	for k, v in props do
+		(f :: any)[k] = v
+	end
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = f
+	return f
+end
+
+local function label(props: { [string]: any }): TextLabel
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Font = Enum.Font.GothamMedium
+	l.TextColor3 = Color3.new(1, 1, 1)
+	l.TextScaled = true
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	for k, v in props do
+		(l :: any)[k] = v
+	end
+	return l
+end
+
+local function button(parent: Instance, text: string, pos: UDim2, size: UDim2, color: Color3, onClick: () -> ()): TextButton
+	local b = Instance.new("TextButton")
+	b.Text = text
+	b.Font = Enum.Font.GothamBold
+	b.TextScaled = true
+	b.TextColor3 = Color3.new(1, 1, 1)
+	b.BackgroundColor3 = color
+	b.BorderSizePixel = 0
+	b.Position = pos
+	b.Size = size
+	b.Parent = parent
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = b
+	b.Activated:Connect(onClick)
+	return b
+end
+Hud.button = button
+Hud.frame = frame
+Hud.label = label
+Hud.gui = gui
+
+-- Cash and title --------------------------------------------------------------
+local wallet = frame({ Position = UDim2.new(0, 12, 0, 12), Size = UDim2.new(0, 260, 0, 64), Parent = gui })
+local cashLabel = label({ Position = UDim2.new(0, 12, 0, 6), Size = UDim2.new(1, -24, 0, 30), Font = Enum.Font.GothamBlack, Text = "$0", Parent = wallet })
+local titleLabel = label({ Position = UDim2.new(0, 12, 0, 38), Size = UDim2.new(1, -24, 0, 18), TextColor3 = Color3.fromRGB(190, 190, 200), Text = "Newcomer", Parent = wallet })
+
+-- Speedometer ----------------------------------------------------------------
+local speedo = frame({ AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -16, 1, -16), Size = UDim2.new(0, 190, 0, 96), Parent = gui })
+speedo.Visible = false
+local speedLabel = label({ Position = UDim2.new(0, 12, 0, 4), Size = UDim2.new(0.62, 0, 0, 56), Font = Enum.Font.GothamBlack, Text = "0", Parent = speedo })
+label({ Position = UDim2.new(0.62, 0, 0, 30), Size = UDim2.new(0.35, 0, 0, 22), Text = "MPH", TextColor3 = Color3.fromRGB(160, 160, 170), Parent = speedo })
+local gearLabel = label({ Position = UDim2.new(0.62, 0, 0, 6), Size = UDim2.new(0.35, 0, 0, 24), Font = Enum.Font.GothamBlack, Text = "1", TextColor3 = ACCENT.race, Parent = speedo })
+local classLabel = label({ Position = UDim2.new(0, 12, 0, 64), Size = UDim2.new(1, -24, 0, 22), Text = "", TextColor3 = Color3.fromRGB(190, 190, 200), Parent = speedo })
+
+function Hud.setSpeedo(visible: boolean, mph: number?, gear: number?, className: string?, rating: number?, carName: string?)
+	speedo.Visible = visible
+	if visible then
+		speedLabel.Text = tostring(mph or 0)
+		gearLabel.Text = tostring(gear or 1)
+		classLabel.Text = `{carName or ""}  {className or "?"} {rating or ""}`
+	end
+end
+
+-- Race panel -----------------------------------------------------------------
+local racePanel = frame({ AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 12), Size = UDim2.new(0, 360, 0, 92), Parent = gui })
+racePanel.Visible = false
+local raceTitle = label({ Position = UDim2.new(0, 12, 0, 6), Size = UDim2.new(1, -24, 0, 22), Font = Enum.Font.GothamBold, TextColor3 = ACCENT.race, Parent = racePanel })
+local raceMain = label({ Position = UDim2.new(0, 12, 0, 30), Size = UDim2.new(1, -24, 0, 34), Font = Enum.Font.GothamBlack, Parent = racePanel })
+local raceSub = label({ Position = UDim2.new(0, 12, 0, 66), Size = UDim2.new(1, -24, 0, 18), TextColor3 = Color3.fromRGB(190, 190, 200), Parent = racePanel })
+
+local raceState: any = nil
+
+function Hud.setRace(state: any)
+	raceState = state
+	if state and state.phase == "results" then
+		Hud.showResults(state)
+		raceState = nil
+	end
+end
+
+-- Called every frame so timers stay smooth between server updates.
+function Hud.updateRace()
+	local s = raceState
+	racePanel.Visible = s ~= nil
+	if not s then
+		return
+	end
+	local t = Workspace:GetServerTimeNow()
+	raceTitle.Text = s.name
+	if s.phase == "lobby" then
+		local left = math.max(0, math.ceil(s.startsAt - t))
+		raceMain.Text = `Starting in {left}s`
+		raceSub.Text = `{s.drivers} driver(s)  -  Class {s.classCap or "open"}  -  stay in the zone`
+	elseif s.phase == "racing" then
+		if t < s.startTime then
+			raceMain.Text = tostring(math.ceil(s.startTime - t))
+		elseif s.finished then
+			raceMain.Text = `Finished  {Records.formatTime(s.finished)}`
+		else
+			raceMain.Text = `P{s.place}/{s.field}   {Records.formatTime(t - s.startTime)}`
+		end
+		local lapText = if s.laps > 1 then `Lap {s.lap}/{s.laps}  -  ` else ""
+		local cpText = if s.isFinishNext then "Finish line next" else `Checkpoint {s.checkpoint}/{s.checkpoints}`
+		raceSub.Text = lapText .. cpText
+	end
+end
+
+function Hud.raceTarget(): (any, any, boolean)
+	local s = raceState
+	if s and s.phase == "racing" and not s.finished and not s.dnf then
+		return s.next, s.after, s.isFinishNext
+	end
+	return nil, nil, false
+end
+
+-- Results --------------------------------------------------------------------
+local results = frame({ AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.45), Size = UDim2.new(0, 380, 0, 330), Parent = gui })
+results.Visible = false
+local resultsText = label({ Position = UDim2.new(0, 16, 0, 12), Size = UDim2.new(1, -32, 1, -64), TextScaled = false, TextSize = 18, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, Parent = results })
+button(results, "Continue", UDim2.new(0.5, -70, 1, -46), UDim2.new(0, 140, 0, 34), Color3.fromRGB(60, 60, 70), function()
+	results.Visible = false
+end)
+
+function Hud.showResults(s: any)
+	local lines = { `<b>{s.name}</b>`, "" }
+	for _, r in s.results do
+		local time = if r.dnf then "DNF" elseif r.time then Records.formatTime(r.time) else ""
+		table.insert(lines, `{r.place}. {r.name}   {time}`)
+	end
+	table.insert(lines, "")
+	table.insert(lines, `+${s.cash}   +{s.rep} rep in {s.district}`)
+	if s.recordRank then
+		table.insert(lines, `New local record: #{s.recordRank}`)
+	end
+	resultsText.RichText = true
+	resultsText.Text = table.concat(lines, "\n")
+	results.Visible = true
+	task.delay(12, function()
+		results.Visible = false
+	end)
+end
+
+-- World panel ----------------------------------------------------------------
+local worldPanel = frame({ AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 12), Size = UDim2.new(0, 280, 0, 112), Parent = gui })
+local flashLabel = label({ Position = UDim2.new(0, 12, 0, 8), Size = UDim2.new(1, -24, 0, 30), TextScaled = false, TextSize = 14, TextWrapped = true, TextColor3 = ACCENT.flash, Parent = worldPanel })
+local meetLabel = label({ Position = UDim2.new(0, 12, 0, 40), Size = UDim2.new(1, -24, 0, 46), TextScaled = false, TextSize = 14, TextWrapped = true, TextColor3 = ACCENT.meet, Parent = worldPanel })
+local weatherLabel = label({ Position = UDim2.new(0, 12, 0, 88), Size = UDim2.new(1, -24, 0, 18), TextScaled = false, TextSize = 13, TextColor3 = Color3.fromRGB(170, 170, 180), Parent = worldPanel })
+
+local worldState: any = nil
+function Hud.setWorld(state: any)
+	worldState = state
+end
+
+function Hud.updateWorld()
+	local s = worldState
+	if not s then
+		return
+	end
+	local t = Workspace:GetServerTimeNow()
+	if s.flash and t < s.flash.closesAt then
+		flashLabel.Text = `FLASH RACE at {s.flash.name} - {s.flash.event} - {math.ceil(s.flash.closesAt - t)}s`
+	else
+		flashLabel.Text = "No flash race right now. Keep cruising."
+	end
+	if s.meet.phase == "open" then
+		meetLabel.Text = `MIDNIGHT MEET is live at {s.meet.spotName}. Featured: {s.meet.featured}`
+	elseif s.meet.phase == "clue" then
+		meetLabel.Text = `Tonight's meet clue: "{s.meet.clue}"`
+	else
+		meetLabel.Text = "The midnight meet clue drops at dusk."
+	end
+	local clock = game:GetService("Lighting").ClockTime
+	weatherLabel.Text = string.format("%02d:%02d  %s", math.floor(clock), math.floor((clock % 1) * 60), if s.raining then "Rain" else "Clear")
+end
+
+-- Profile --------------------------------------------------------------------
+function Hud.setProfile(p: any)
+	cashLabel.Text = `${p.cash}`
+	titleLabel.Text = p.title
+end
+
+-- Toasts ---------------------------------------------------------------------
+local toastList = Instance.new("Frame")
+toastList.BackgroundTransparency = 1
+toastList.AnchorPoint = Vector2.new(0.5, 0)
+toastList.Position = UDim2.new(0.5, 0, 0, 116)
+toastList.Size = UDim2.new(0, 460, 0, 200)
+toastList.Parent = gui
+local layout = Instance.new("UIListLayout")
+layout.Padding = UDim.new(0, 6)
+layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+layout.Parent = toastList
+
+function Hud.notify(text: string, kind: string?)
+	local toast = frame({ Size = UDim2.new(1, 0, 0, 34), Parent = toastList })
+	label({
+		Position = UDim2.new(0, 12, 0, 0),
+		Size = UDim2.new(1, -24, 1, 0),
+		TextScaled = false,
+		TextSize = 16,
+		Font = Enum.Font.GothamBold,
+		TextColor3 = ACCENT[kind or "info"] or ACCENT.info,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Text = text,
+		Parent = toast,
+	})
+	task.delay(5, function()
+		toast:Destroy()
+	end)
+end
+
+-- Challenges -----------------------------------------------------------------
+local invite = frame({ AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -130), Size = UDim2.new(0, 380, 0, 96), Parent = gui })
+invite.Visible = false
+local inviteText = label({ Position = UDim2.new(0, 12, 0, 8), Size = UDim2.new(1, -24, 0, 40), TextScaled = false, TextSize = 16, TextWrapped = true, Parent = invite })
+local inviteReply: ((boolean) -> ())? = nil
+button(invite, "Race (Y)", UDim2.new(0, 12, 1, -42), UDim2.new(0.5, -18, 0, 32), Color3.fromRGB(40, 150, 80), function()
+	Hud.answerInvite(true)
+end)
+button(invite, "Pass (N)", UDim2.new(0.5, 6, 1, -42), UDim2.new(0.5, -18, 0, 32), Color3.fromRGB(120, 50, 55), function()
+	Hud.answerInvite(false)
+end)
+
+function Hud.showInvite(fromName: string, destination: string, reply: (boolean) -> ())
+	inviteText.Text = `{fromName} challenges you: first to {destination}.`
+	inviteReply = reply
+	invite.Visible = true
+	task.delay(18, function()
+		if inviteReply == reply then
+			Hud.answerInvite(false)
+		end
+	end)
+end
+
+function Hud.answerInvite(accepted: boolean)
+	local reply = inviteReply
+	inviteReply = nil
+	invite.Visible = false
+	if reply then
+		reply(accepted)
+	end
+end
+
+function Hud.hasInvite(): boolean
+	return inviteReply ~= nil
+end
+
+-- Controls hint --------------------------------------------------------------
+local hint = label({
+	AnchorPoint = Vector2.new(0, 1),
+	Position = UDim2.new(0, 12, 1, -12),
+	Size = UDim2.new(0, 520, 0, 18),
+	TextScaled = false,
+	TextSize = 13,
+	TextColor3 = Color3.fromRGB(200, 200, 210),
+	TextStrokeTransparency = 0.6,
+	Text = "WASD drive  -  Shift handbrake  -  R reset car  -  C challenge nearby driver  -  E at shops",
+	Parent = gui,
+})
+
+-- Touch controls -------------------------------------------------------------
+local touchPanel: Frame? = nil
+
+type TouchActions = { handbrake: (boolean) -> (), reset: () -> (), challenge: () -> () }
+
+function Hud.setTouchControls(actions: TouchActions)
+	hint.Visible = false
+	-- Stack the speedometer's column: buttons sit just above it on the right.
+	local panel = Instance.new("Frame")
+	panel.BackgroundTransparency = 1
+	panel.AnchorPoint = Vector2.new(1, 1)
+	panel.Position = UDim2.new(1, -16, 1, -122)
+	panel.Size = UDim2.new(0, 190, 0, 150)
+	panel.Visible = false
+	panel.Parent = gui
+	touchPanel = panel
+
+	local brake = button(panel, "DRIFT", UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 0, 70), Color3.fromRGB(170, 60, 40), function() end)
+	brake.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.Touch then
+			actions.handbrake(true)
+		end
+	end)
+	brake.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.Touch then
+			actions.handbrake(false)
+		end
+	end)
+	button(panel, "RESET", UDim2.new(0, 0, 0, 80), UDim2.new(0.5, -4, 0, 60), Color3.fromRGB(60, 60, 70), actions.reset)
+	button(panel, "RACE", UDim2.new(0.5, 4, 0, 80), UDim2.new(0.5, -4, 0, 60), Color3.fromRGB(40, 110, 200), actions.challenge)
+end
+
+-- Touch buttons only show while driving.
+function Hud.setDriving(driving: boolean)
+	if touchPanel then
+		touchPanel.Visible = driving
+	end
+end
+
+return Hud
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="LocalScript" referent="30">
+          <Properties>
+            <string name="Name">Main</string>
+            <string name="Source"><![CDATA[-- Client entry point: wires remotes to the HUD, menus, driving and ambience.
+
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+
+local Ambience = require(script.Parent.Ambience)
+local DriveController = require(script.Parent.DriveController)
+local Hud = require(script.Parent.Hud)
+local ShopMenu = require(script.Parent.ShopMenu)
+
+local STUDS_TO_MPH = 0.28 * 2.237
+local CHALLENGE_RANGE = 150
+local player = Players.LocalPlayer
+
+DriveController.start()
+Ambience.start()
+
+Remotes.ProfileUpdated.OnClientEvent:Connect(function(profile)
+	Hud.setProfile(profile)
+	ShopMenu.setProfile(profile)
+end)
+Remotes.Notify.OnClientEvent:Connect(Hud.notify)
+Remotes.RaceState.OnClientEvent:Connect(Hud.setRace)
+Remotes.OpenShop.OnClientEvent:Connect(ShopMenu.open)
+
+Remotes.ChallengeReceived.OnClientEvent:Connect(function(fromUserId, fromName, destination)
+	Hud.showInvite(fromName, destination, function(accepted)
+		Remotes.ChallengeReply:FireServer(fromUserId, accepted)
+	end)
+end)
+
+local function applyWorldState()
+	local raw = ReplicatedStorage:GetAttribute("WorldState")
+	if type(raw) == "string" then
+		local ok, state = pcall(HttpService.JSONDecode, HttpService, raw)
+		if ok then
+			Hud.setWorld(state)
+			Ambience.setWorld(state)
+		end
+	end
+end
+ReplicatedStorage:GetAttributeChangedSignal("WorldState"):Connect(applyWorldState)
+applyWorldState()
+
+-- Challenge the closest other driver.
+local function challengeNearest()
+	local myCar = DriveController.currentCar()
+	local cars = Workspace:FindFirstChild("Cars")
+	if not myCar or not myCar.PrimaryPart or not cars then
+		Hud.notify("Get in your car to challenge someone.", "error")
+		return
+	end
+	local best, bestDist = nil, CHALLENGE_RANGE
+	for _, car in cars:GetChildren() do
+		local owner = car:GetAttribute("OwnerUserId")
+		if car ~= myCar and owner ~= player.UserId and car.PrimaryPart then
+			local d = (car.PrimaryPart.Position - myCar.PrimaryPart.Position).Magnitude
+			if d < bestDist then
+				best, bestDist = owner, d
+			end
+		end
+	end
+	if best then
+		Remotes.Challenge:FireServer(best)
+	else
+		Hud.notify("No other drivers close enough.", "error")
+	end
+end
+
+-- Studio-only test keys (the server ignores them on live servers).
+local DEV_KEYS = {
+	[Enum.KeyCode.F6] = "dusk",
+	[Enum.KeyCode.F7] = "meet",
+	[Enum.KeyCode.F8] = "flash",
+	[Enum.KeyCode.F9] = "cash",
+}
+local isStudio = RunService:IsStudio()
+if isStudio then
+	Hud.notify("Studio test keys: F6 dusk, F7 midnight meet, F8 flash race, F9 +$50k", "info")
+end
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed then
+		return
+	end
+	if isStudio and DEV_KEYS[input.KeyCode] then
+		Remotes.Dev:FireServer(DEV_KEYS[input.KeyCode])
+	elseif input.KeyCode == Enum.KeyCode.C or input.KeyCode == Enum.KeyCode.DPadUp then
+		challengeNearest()
+	elseif Hud.hasInvite() and input.KeyCode == Enum.KeyCode.Y then
+		Hud.answerInvite(true)
+	elseif Hud.hasInvite() and input.KeyCode == Enum.KeyCode.N then
+		Hud.answerInvite(false)
+	end
+end)
+
+-- Touch screens get on-screen buttons for everything that isn't steering.
+-- (The default Roblox thumbstick already drives the VehicleSeat.)
+if UserInputService.TouchEnabled then
+	Hud.setTouchControls({
+		handbrake = DriveController.setHandbrake,
+		reset = function()
+			Remotes.RespawnCar:FireServer()
+		end,
+		challenge = challengeNearest,
+	})
+end
+
+RunService.RenderStepped:Connect(function(dt)
+	local car = DriveController.currentCar()
+	local engine = Ambience.updateCars(dt, car)
+	if car and car.PrimaryPart then
+		local vel = car.PrimaryPart.AssemblyLinearVelocity
+		local mph = math.floor(Vector3.new(vel.X, 0, vel.Z).Magnitude * STUDS_TO_MPH + 0.5)
+		Hud.setDriving(true)
+		Hud.setSpeedo(true, mph, engine and engine.gear, car:GetAttribute("Class"), car:GetAttribute("Rating"), car:GetAttribute("CarName"))
+	else
+		Hud.setDriving(false)
+		Hud.setSpeedo(false)
+	end
+	Hud.updateRace()
+	Hud.updateWorld()
+	Ambience.updateWeather()
+	Ambience.setCheckpoint(Hud.raceTarget())
+end)
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="31">
+          <Properties>
+            <string name="Name">ShopMenu</string>
+            <string name="Source"><![CDATA[-- Menus for the physical shops: the dealership sells cars, the tuning shop
+-- sells and fits parts, and your garage switches cars, expands bays and
+-- manages saved builds (street / drag / drift / track) and paint.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local CarCatalog = require(Shared:WaitForChild("CarCatalog"))
+local Performance = require(Shared:WaitForChild("Performance"))
+local PlayerProfile = require(Shared:WaitForChild("PlayerProfile"))
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+
+local Hud = require(script.Parent.Hud)
+
+local ShopMenu = {}
+
+local PAINTS = {
+	{ 200, 200, 205 },
+	{ 20, 20, 24 },
+	{ 200, 30, 40 },
+	{ 250, 140, 20 },
+	{ 245, 210, 40 },
+	{ 40, 170, 80 },
+	{ 30, 110, 220 },
+	{ 140, 60, 200 },
+}
+
+local profile: any = nil
+local openKind: string? = nil
+
+local panel = Hud.frame({ AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 520, 0, 460), Parent = Hud.gui })
+panel.Visible = false
+local title = Hud.label({ Position = UDim2.new(0, 16, 0, 10), Size = UDim2.new(1, -80, 0, 30), Font = Enum.Font.GothamBlack, Parent = panel })
+Hud.button(panel, "X", UDim2.new(1, -46, 0, 10), UDim2.new(0, 34, 0, 30), Color3.fromRGB(90, 40, 45), function()
+	ShopMenu.close()
+end)
+local list = Instance.new("ScrollingFrame")
+list.Position = UDim2.new(0, 12, 0, 50)
+list.Size = UDim2.new(1, -24, 1, -62)
+list.BackgroundTransparency = 1
+list.BorderSizePixel = 0
+list.ScrollBarThickness = 6
+list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+list.CanvasSize = UDim2.new()
+list.Parent = panel
+local layout = Instance.new("UIListLayout")
+layout.Padding = UDim.new(0, 6)
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Parent = list
+
+local order = 0
+local function row(text: string, actionText: string?, color: Color3?, onClick: (() -> ())?)
+	order += 1
+	local r = Instance.new("Frame")
+	r.BackgroundColor3 = Color3.fromRGB(30, 30, 36)
+	r.BorderSizePixel = 0
+	r.Size = UDim2.new(1, -10, 0, 40)
+	r.LayoutOrder = order
+	r.Parent = list
+	Hud.label({ Position = UDim2.new(0, 10, 0, 0), Size = UDim2.new(1, -140, 1, 0), TextScaled = false, TextSize = 15, TextWrapped = true, Text = text, Parent = r })
+	if actionText and onClick then
+		Hud.button(r, actionText, UDim2.new(1, -120, 0, 5), UDim2.new(0, 112, 0, 30), color or Color3.fromRGB(50, 110, 200), onClick)
+	end
+end
+
+local function header(text: string)
+	order += 1
+	Hud.label({ Size = UDim2.new(1, -10, 0, 26), LayoutOrder = order, Font = Enum.Font.GothamBold, TextColor3 = Color3.fromRGB(255, 200, 40), Text = text, Parent = list })
+end
+
+local function act(...)
+	Remotes.ShopAction:FireServer(...)
+end
+
+local function activeCar(): any
+	return profile and profile.cars[profile.activeCar]
+end
+
+local function partsSection(canBuy: boolean)
+	local car = activeCar()
+	if not car then
+		return
+	end
+	header(`Installed on {car.name} ({car.class} {car.rating})`)
+	if #car.parts == 0 then
+		row("Stock - nothing installed yet.")
+	end
+	for _, partId in car.parts do
+		local part = CarCatalog.getPart(partId)
+		row(part and part.name or partId, "Remove", Color3.fromRGB(110, 60, 60), function()
+			act("remove", partId)
+		end)
+	end
+
+	header("Your spare parts")
+	local any = false
+	for partId, count in profile.inventory do
+		if count > 0 then
+			any = true
+			local part = CarCatalog.getPart(partId)
+			local rating, class = Performance.forBuild(car.carId, (function()
+				local test = table.clone(car.parts)
+				table.insert(test, 1, partId) -- new part wins its slot
+				return test
+			end)())
+			row(`{part and part.name or partId} x{count}  ->  {class} {rating}`, "Install", nil, function()
+				act("install", partId)
+			end)
+		end
+	end
+	if not any then
+		row("No spare parts. Find stashes around the city or buy some.")
+	end
+
+	if canBuy then
+		header("Parts for sale")
+		local ids = {}
+		for id in CarCatalog.Parts do
+			table.insert(ids, id)
+		end
+		table.sort(ids, function(a, b)
+			return CarCatalog.Parts[a].price < CarCatalog.Parts[b].price
+		end)
+		for _, id in ids do
+			local part = CarCatalog.Parts[id]
+			row(`{part.name} ({part.slot})  ${part.price}`, "Buy", Color3.fromRGB(40, 140, 80), function()
+				act("buyPart", id)
+			end)
+		end
+	end
+end
+
+local function buildsSection()
+	local car = activeCar()
+	if not car then
+		return
+	end
+	header("Saved builds")
+	for _, slot in PlayerProfile.BuildSlots do
+		local saved = table.find(car.builds, slot) ~= nil
+		row(`{slot:upper()} build {if saved then "(saved)" else "(empty)"}`, "Save current", Color3.fromRGB(70, 70, 90), function()
+			act("saveBuild", slot)
+		end)
+		if saved then
+			row(`   Switch to {slot} setup`, "Load", nil, function()
+				act("loadBuild", slot)
+			end)
+		end
+	end
+end
+
+local function paintSection()
+	header("Paint")
+	for i, c in PAINTS do
+		row(`Colour {i}`, "Paint", Color3.fromRGB(c[1], c[2], c[3]), function()
+			act("paint", c[1], c[2], c[3])
+		end)
+	end
+end
+
+local function render()
+	for _, child in list:GetChildren() do
+		if not child:IsA("UIListLayout") then
+			child:Destroy()
+		end
+	end
+	order = 0
+	if not profile or not openKind then
+		return
+	end
+
+	if openKind == "dealership" then
+		title.Text = `Crown Motors  -  ${profile.cash}`
+		header(`Garage bays used: {#profile.cars}/{profile.garageBays}`)
+		local ids = {}
+		for id in CarCatalog.Cars do
+			table.insert(ids, id)
+		end
+		table.sort(ids, function(a, b)
+			return CarCatalog.Cars[a].price < CarCatalog.Cars[b].price
+		end)
+		for _, id in ids do
+			local car = CarCatalog.Cars[id]
+			local rating, class = Performance.forBuild(id, {})
+			row(`{car.name} - {car.archetype}\n{class} {rating}  -  {car.stats.drivetrain}  -  ${car.price}`, "Buy", Color3.fromRGB(40, 140, 80), function()
+				act("buyCar", id)
+			end)
+		end
+	elseif openKind == "tuning" then
+		title.Text = `Torque Lab Tuning  -  ${profile.cash}`
+		partsSection(true)
+		buildsSection()
+		paintSection()
+	elseif openKind == "garage" then
+		title.Text = `Your Garage  -  ${profile.cash}`
+		header(`Cars ({#profile.cars}/{profile.garageBays} bays)`)
+		for i, car in profile.cars do
+			local isActive = i == profile.activeCar
+			row(`{car.name}  {car.class} {car.rating}{if isActive then "  (driving)" else ""}`, if isActive then nil else "Take out", nil, if isActive
+				then nil
+				else function()
+					act("select", i)
+				end)
+		end
+		if profile.nextBayPrice then
+			row(`Add a garage bay`, `$ {profile.nextBayPrice}`, Color3.fromRGB(40, 140, 80), function()
+				act("buyBay")
+			end)
+		end
+		header("Street reputation")
+		for _, r in profile.rep do
+			row(`{r.name}: {r.tier} ({r.rep})`)
+		end
+		row(`Races {profile.stats.races}  -  Wins {profile.stats.wins}`)
+		partsSection(false)
+		buildsSection()
+		paintSection()
+	end
+end
+
+function ShopMenu.open(kind: string)
+	openKind = kind
+	panel.Visible = true
+	render()
+end
+
+function ShopMenu.close()
+	openKind = nil
+	panel.Visible = false
+end
+
+function ShopMenu.setProfile(p: any)
+	profile = p
+	if openKind then
+		render()
+	end
+end
+
+return ShopMenu
+]]></string>
+          </Properties>
+        </Item>
+      </Item>
+    </Item>
+  </Item>
+</roblox>

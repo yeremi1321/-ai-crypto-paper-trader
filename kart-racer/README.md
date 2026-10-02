@@ -26,6 +26,12 @@ filling the empty spots of the 8-kart grid.
 
 ## Run it
 
+**Easiest:** download `KartRacer.rbxlx` from this folder and double-click it (or use
+File → Open in Roblox Studio), then press Play. It is a snapshot built from
+`src/` with `rojo build . -o KartRacer.rbxlx`, so rebuild it after changing code.
+
+**For development:**
+
 1. Install [Rojo](https://rojo.space) and the Rojo Studio plugin.
 2. From this folder: `rojo serve`, then connect from Studio in an empty Baseplate place.
 3. Press Play, pick a kart and press **READY**. Solo play starts straight away with 7 CPU drivers.

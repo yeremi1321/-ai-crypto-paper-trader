@@ -11,6 +11,12 @@ flash races, the midnight meet, challenges, reputation and discoveries.
 
 ## Run it
 
+**Easiest:** download `OpenWorldRacer.rbxlx` from this folder and double-click it (or use
+File → Open in Roblox Studio), then press Play. It is a snapshot built from
+`src/` with `rojo build . -o OpenWorldRacer.rbxlx`, so rebuild it after changing code.
+
+**For development:**
+
 1. Install [Rojo](https://rojo.space) and the Rojo Studio plugin.
 2. From this folder: `rojo serve`, then connect from Studio in an empty Baseplate place.
 3. Press Play. The map is generated at startup by `WorldBuilder`, so there is nothing to build by hand.

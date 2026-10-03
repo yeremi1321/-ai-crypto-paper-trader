@@ -38,6 +38,9 @@ export type TrackDef = {
 	tunnels: { { from: number, to: number, style: string } }?,
 	-- Big themed landmarks placed beside the road.
 	setPieces: { { kind: string, t: number, side: number, gap: number? } }?,
+	-- Lakes the road may cross on a bridge (realistic themes with terrain).
+	-- Same units as the control points: scaled by `scale`.
+	lakes: { { x: number, z: number, r: number } }?,
 }
 
 export type Zone = { kind: string, t: number, length: number, offset: number?, width: number?, period: number?, duty: number? }

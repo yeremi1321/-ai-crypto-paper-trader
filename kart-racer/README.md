@@ -44,6 +44,10 @@ and awards → **back to the lobby**.
 - Proximity sliding doors; departure doors unlock only when the server lights
   them and pulse gold while lit
 - Player kart displays, podium celebration, and six hidden golden tokens
+- Realistic finish: concrete walls, a dark marble floor, brushed-metal trim,
+  fabric banners and glowing light fixtures
+- A panoramic window behind spawn looks out over a real terrain lake, pine
+  trees, grassy hills and snow-capped mountains under volumetric clouds
 
 `LobbyScreens` draws the six chamber SurfaceGuis in each player's PlayerGui and animates
 local doors. Server round state drives all displays; clients do not choose
@@ -77,11 +81,33 @@ walking camera uses Invisicam with an 80-stud maximum zoom.
 
 | Track | Feature |
 | --- | --- |
+| 🏔️ Pinewater Pass | Mountain-lake circuit: a long bridge over the water, a climb through pine forest, snow-capped peaks all round |
 | 🔥 Emberstone Citadel | Cobblestone gates, stone arches, battlement towers, lava canals, warm torches, basalt spires, raised bridge and ramp |
 | 🧸 Midnight Toy Room | Ruler bridge, block ramps, a dash under the bed, toy robot and train crossings, corner shortcut |
 | 🍳 Kitchen Chaos | Toaster launch onto a countertop shelf that bridges the start, conveyors, spatula ramps, syrup, cutting-board shortcut |
 | 🐞 Backyard Bug Rally | Hose tunnel, flowerpot jumps, crossing beetles, sprinklers that turn the dirt slippery, hollow-log shortcut |
-| 🌳 Sunny Loop / 🏜️ Canyon Climb / 🌃 Neon Eight | Earlier tracks: fast corners, hills, figure-eight bridge |
+| 🌳 Sunny Loop | Fast countryside corners between grassy hills and two lakes, with snowy mountains on the horizon |
+| 🏜️ Canyon Climb | Desert hills on earth banks, banded sandstone mesas, dunes and an oasis |
+| 🌃 Neon Eight | Night-city figure-eight with a bridge |
+
+### Realistic tracks
+
+Pinewater Pass, Sunny Loop, Canyon Climb, Backyard Bug Rally and Emberstone
+Citadel are built on **Roblox Terrain**: textured grass, sand, rock and snow,
+lakes of real water with sandy shores, hills, mesas and distant mountains.
+Raised road sits on earth banks instead of floating, and trees and rocks
+stand on the land. Lighting adds soft shadows, sky reflections (PBR) and
+volumetric clouds. The toy room, kitchen and neon city stay stylised on
+purpose.
+
+### Roads
+
+Each road is one continuous cross-section built from the same frames:
+- a solid asphalt slab made of triangles, so curves and hills have no gaps,
+  steps or flickering overlaps;
+- red-and-white curbs on corners, painted edge lines and a dashed centre line;
+- shoulders, or the terrain itself as the verge;
+- concrete jersey barriers laid end to end, with gaps only for shortcuts.
 
 Shortcuts are skill-based (narrow gaps in the wall) and can never skip a lap
 checkpoint.
@@ -137,6 +163,8 @@ src/shared/    pure game rules, tested outside Roblox with Lune
   KartPhysics  handling, drift, turbos, slipstream, tricks, surfaces
   Track        centreline, projection, laps, zones, crossers, shortcuts
   Tracks       every track and theme; Scenery = where props go
+  RoadGeometry the road's cross-section frames (shared by builder and tests)
+  Landscape    plans hills, lakes, mountains, mesas and road banks
   Items        item list and position-weighted odds
   Voting       options, tally, winner
   Rewards      coins, awards, challenges, mastery badges
@@ -151,7 +179,8 @@ src/server/
   RaceService     one race: grid, laps, respawns, CPUs, crossers, results
   ItemService     item boxes and all six items
   DataService     saving with retries and safe failure
-  TrackBuilder / FortressBuilder / Landmarks / Props / LobbyBuilder   world building
+  TrackBuilder / RoadSurface / TerrainBuilder / FortressBuilder /
+  Landmarks / Props / LobbyBuilder   world building
 src/client/
   KartController  your kart, camera, input
   KartVisuals     lean, wheels, character animations
@@ -162,7 +191,7 @@ src/client/
 ## Tests
 
 ```sh
-lune run tests/run      # 82 tests, including an 8-CPU race on every track
+lune run tests/run      # 90 tests, including an 8-CPU race on every track
 lune run tests/syntax   # every file compiles
 lune run tests/smoke    # builds every track, kart, item and the lobby in Lune's Roblox DOM
 ```
@@ -177,6 +206,9 @@ uploads. These will look much better as custom meshes or sounds:
   keep the simple ball collider.
 - **Landmarks:** bed, toaster, cereal bowl, flowerpot, toy chest, crossers
   (robot, train, beetle), giant props (`Landmarks.luau`, `Props.luau`).
+- **Trees:** pines and leafy trees are built from textured parts. Free
+  realistic tree meshes from the Creator Store would look better; swap them
+  in `Props.luau` (`builders.pine`, `builders.tree`).
 - **Sounds (none yet):**
   - engine, drift, boost: no slots yet, needs adding;
   - item sounds: `ItemService.Sounds`;
@@ -186,13 +218,3 @@ uploads. These will look much better as custom meshes or sounds:
   track previews generated from track data; uploaded artwork is optional.
 
 Keep everything original: no Nintendo names, characters, items or tracks.
-
-## Road surface repair
-
-RoadRibbon builds shared-edge triangles from the track centerline; old
-rectangular Road parts retain metadata but are invisible and noncolliding.
-The native wedge ribbon owns road collision. Segment roll is disabled so
-geometry and checkpoint heights agree. Lobby ramps are continuous wedges
-instead of stair-like stacks. Studio must verify seam traversal, hills,
-raycasts, camera clearance, and appearance; Lune does not render or simulate
-Roblox physics.

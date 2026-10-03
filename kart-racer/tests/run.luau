@@ -11,6 +11,7 @@ require("./Progression.spec")
 require("./Voting.spec")
 require("./Lobby.spec")
 require("./Scenery.spec")
+require("./Landscape.spec")
 require("./KartBodies.spec")
 require("./Simulation.spec")
 

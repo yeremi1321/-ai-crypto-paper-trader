@@ -23,7 +23,7 @@ All six stages of the first playable build are written:
   countdowns, unique voter counts and door transforms; it cannot render UI.
 - **What hasn't been checked:** physics, input, UI layout, networking,
   DataStores and text filtering.
-- **Checks:** `lune run tests/run` (82 tests), `tests/syntax` and `tests/smoke`
+- **Checks:** `lune run tests/run` (90 tests), `tests/syntax` and `tests/smoke`
   all pass.
 
 ## Setup on this PC
@@ -48,17 +48,24 @@ All six stages of the first playable build are written:
    use server time and names/health labels and the Invisicam camera behave.
    Walk toward and away from room doors: panels, glass and strips slide
    together without drifting. Departure doors stay shut unless Lit is true.
-4. **Each new track:** Emberstone Citadel gates, clear road under arches,
+4. **Realistic land and roads** (first time Terrain runs for real): on
+   Pinewater Pass, Sunny Loop and Canyon Climb check the land loads during the
+   winner reveal without a long hitch, the road sits slightly above the grass
+   everywhere (no grass poking through asphalt), raised road sits on earth
+   banks, the Pinewater bridge crosses real water on pillars, and lakes,
+   mountains and clouds show. Drive the seams: no bumps between road pieces,
+   barriers continuous. Through the lobby's back window: lake, pines, peaks.
+5. **Each new track:** Emberstone Citadel gates, clear road under arches,
    lava channels outside barriers, elevated bridge and ramp; the toy room bed tunnel, robot and train; the kitchen
    toaster launch up to the shelf, the conveyors and syrup; the backyard hose,
    sprinklers and beetles. Try the shortcuts.
-5. **Items:** each of the six, warnings, the shield blocking, and hit protection.
-6. **Garage:** the preview rotates, buying and equipping work, coins update,
+6. **Items:** each of the six, warnings, the shield blocking, and hit protection.
+7. **Garage:** the preview rotates, buying and equipping work, coins update,
    and name and plate get filtered. Rejoin to check saving.
-7. **Multiplayer:** Test → Clients and Servers with 2–3 players. Voting, items
+8. **Multiplayer:** Test → Clients and Servers with 2–3 players. Voting, items
    hitting other players, spectating, and the podium celebration.
-8. **Mobile:** device emulator. Touch buttons, auto-accelerate, readable UI.
-9. **Performance:** each track is 2,800–6,000 parts. If it's slow on phones,
+9. **Mobile:** device emulator. Touch buttons, auto-accelerate, readable UI.
+10. **Performance:** each track is about 4,600–6,900 objects plus terrain. If it's slow on phones,
    lower the counts in `Scenery.Themes` first.
 
 ## Kart HQ client integration
@@ -127,12 +134,27 @@ Lives in `kart-racer/` on branch `claude/open-world-racing-design-4glnag` of
 the `-ai-crypto-paper-trader` repo. The rest of that repo is an unrelated
 crypto bot and the separate `open-world-racer/` game, so don't touch them.
 
-## Road surface repair
+## Realism pass (roads, terrain, lobby)
 
-RoadRibbon builds shared-edge triangles from the track centerline; old
-rectangular Road parts retain metadata but are invisible and noncolliding.
-The native wedge ribbon owns road collision. Segment roll is disabled so
-geometry and checkpoint heights agree. Lobby ramps are continuous wedges
-instead of stair-like stacks. Studio must verify seam traversal, hills,
-raycasts, camera clearance, and appearance; Lune does not render or simulate
-Roblox physics.
+- Roads: `shared/RoadGeometry` gives one frame per centreline point;
+  `server/RoadSurface` builds the road (2-stud solid triangle slab), curbs,
+  lines, shoulders and barriers from those frames, so pieces share their
+  ends exactly. `RoadRibbon` and the invisible per-segment Road parts are
+  gone. Realistic themes (`theme.realistic`) use asphalt, concrete jersey
+  barriers and concrete curbs; `roadMaterial` / `wallMaterial` /
+  `shoulderMaterial` override per theme.
+- Terrain: a theme's `terrain` table drives `shared/Landscape.plan` (pure,
+  tested: nothing on the road, ground always under it). `TerrainBuilder`
+  applies it with FillBlock/FillBall/FillCylinder; only one track's land
+  exists at a time. `RoundService` starts it during the winner reveal and
+  `TrackBuilder` reuses it. In Lune there is no Terrain, so fills are only
+  counted (`TerrainBuilder.lastCounts`).
+- Earth banks replace pillars under raised road, except over other road or
+  a lake the track bridges (`def.lakes`). Props are lifted onto the land via
+  `Landscape.groundAt` and skipped over water.
+- Lobby: `finish` maps palette colours to materials; the back wall has a
+  window over a terrain vista (`buildVista`), rebuilt after every track's
+  terrain via `TerrainBuilder.onCleared`.
+- Unverified until Studio: terrain build time on a live server, terrain
+  surface accuracy at road edges (ground is planned 0.7 studs under the
+  road), how water, clouds and PBR materials look on phones.

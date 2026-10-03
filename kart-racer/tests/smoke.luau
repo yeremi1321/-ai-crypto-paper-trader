@@ -104,13 +104,17 @@ check("TrackBuilder builds every track", function()
 	local TrackBuilder = load(server.TrackBuilder)
 	for _, def in Tracks.List do
 		local folder, track = TrackBuilder.build(def.id)
-		local roads = 0
-		for _, child in folder:GetChildren() do
-			if child.Name == "Road" then
-				roads += 1
-			end
+		local TerrainBuilder = load(server.TerrainBuilder)
+		local theme = Tracks.Themes[def.theme]
+		if theme.terrain then
+			-- Lune has no Terrain, but the plan's fills are still counted.
+			local counts = TerrainBuilder.lastCounts
+			assert(counts.slab == 1, `{def.id}: terrain ground`)
+			assert(counts.mountain + counts.hill + counts.lake + counts.mesa > 0, `{def.id}: no landscape`)
+			assert(not folder:FindFirstChild("Ground"), `{def.id}: part floor under terrain`)
+		else
+			assert(folder:FindFirstChild("Ground"), `{def.id}: floor`)
 		end
-		assert(roads == #track.points, `{def.id}: {roads} road parts for {#track.points} points`)
 		if def.id == "emberfort" then
 			assert(folder:FindFirstChild("Citadel"), "fortress scenery")
 			local towers, canals = 0, 0
@@ -120,11 +124,25 @@ check("TrackBuilder builds every track", function()
 			end
 			assert(towers == 8 and canals == 80, "fortress gates and lava channels")
 		end
+		-- Road: two triangles (four wedges) per segment, solid and collidable.
 		local surface = folder:FindFirstChild("RoadSurface")
-		assert(surface and #surface:GetChildren() == #track.points * 4, "continuous road ribbon")
+		local wedges = #surface:GetChildren()
+		assert(wedges >= #track.points * 4 - 4 and wedges <= #track.points * 4, `{def.id}: {wedges} road wedges for {#track.points} points`)
 		for _, wedge in surface:GetChildren() do
-			assert(wedge.CanCollide and wedge:GetAttribute("Surface") == "road", "ribbon collision")
+			assert(wedge:IsA("WedgePart") and wedge.CanCollide and wedge:GetAttribute("Surface") == "road", "road collision")
+			assert(math.abs(wedge.Size.X - 2) < 1e-6, "road slab thickness")
 		end
+		local walls = folder:FindFirstChild("Barriers")
+		local wallCount = if walls then #walls:GetChildren() else 0
+		if def.walls ~= false then
+			assert(wallCount >= #track.points, `{def.id}: barriers missing ({wallCount})`)
+		end
+		local curbs, lines = 0, 0
+		for _, m in folder.Markings:GetChildren() do
+			if m.Name == "Curb" then curbs += 1 end
+			if m.Name == "EdgeLine" then lines += 1 end
+		end
+		assert(curbs > 0 and lines > 0, `{def.id}: curbs {curbs}, lines {lines}`)
 		local total = #folder:GetDescendants()
 		local scenery = folder:FindFirstChild("Scenery")
 		assert(scenery and #scenery:GetChildren() > 300, `{def.id}: not enough scenery`)
@@ -238,6 +256,17 @@ check("LobbyBuilder builds Kart HQ", function()
 	assert(lobby.Chamber:FindFirstChild("VoteScreen"), "vote screen")
 	assert(lobby.Chamber:FindFirstChild("StatusBoard"), "status board")
 	for i = 1, 4 do assert(lobby.Chamber:FindFirstChild(`PadSign{i}`), "pad sign") end
+	-- Realistic finish and the window view.
+	local materials = {}
+	for _, p in lobby:GetDescendants() do
+		if p:IsA("BasePart") then
+			materials[p.Material.Name] = (materials[p.Material.Name] or 0) + 1
+		end
+	end
+	assert((materials.Concrete or 0) > 20 and (materials.Marble or 0) > 0 and (materials.Metal or 0) > 10, "lobby materials")
+	assert(lobby.Chamber:FindFirstChild("WindowGlass"), "panoramic window")
+	local vista = game:GetService("Workspace"):FindFirstChild("LobbyVista")
+	assert(vista and #vista:GetChildren() > 100, "pines outside the window")
 	assert(not lobby.Rooms:FindFirstChild("lounge") and not lobby.Rooms:FindFirstChild("practice"), "removed rooms")
 	for _, key in { "garagePrompt" } do
 		assert(handles[key]:IsA("ProximityPrompt"), key)

@@ -41,18 +41,56 @@ end
 
 local builders: { [string]: (any, any, Instance) -> () } = {}
 
-builders.tree = function(prop, _theme, parent)
-	local s = prop.size
-	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
-	part(parent, Vector3.new(2, 14 * s, 2) , base * CFrame.new(0, 7 * s, 0), Color3.fromRGB(110, 75, 45), Enum.Material.SmoothPlastic)
-	local leaf = vary(Color3.fromRGB(70, 150, 60), 0.25, prop.x + prop.z)
-	part(parent, Vector3.one * 12 * s, base * CFrame.new(0, 16 * s, 0), leaf, Enum.Material.SmoothPlastic, Enum.PartType.Ball)
-	part(parent, Vector3.one * 8 * s, base * CFrame.new(3 * s, 13 * s, 1 * s), leaf, Enum.Material.SmoothPlastic, Enum.PartType.Ball)
+-- Realistic themes use textured materials (bark, leaves, rock, concrete);
+-- the toy-world themes keep smooth plastic.
+local function mat(theme: any, realistic: Enum.Material): Enum.Material
+	return if theme.realistic then realistic else Enum.Material.SmoothPlastic
 end
 
-builders.bush = function(prop, _theme, parent)
+builders.tree = function(prop, theme, parent)
 	local s = prop.size
-	part(parent, Vector3.new(7, 5, 7) * s, CFrame.new(prop.x, prop.y + 1.5 * s, prop.z), vary(Color3.fromRGB(80, 160, 70), 0.2, prop.z), Enum.Material.SmoothPlastic, Enum.PartType.Ball)
+	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
+	local leafMaterial = mat(theme, Enum.Material.LeafyGrass)
+	part(parent, Vector3.new(2, 14 * s, 2), base * CFrame.new(0, 7 * s, 0), Color3.fromRGB(96, 70, 48), mat(theme, Enum.Material.Wood))
+	-- A couple of branches, then an uneven crown of overlapping leaf clumps.
+	if theme.realistic then
+		for k = 0, 1 do
+			local a = k * math.pi + prop.yaw
+			part(parent, Vector3.new(0.8, 6 * s, 0.8), base * CFrame.new(math.cos(a) * 1.6 * s, 11 * s, math.sin(a) * 1.6 * s) * CFrame.Angles(math.sin(a) * 0.6, 0, -math.cos(a) * 0.6), Color3.fromRGB(96, 70, 48), Enum.Material.Wood)
+		end
+	end
+	local leaf = vary(if theme.realistic then Color3.fromRGB(66, 104, 44) else Color3.fromRGB(70, 150, 60), 0.25, prop.x + prop.z)
+	part(parent, Vector3.one * 12 * s, base * CFrame.new(0, 16 * s, 0), leaf, leafMaterial, Enum.PartType.Ball)
+	part(parent, Vector3.one * 8 * s, base * CFrame.new(3 * s, 13 * s, 1 * s), leaf, leafMaterial, Enum.PartType.Ball)
+	if theme.realistic then
+		part(parent, Vector3.one * 9 * s, base * CFrame.new(-3 * s, 14 * s, -2 * s), vary(leaf, 0.15, prop.z), leafMaterial, Enum.PartType.Ball)
+		part(parent, Vector3.one * 7 * s, base * CFrame.new(1 * s, 20 * s, -1 * s), vary(leaf, 0.15, prop.x), leafMaterial, Enum.PartType.Ball)
+	end
+end
+
+-- A conifer: a tall trunk and stacked, narrowing tiers of needles.
+builders.pine = function(prop, theme, parent)
+	local s = prop.size
+	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
+	part(parent, Vector3.new(1.6, 26 * s, 1.6), base * CFrame.new(0, 13 * s, 0), Color3.fromRGB(84, 62, 46), mat(theme, Enum.Material.Wood))
+	local needles = vary(Color3.fromRGB(38, 72, 46), 0.2, prop.x + prop.z)
+	local tiers = 5
+	for k = 0, tiers - 1 do
+		local f = k / (tiers - 1)
+		local width = (13 - f * 9) * s
+		local tierCf = base * CFrame.new(0, (7 + k * 4.6) * s, 0) * CFrame.Angles(0, k * 0.7, 0)
+		local p = part(parent, Vector3.new(width, 6.5 * s, width), tierCf, vary(needles, 0.1, k + prop.x), mat(theme, Enum.Material.Grass))
+		local mesh = Instance.new("SpecialMesh")
+		mesh.MeshType = Enum.MeshType.Sphere
+		mesh.Parent = p
+	end
+	part(parent, Vector3.new(1.2, 3 * s, 1.2), base * CFrame.new(0, 29 * s, 0), needles, mat(theme, Enum.Material.Grass))
+end
+
+builders.bush = function(prop, theme, parent)
+	local s = prop.size
+	local color = vary(if theme.realistic then Color3.fromRGB(70, 110, 48) else Color3.fromRGB(80, 160, 70), 0.2, prop.z)
+	part(parent, Vector3.new(7, 5, 7) * s, CFrame.new(prop.x, prop.y + 1.5 * s, prop.z), color, mat(theme, Enum.Material.LeafyGrass), Enum.PartType.Ball)
 end
 
 builders.flag = function(prop, theme, parent)
@@ -94,7 +132,7 @@ builders.grandstand = function(prop, theme, parent)
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
 	local steps = 5
 	for i = 0, steps - 1 do
-		local step = part(parent, Vector3.new(60, 2.5, 5), base * CFrame.new(0, 1.25 + i * 2.5, i * 4.5), Color3.fromRGB(150, 150, 160), Enum.Material.SmoothPlastic)
+		local step = part(parent, Vector3.new(60, 2.5, 5), base * CFrame.new(0, 1.25 + i * 2.5, i * 4.5), Color3.fromRGB(150, 150, 160), mat(theme, Enum.Material.Concrete))
 		step.CanCollide = true
 		-- Crowd: little coloured blocks.
 		for c = -27, 27, 3 do
@@ -103,7 +141,7 @@ builders.grandstand = function(prop, theme, parent)
 			part(parent, Vector3.new(1.4, 2, 1.2), base * CFrame.new(c, 3.5 + i * 2.5, i * 4.5 - 0.5), Color3.fromHSV(h, 0.6, 0.9), Enum.Material.SmoothPlastic)
 		end
 	end
-	local roof = part(parent, Vector3.new(64, 1, 26), base * CFrame.new(0, 20, 9) * CFrame.Angles(math.rad(-8), 0, 0), rgb(theme.accent), Enum.Material.SmoothPlastic)
+	local roof = part(parent, Vector3.new(64, 1, 26), base * CFrame.new(0, 20, 9) * CFrame.Angles(math.rad(-8), 0, 0), rgb(theme.accent), mat(theme, Enum.Material.Metal))
 	roof.CanCollide = true
 	for _, x in { -30, 30 } do
 		part(parent, Vector3.new(1.2, 20, 1.2), base * CFrame.new(x, 10, 20), Color3.fromRGB(90, 90, 100), Enum.Material.SmoothPlastic)
@@ -112,10 +150,16 @@ end
 
 builders.rock = function(prop, theme, parent)
 	local s = prop.size
-	local color = vary(rgb(theme.wall), 0.2, prop.x)
+	local tone = if theme.terrain and theme.terrain.colors and theme.terrain.colors.Rock then rgb(theme.terrain.colors.Rock) else rgb(theme.wall)
+	local color = vary(tone, 0.2, prop.x)
+	local material = mat(theme, Enum.Material.Rock)
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
-	part(parent, Vector3.new(10, 7, 8) * s, base * CFrame.new(0, 2.5 * s, 0) * CFrame.Angles(0.2, 0, 0.15), color, Enum.Material.SmoothPlastic)
-	part(parent, Vector3.new(6, 5, 6) * s, base * CFrame.new(3 * s, 4.5 * s, 1 * s) * CFrame.Angles(-0.3, 0.6, 0.2), color, Enum.Material.SmoothPlastic)
+	-- Sunk a little into the ground so boulders sit rather than perch.
+	part(parent, Vector3.new(10, 7, 8) * s, base * CFrame.new(0, 2 * s, 0) * CFrame.Angles(0.2, 0, 0.15), color, material)
+	part(parent, Vector3.new(6, 5, 6) * s, base * CFrame.new(3 * s, 4 * s, 1 * s) * CFrame.Angles(-0.3, 0.6, 0.2), color, material)
+	if theme.realistic then
+		part(parent, Vector3.new(5, 3, 4) * s, base * CFrame.new(-4 * s, 1 * s, 2 * s) * CFrame.Angles(0.4, 1.1, -0.2), vary(color, 0.1, prop.z), material)
+	end
 end
 
 builders.mesa = function(prop, theme, parent)

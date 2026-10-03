@@ -1,21 +1,24 @@
--- Builds a track's parts from its centerline: road, curbs and lane lines,
--- grass shoulders, walls, bridge pillars, boost pads, the start line, the
--- ground and scenery (see Scenery.luau / Props.luau). Lighting is applied on
+-- Builds a track from its centerline: the road and everything along it
+-- (RoadSurface), the land (Landscape + TerrainBuilder for realistic themes, a
+-- flat floor otherwise), bridge pillars, boost pads, the start line, zones,
+-- shortcuts, landmarks and scenery (see Scenery.luau / Props.luau). Lighting is applied on
 -- each client (common/Atmos), so lobby players keep the lobby's look.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage.Shared
+local Landscape = require(Shared.Landscape)
+local RoadGeometry = require(Shared.RoadGeometry)
 local Scenery = require(Shared.Scenery)
 local Track = require(Shared.Track)
 local Tracks = require(Shared.Tracks)
 
 local Landmarks = require(script.Parent.Landmarks)
 local Props = require(script.Parent.Props)
+local RoadSurface = require(script.Parent.RoadSurface)
+local TerrainBuilder = require(script.Parent.TerrainBuilder)
 local Shapes = require(ReplicatedStorage.Common.Shapes)
-
-local BANK_MAX = math.rad(6) -- corners tilt inward a little
 
 local TrackBuilder = {}
 
@@ -41,20 +44,6 @@ local function part(parent: Instance, name: string, size: Vector3, cf: CFrame, c
 	return p
 end
 
--- Markings sit just above the road; raycasts and collisions ignore them.
-local function decal(parent: Instance, size: Vector3, cf: CFrame, color: Color3, glow: boolean): Part
-	local p = part(parent, "Marking", size, cf, color, if glow then Enum.Material.Neon else Enum.Material.SmoothPlastic)
-	p.CanCollide = false
-	p.CanQuery = false
-	p.CanTouch = false
-	p.CastShadow = false
-	return p
-end
-
-local function flatAngle(a: Vector3, b: Vector3): number
-	return math.atan2(b.X - a.X, b.Z - a.Z)
-end
-
 export type Options = {
 	folderName: string?, -- default "Track"; the lobby practice loop uses its own folder
 	ground: boolean?, -- build ground under the track (default true)
@@ -66,7 +55,7 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 	local def = Tracks.get(trackId)
 	local track = Track.build(def)
 	local theme = Tracks.Themes[def.theme]
-	local roadColor, shoulderColor, wallColor = rgb(theme.road), rgb(theme.shoulder), rgb(theme.wall)
+	local roadColor, wallColor = rgb(theme.road), rgb(theme.wall)
 	local walled = def.walls ~= false
 
 	local folderName = opts.folderName or "Track"
@@ -86,23 +75,6 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 	local markings = Instance.new("Folder")
 	markings.Name = "Markings"
 	markings.Parent = folder
-	local neon = def.theme == "neon"
-	local curbColors = { rgb(theme.curb[1]), rgb(theme.curb[2]) }
-	local lineColor = rgb(theme.line)
-
-	-- Banking: smoothed signed turn per segment (positive = turning left).
-	local signedTurn = {}
-	for i = 1, n do
-		local a, b, c = v3(pts[i]), v3(pts[i % n + 1]), v3(pts[(i + 1) % n + 1])
-		signedTurn[i] = ((flatAngle(b, c) - flatAngle(a, b)) + math.pi) % (2 * math.pi) - math.pi
-	end
-	local function bank(i: number): number
-		local sum = 0
-		for k = -3, 3 do
-			sum += signedTurn[(i - 1 + k) % n + 1]
-		end
-		return math.clamp(sum / 7 * 4, -BANK_MAX, BANK_MAX)
-	end
 
 	-- Wall openings where shortcuts leave and rejoin the road.
 	local openings = {}
@@ -120,78 +92,39 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		return false
 	end
 
-	for i = 1, n do
-		local a, b, c = v3(pts[i]), v3(pts[i % n + 1]), v3(pts[(i + 1) % n + 1])
-		local length = (b - a).Magnitude
-		-- Lengthen segments on the outside of bends so the edges have no gaps.
-		local turn = math.abs(signedTurn[i])
-		local extra = 1 + (half + sw + 1) * turn
-		local roll = 0 -- ribbon and checkpoint road height share the same surface
-		local cf = CFrame.lookAt((a + b) / 2, b) * CFrame.Angles(0, 0, roll)
-		local segLen = length + extra
-		local segDistance = track.cum[i] + length / 2
-
-		local road = part(folder, "Road", Vector3.new(def.width, 1, segLen), cf * CFrame.new(0, -0.5, 0), roadColor, if def.theme == "fortress" then Enum.Material.Slate else Enum.Material.SmoothPlastic)
-		road:SetAttribute("Surface", "road")
-		-- Retain segment metadata but use the continuous ribbon for collision.
-		road.Transparency = 1
-		road.CanCollide = false
-		road.CanQuery = false
-		road.CanTouch = false
-		for _, side in (if walled then { -1, 1 } else {}) :: { number } do
-			local shoulder = part(folder, "Shoulder", Vector3.new(sw, 1, segLen), cf * CFrame.new(side * (half + sw / 2), -0.52, 0), shoulderColor, Enum.Material.SmoothPlastic)
-			shoulder:SetAttribute("Surface", "offroad")
-			if not wallOpen(side, segDistance, segLen) then
-				part(folder, "Wall", Vector3.new(1, 4, segLen), cf * CFrame.new(side * (half + sw + 0.5), 1.5, 0), wallColor, if def.theme == "neon" then Enum.Material.Neon elseif def.theme == "fortress" then Enum.Material.Cobblestone else Enum.Material.SmoothPlastic)
-			end
-		end
-
-		-- Red-and-white curbs through corners, lane lines on the straights.
-		if turn > 0.02 and walled then
-			for _, side in { -1, 1 } do
-				decal(markings, Vector3.new(3, 0.1, length + 0.6), cf * CFrame.new(side * (half - 1.5), 0.05, 0), curbColors[i % 2 + 1], neon)
-			end
-		else
-			for _, side in { -1, 1 } do
-				decal(markings, Vector3.new(0.8, 0.06, length + 0.4), cf * CFrame.new(side * (half - 1.2), 0.03, 0), lineColor, neon)
-			end
-		end
-		if i % 3 ~= 0 then
-			decal(markings, Vector3.new(0.7, 0.06, length * 0.7), cf * CFrame.new(0, 0.03, 0), lineColor, neon)
-		end
-
-		minY = math.min(minY, a.Y)
-		minX, maxX = math.min(minX, a.X), math.max(maxX, a.X)
-		minZ, maxZ = math.min(minZ, a.Z), math.max(maxZ, a.Z)
+	for _, p in pts do
+		minY = math.min(minY, p.y)
+		minX, maxX = math.min(minX, p.x), math.max(maxX, p.x)
+		minZ, maxZ = math.min(minZ, p.z), math.max(maxZ, p.z)
 	end
 
-	local ribbon = Instance.new("Folder")
-	ribbon.Name = "RoadSurface"
-	ribbon.Parent = folder
-	require(script.Parent.RoadRibbon).build(track, ribbon, roadColor,
-		if def.theme == "fortress" then Enum.Material.Slate else Enum.Material.Asphalt)
+	-- Land: realistic themes get Terrain (hills, lakes, mountains, banks under
+	-- raised road); the toy-world themes keep a flat part floor.
+	local plan = if opts.ground ~= false then Landscape.plan(track) else nil
+	if plan then
+		TerrainBuilder.ensure(trackId, plan)
+	end
 
-	-- Pillars under raised road, skipped where they would land on the road below.
+	-- Road, curbs, lines, shoulders and barriers from one set of frames.
+	local frames = RoadGeometry.frames(track)
+	RoadSurface.build(track, frames, folder, { theme = theme, walled = walled, plan = plan, wallOpen = wallOpen })
+
+	-- Pillars under raised road that has no earth bank, skipped where they
+	-- would land on the road below.
+	local overpass = RoadGeometry.overpasses(track, half + sw + 6, 8)
+	local pillarColor = if theme.realistic then Color3.fromRGB(150, 148, 142) else wallColor
+	local pillarMaterial = if theme.realistic then Enum.Material.Concrete else Enum.Material.SmoothPlastic
 	for i = 1, n, 6 do
 		local p = pts[i]
-		if p.y - minY > 8 then
-			local blocked = false
-			for j, q in pts do
-				local apart = math.min(math.abs(i - j), n - math.abs(i - j))
-				if apart > 20 and math.abs(q.x - p.x) < half + sw + 6 and math.abs(q.z - p.z) < half + sw + 6 and q.y < p.y - 8 then
-					blocked = true
-					break
-				end
-			end
-			if not blocked then
-				local h = p.y - minY
-				part(folder, "Pillar", Vector3.new(6, h, 6), CFrame.new(p.x, minY + h / 2 - 1, p.z), wallColor, Enum.Material.SmoothPlastic)
-			end
+		local banked = plan and plan.bankAt[i]
+		if p.y - minY > 8 and not banked and not overpass[i] then
+			local h = p.y - minY + 4
+			part(folder, "Pillar", Vector3.new(6, h, 6), CFrame.new(p.x, p.y - 1 - h / 2, p.z), pillarColor, pillarMaterial)
 		end
 	end
 
-	-- Ground under everything.
-	if opts.ground ~= false then
+	-- Flat floor under everything (themes without terrain).
+	if opts.ground ~= false and not plan then
 		local margin = 300
 		local sizeX, sizeZ = maxX - minX + margin * 2, maxZ - minZ + margin * 2
 		local tile = 1000
@@ -269,18 +202,19 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 	end
 
 	-- Shortcut paths: a narrow road through the gap in the wall.
+	local shortcutMaterial = if theme.realistic then Enum.Material.Asphalt else Enum.Material.SmoothPlastic
 	for _, sc in def.shortcuts or {} do
 		local sa, sb = Track.shortcutEnds(track, sc)
 		local pa, pb = v3(sa), v3(sb)
 		local length = (pb - pa).Magnitude + sc.width
 		local scCf = CFrame.lookAt((pa + pb) / 2, pb)
-		local road = part(folder, "ShortcutRoad", Vector3.new(sc.width, 1, length), scCf * CFrame.new(0, -0.5, 0), roadColor:Lerp(rgb(theme.accent), 0.25), Enum.Material.SmoothPlastic)
+		local road = part(folder, "ShortcutRoad", Vector3.new(sc.width, 1, length), scCf * CFrame.new(0, -0.5, 0), roadColor:Lerp(rgb(theme.accent), 0.25), shortcutMaterial)
 		road:SetAttribute("Surface", sc.surface or "road")
 		-- Connect each end to the road edge across the grass shoulder.
 		for _, endpoint in { { at = sc.from, p = pa }, { at = sc.to, p = pb } } do
 			local edge = v3(Track.spot(track, endpoint.at * track.length, sc.side * half))
 			local link = (endpoint.p - edge)
-			part(folder, "ShortcutLink", Vector3.new(sc.width, 1, link.Magnitude + sc.width), CFrame.lookAt((edge + endpoint.p) / 2, endpoint.p) * CFrame.new(0, -0.49, 0), roadColor:Lerp(rgb(theme.accent), 0.25), Enum.Material.SmoothPlastic)
+			part(folder, "ShortcutLink", Vector3.new(sc.width, 1, link.Magnitude + sc.width), CFrame.lookAt((edge + endpoint.p) / 2, endpoint.p) * CFrame.new(0, -0.49, 0), roadColor:Lerp(rgb(theme.accent), 0.25), shortcutMaterial)
 		end
 		-- Little arrows hint the way in.
 		for _, side in { -1, 1 } do
@@ -345,7 +279,16 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		scenery.Name = "Scenery"
 		scenery.Parent = folder
 		for _, prop in Scenery.place(track) do
-			Props.build(prop, theme, scenery)
+			if plan then
+				-- Stand props on the land; skip any that would be in a lake.
+				local y = Landscape.groundAt(plan, prop.x, prop.z)
+				if y then
+					prop.y = y
+					Props.build(prop, theme, scenery)
+				end
+			else
+				Props.build(prop, theme, scenery)
+			end
 		end
 	end
 

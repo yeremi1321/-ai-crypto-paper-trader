@@ -28,15 +28,21 @@ Scenery.Themes = {
 		{ kind = "mesa", count = 18, near = 70, far = 300, minSize = 0.8, maxSize = 1.4, radius = 35 },
 	},
 	sunny = {
-		{ kind = "tree", count = 170, near = 12, far = 220, minSize = 0.8, maxSize = 1.5, radius = 8 },
+		{ kind = "tree", count = 150, near = 12, far = 220, minSize = 0.8, maxSize = 1.5, radius = 8 },
+		{ kind = "pine", count = 60, near = 30, far = 260, minSize = 0.9, maxSize = 1.6, radius = 7 },
 		{ kind = "bush", count = 80, near = 6, far = 120, minSize = 0.7, maxSize = 1.3, radius = 4 },
 		{ kind = "billboard", count = 8, near = 14, far = 30, minSize = 1, maxSize = 1, radius = 14 },
 		{ kind = "flag", count = 18, near = 4, far = 10, minSize = 1, maxSize = 1, radius = 3 },
 	},
+	-- Mesas are terrain here (Landscape), so only the smaller things are props.
 	canyon = {
-		{ kind = "mesa", count = 22, near = 60, far = 320, minSize = 0.8, maxSize = 1.8, radius = 40 },
 		{ kind = "rock", count = 110, near = 8, far = 200, minSize = 0.6, maxSize = 1.8, radius = 9 },
 		{ kind = "cactus", count = 70, near = 8, far = 160, minSize = 0.8, maxSize = 1.4, radius = 4 },
+	},
+	alpine = {
+		{ kind = "pine", count = 240, near = 10, far = 260, minSize = 0.8, maxSize = 1.7, radius = 7 },
+		{ kind = "rock", count = 50, near = 12, far = 220, minSize = 0.6, maxSize = 1.6, radius = 8 },
+		{ kind = "flag", count = 14, near = 4, far = 10, minSize = 1, maxSize = 1, radius = 3 },
 	},
 	-- Tiny racers, oversized world: everything here is giant.
 	toyroom = {

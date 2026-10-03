@@ -1,6 +1,11 @@
 -- Compact indoor Kart HQ: soft lighting, four voting pads, garage,
 -- trophy room and party bays. No practice hall or viewing lounge.
 -- Clients draw the wall screens and animate proximity doors.
+--
+-- Realistic finish: concrete walls, a dark marble floor, brushed-metal
+-- trim, fabric banners and glowing light fixtures (see `finish`), and a
+-- panoramic window behind spawn looking out over a real terrain lake, pine
+-- trees and snowy mountains (see `buildVista`).
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
@@ -10,6 +15,10 @@ local Karts = require(Shared.Karts)
 local LobbyLayout = require(Shared.LobbyLayout)
 local KartRig = require(ReplicatedStorage.Common.KartRig)
 local Shapes = require(ReplicatedStorage.Common.Shapes)
+local Tracks = require(Shared.Tracks)
+
+local Props = require(script.Parent.Props)
+local TerrainBuilder = require(script.Parent.TerrainBuilder)
 
 
 local LobbyBuilder = {}
@@ -44,6 +53,9 @@ local O = LobbyLayout.Origin
 local HW, HD = LobbyLayout.HalfWidth, LobbyLayout.HalfDepth
 local HEIGHT, DECK = LobbyLayout.Height, LobbyLayout.DeckHeight
 local WALL = 4 -- chamber wall thickness
+
+local finish: (Instance) -> ()
+local buildVista: () -> ()
 
 local function rgb(t: { number }): Color3
 	return Color3.fromRGB(t[1], t[2], t[3])
@@ -300,6 +312,90 @@ local function roomShell(parent: Instance, room: LobbyLayout.Room, height: numbe
 end
 
 ---------------------------------------------------------------------------
+-- Realistic finish and the view outside
+---------------------------------------------------------------------------
+
+-- Each palette colour gets a real material. Screens, glass and anything
+-- already given a material keep theirs.
+local FINISHES = {
+	{ C.wall, Enum.Material.Concrete, 0 },
+	{ C.wallLight, Enum.Material.Concrete, 0 },
+	{ C.floor, Enum.Material.Marble, 0.04 },
+	{ C.panel, Enum.Material.Metal, 0.05 },
+	{ C.navy, Enum.Material.Fabric, 0 },
+	{ C.steel, Enum.Material.Metal, 0.12 },
+	{ C.gold, Enum.Material.Metal, 0.25 },
+	{ C.silver, Enum.Material.Metal, 0.25 },
+	{ C.bronze, Enum.Material.Metal, 0.2 },
+	{ C.pink, Enum.Material.Fabric, 0 },
+	{ C.lamp, Enum.Material.Neon, 0 }, -- light fixtures glow
+}
+finish = function(root: Instance)
+	for _, p in root:GetDescendants() do
+		if p:IsA("BasePart") and p.Material == Enum.Material.SmoothPlastic then
+			for _, f in FINISHES do
+				if p.Color == f[1] then
+					p.Material = f[2]
+					p.Reflectance = f[3]
+					break
+				end
+			end
+		end
+	end
+end
+
+-- The landscape seen through the back window: a lake right outside, pine
+-- trees round its shore, grassy hills and a ring of snowy peaks. Built in
+-- Terrain next to the lobby, and rebuilt whenever a track's land replaces it.
+buildVista = function()
+	local lakeZ = O.z + HD + 240
+	local vista = {
+		spec = { ground = "Grass", bank = "Grass" },
+		groundTop = -2,
+		minX = O.x - 1000,
+		maxX = O.x + 1000,
+		minZ = O.z - 260,
+		maxZ = O.z + HD + 1500,
+		banks = {},
+		bankAt = {},
+		hills = {},
+		mountains = {},
+		caps = {},
+		mesas = {},
+		lakes = { { x = O.x, z = lakeZ, r = 150, surface = -3.4, shore = "Sand", liquid = "Water", bridged = false } },
+	}
+	for i, h in { { -330, 170, 110 }, { 340, 210, 130 }, { -520, 420, 150 }, { 500, 470, 140 }, { -160, 560, 120 }, { 220, 600, 130 } } do
+		vista.hills[i] = { x = O.x + h[1], y = -2 - h[3] * 0.62, z = O.z + HD + h[2], r = h[3], material = "LeafyGrass" }
+	end
+	for _, m in { { -620, 900, 300 }, { -200, 1050, 360 }, { 260, 980, 330 }, { 680, 880, 290 }, { 20, 1250, 380 } } do
+		local x, z, r = O.x + m[1], O.z + HD + m[2], m[3]
+		table.insert(vista.mountains, { x = x, y = -2 - r * 0.35, z = z, r = r, material = "Rock" })
+		table.insert(vista.mountains, { x = x + r * 0.7, y = -2 - r * 0.25, z = z + r * 0.2, r = r * 0.55, material = "Rock" })
+		table.insert(vista.mountains, { x = x, y = -2 + r * 0.37, z = z, r = r * 0.45, material = "Rock" })
+		table.insert(vista.caps, { x = x, y = -2 + r * 0.63, z = z, r = r * 0.3, material = "Snow" })
+	end
+	TerrainBuilder.apply(vista, true)
+
+	-- Pines round the lake (parts, rebuilt with the land).
+	local old = Workspace:FindFirstChild("LobbyVista")
+	if old then
+		old:Destroy()
+	end
+	local trees = Instance.new("Folder")
+	trees.Name = "LobbyVista"
+	local theme = Tracks.Themes.alpine
+	for i = 0, 41 do
+		local a = i / 42 * math.pi * 2
+		local r = 180 + (i * 37 % 60)
+		local x, z = O.x + math.cos(a) * r, lakeZ + math.sin(a) * r
+		if z > O.z + HD + 30 then
+			Props.build({ kind = "pine", x = x, y = -2, z = z, size = 1.1 + (i % 5) * 0.12, yaw = a }, theme, trees)
+		end
+	end
+	trees.Parent = Workspace
+end
+
+---------------------------------------------------------------------------
 -- Build
 ---------------------------------------------------------------------------
 export type Handles = {
@@ -327,7 +423,16 @@ function LobbyBuilder.build(): Handles
   end
   wall(shell, W(side * HW, 0, -HD), W(side * HW, 0, HD), HEIGHT, WALL, openings)
  end
- wall(shell, W(-HW, 0, HD), W(HW, 0, HD), HEIGHT, WALL, {})
+ -- Back wall with a panoramic window over the lake (behind the spawn deck).
+ local windowW, windowBottom, windowTop = 96, DECK + 5, 34
+ wall(shell, W(-HW, 0, HD), W(HW, 0, HD), HEIGHT, WALL, { { at = HW, width = windowW, bottom = windowBottom, top = windowTop } })
+ local windowMid = (windowBottom + windowTop) / 2
+ Shapes.box(shell, Vector3.new(windowW, windowTop - windowBottom, 0.3), CFrame.new(W(0, windowMid, HD)), { color = Color3.fromRGB(190, 215, 230), material = GLASS, transparency = 0.82, reflectance = 0.15, collide = true, name = "WindowGlass" })
+ for x = -windowW / 2, windowW / 2, windowW / 6 do
+  Shapes.box(shell, Vector3.new(1, windowTop - windowBottom, 1.4), CFrame.new(W(x, windowMid, HD)), { color = C.steel, collide = true, name = "Mullion" })
+ end
+ Shapes.box(shell, Vector3.new(windowW + 2, 1.2, 3), CFrame.new(W(0, windowBottom - 0.6, HD - 1)), { color = C.steel, collide = true, name = "Sill" })
+ Shapes.box(shell, Vector3.new(windowW + 2, 1.2, 1.6), CFrame.new(W(0, windowTop + 0.6, HD)), { color = C.steel, name = "WindowHead" })
  wall(shell, W(-HW, 0, -HD), W(HW, 0, -HD), HEIGHT, WALL, {
   { at = HW - 54, width = 18, bottom = 0, top = 15 }, { at = HW + 54, width = 18, bottom = 0, top = 15 },
  })
@@ -386,7 +491,7 @@ function LobbyBuilder.build(): Handles
  spawn.Transparency = 1
  spawn.Duration = 0
  spawn.Parent = shell
- local logo = Shapes.box(shell, Vector3.new(40, 7, 0.4), facing(W(0, 22, HD - 2.5), -Vector3.zAxis), { color = C.navy })
+ local logo = Shapes.box(shell, Vector3.new(40, 6, 0.4), facing(W(0, 38.5, HD - 2.5), -Vector3.zAxis), { color = C.navy })
  text(logo, "KART HQ · RACE CLUB", C.white, 14)
  local pedestalCf = CFrame.new(W(0, 0, 7))
  local stepX, stepHeights = { 0, -10, 10 }, { 2.4, 1.6, 0.8 }
@@ -461,7 +566,9 @@ function LobbyBuilder.build(): Handles
   token:SetAttribute("TokenId", i)
   table.insert(tokens, token)
  end
+ finish(lobby)
  lobby.Parent = Workspace
+ TerrainBuilder.onCleared(buildVista)
 	local function setKartDisplay(slot: number, name: string?, kartId: string?, look: any?)
 		local existing = displays:FindFirstChild(`Slot{slot}`)
 		if existing then

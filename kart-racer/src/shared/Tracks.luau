@@ -14,39 +14,68 @@ local v = Track.v
 local Tracks = {}
 
 Tracks.Themes = {
+	-- Sunny Loop: realistic countryside. Grass hills, two lakes, snowy peaks.
 	sunny = {
-		road = { 70, 70, 78 },
-		shoulder = { 120, 170, 80 },
-		ground = { 100, 160, 70 },
-		wall = { 235, 235, 240 },
-		accent = { 255, 210, 60 },
-		curb = { { 220, 40, 40 }, { 245, 245, 245 } },
-		line = { 245, 245, 245 },
-		clock = 14,
-		-- Lighting: hazy summer afternoon.
-		ambient = { 120, 120, 130 },
-		brightness = 3,
-		atmosphere = { density = 0.3, haze = 1.2, glare = 0.4, color = { 200, 220, 255 }, decay = { 110, 140, 200 } },
-		bloom = 0.6,
-		tint = { 255, 250, 240 },
-		saturation = 0.15,
+		realistic = true,
+		road = { 62, 63, 66 },
+		shoulder = { 96, 84, 62 },
+		ground = { 86, 128, 58 },
+		wall = { 205, 204, 198 },
+		accent = { 255, 196, 40 },
+		curb = { { 196, 38, 34 }, { 236, 236, 232 } },
+		line = { 236, 236, 228 },
+		clock = 14.5,
+		-- Lighting: clear summer afternoon with soft shadows and real clouds.
+		ambient = { 95, 100, 110 },
+		brightness = 3.2,
+		atmosphere = { density = 0.32, haze = 1.6, glare = 0.5, color = { 199, 210, 225 }, decay = { 106, 124, 150 } },
+		bloom = 0.25,
+		tint = { 255, 252, 246 },
+		saturation = 0.04,
+		contrast = 0.12,
+		clouds = { cover = 0.55, density = 0.75 },
+		terrain = {
+			ground = "Grass",
+			bank = "Grass",
+			drop = 0.7,
+			hills = { count = 16, min = 50, max = 140, material = "LeafyGrass" },
+			lakes = { count = 2, min = 55, max = 120, shore = "Sand", liquid = "Water" },
+			mountains = { count = 10, min = 170, max = 280, ring = 520, material = "Rock", cap = "Snow" },
+			colors = { Grass = { 82, 124, 52 }, LeafyGrass = { 72, 110, 46 }, Rock = { 104, 100, 96 }, Sand = { 196, 180, 140 }, Snow = { 238, 242, 246 }, Ground = { 102, 88, 66 }, Mud = { 70, 58, 46 } },
+			water = { color = { 28, 74, 86 }, transparency = 0.35, reflectance = 0.6, waveSize = 0.1, waveSpeed = 7 },
+		},
 	},
+	-- Canyon Climb: realistic desert. Dunes, banded mesas and an oasis.
 	canyon = {
-		road = { 92, 80, 72 },
-		shoulder = { 196, 150, 100 },
-		ground = { 180, 120, 80 },
-		wall = { 150, 90, 60 },
+		realistic = true,
+		road = { 74, 68, 64 },
+		shoulder = { 176, 140, 98 },
+		ground = { 190, 146, 98 },
+		wall = { 200, 190, 174 },
 		accent = { 255, 140, 60 },
-		curb = { { 230, 110, 40 }, { 250, 235, 210 } },
-		line = { 250, 230, 190 },
+		curb = { { 186, 60, 40 }, { 236, 226, 206 } },
+		line = { 240, 232, 210 },
 		clock = 17.2,
 		-- Lighting: dusty golden hour.
-		ambient = { 140, 100, 80 },
-		brightness = 2.6,
-		atmosphere = { density = 0.38, haze = 2.2, glare = 1.2, color = { 255, 200, 150 }, decay = { 200, 110, 70 } },
-		bloom = 0.9,
-		tint = { 255, 235, 210 },
-		saturation = 0.2,
+		ambient = { 120, 96, 82 },
+		brightness = 2.8,
+		atmosphere = { density = 0.36, haze = 2, glare = 1, color = { 240, 200, 160 }, decay = { 180, 110, 74 } },
+		bloom = 0.3,
+		tint = { 255, 240, 222 },
+		saturation = 0.06,
+		contrast = 0.12,
+		clouds = { cover = 0.3, density = 0.5 },
+		terrain = {
+			ground = "Sand",
+			bank = "Sandstone",
+			drop = 0.7,
+			hills = { count = 10, min = 60, max = 150, material = "Sand" },
+			mesas = { count = 14, min = 50, max = 120, minHeight = 60, maxHeight = 150, material = "Sandstone", band = "Rock", ring = 420 },
+			lakes = { count = 1, min = 45, max = 70, shore = "Grass", liquid = "Water" },
+			mountains = { count = 8, min = 180, max = 280, ring = 650, material = "Sandstone" },
+			colors = { Sand = { 206, 164, 112 }, Sandstone = { 176, 108, 72 }, Rock = { 120, 82, 62 }, Grass = { 110, 128, 60 }, Mud = { 90, 70, 50 } },
+			water = { color = { 40, 90, 92 }, transparency = 0.35, reflectance = 0.5, waveSize = 0.08, waveSpeed = 6 },
+		},
 	},
 	-- Midnight Toy Room: a giant bedroom at night, lit by a night light.
 	toyroom = {
@@ -100,6 +129,18 @@ Tracks.Themes = {
 		bloom = 0.6,
 		tint = { 255, 252, 235 },
 		saturation = 0.3,
+		roadMaterial = "Ground", -- packed dirt
+		wallMaterial = "Wood",
+		clouds = { cover = 0.4, density = 0.6 },
+		terrain = {
+			ground = "Grass",
+			bank = "Grass",
+			drop = 0.7,
+			hills = { count = 6, min = 40, max = 90, material = "LeafyGrass" },
+			lakes = { count = 1, min = 40, max = 60, shore = "Mud", liquid = "Water" },
+			colors = { Grass = { 92, 150, 58 }, LeafyGrass = { 80, 136, 50 }, Mud = { 96, 76, 54 } },
+			water = { color = { 50, 100, 90 }, transparency = 0.45, reflectance = 0.5, waveSize = 0.06, waveSpeed = 5 },
+		},
 	},
 	-- The Kart Carnival lobby: bright, clear afternoon.
 	carnival = {
@@ -121,6 +162,7 @@ Tracks.Themes = {
 	-- Kart HQ, the indoor lobby: soft, clear white light with cool blue fill,
 	-- and enough bloom for the cyan trim to glow without washing out.
 	hq = {
+		realistic = true,
 		road = { 40, 48, 78 },
 		shoulder = { 28, 38, 72 },
 		ground = { 16, 22, 44 },
@@ -131,10 +173,41 @@ Tracks.Themes = {
 		clock = 14,
 		ambient = { 128, 136, 165 },
 		brightness = 2,
-		atmosphere = { density = 0.12, haze = 0, glare = 0, color = { 200, 215, 240 }, decay = { 120, 140, 190 } },
+		atmosphere = { density = 0.18, haze = 0.8, glare = 0.2, color = { 200, 215, 240 }, decay = { 120, 140, 190 } },
 		bloom = 0.04,
 		tint = { 245, 250, 255 },
 		saturation = 0.02,
+		clouds = { cover = 0.45, density = 0.7 }, -- seen through the lobby window
+	},
+	-- Pinewater Pass: a mountain lake, pine forest and snowy peaks.
+	alpine = {
+		realistic = true,
+		road = { 58, 59, 62 },
+		shoulder = { 90, 84, 70 },
+		ground = { 70, 110, 60 },
+		wall = { 205, 205, 200 },
+		accent = { 70, 170, 255 },
+		curb = { { 200, 40, 40 }, { 238, 238, 234 } },
+		line = { 238, 238, 230 },
+		clock = 10.5,
+		ambient = { 92, 100, 112 },
+		brightness = 3.1,
+		atmosphere = { density = 0.3, haze = 1.2, glare = 0.4, color = { 200, 215, 235 }, decay = { 100, 125, 160 } },
+		bloom = 0.25,
+		tint = { 250, 252, 255 },
+		saturation = 0.05,
+		contrast = 0.12,
+		clouds = { cover = 0.62, density = 0.8 },
+		terrain = {
+			ground = "Grass",
+			bank = "Grass",
+			drop = 0.7,
+			hills = { count = 18, min = 50, max = 150, material = "LeafyGrass" },
+			lakes = { count = 1, min = 60, max = 100, shore = "Ground", liquid = "Water" },
+			mountains = { count = 11, min = 200, max = 320, ring = 480, material = "Rock", cap = "Snow" },
+			colors = { Grass = { 74, 112, 52 }, LeafyGrass = { 60, 96, 44 }, Rock = { 98, 96, 94 }, Snow = { 240, 244, 248 }, Ground = { 96, 84, 64 }, Sand = { 170, 160, 130 }, Mud = { 62, 54, 44 } },
+			water = { color = { 22, 70, 92 }, transparency = 0.3, reflectance = 0.7, waveSize = 0.08, waveSpeed = 6 },
+		},
 	},
 	fortress = {
 		road = { 78, 72, 69 }, shoulder = { 52, 46, 45 }, ground = { 32, 29, 33 },
@@ -143,6 +216,15 @@ Tracks.Themes = {
 		clock = 0.5, ambient = { 100, 91, 100 }, brightness = 1.8,
 		atmosphere = { density = 0.24, haze = 0.7, glare = 0, color = { 135, 112, 119 }, decay = { 65, 53, 72 } },
 		bloom = 0.18, tint = { 255, 238, 219 }, saturation = 0.05,
+		roadMaterial = "Slate", wallMaterial = "Cobblestone", shoulderMaterial = "Slate",
+		terrain = {
+			ground = "Basalt",
+			drop = 5, -- below the lava canals
+			embank = false, -- the road rides a stone causeway on pillars
+			lakes = { count = 3, min = 40, max = 80, shore = "Basalt", liquid = "CrackedLava" },
+			mountains = { count = 8, min = 180, max = 280, ring = 420, material = "Basalt", cap = "CrackedLava" },
+			colors = { Basalt = { 44, 40, 44 }, CrackedLava = { 230, 100, 40 } },
+		},
 	},
 	neon = {
 		road = { 30, 30, 42 },
@@ -177,6 +259,38 @@ Tracks.List = {
 		itemRows = { 0.1, 0.42, 0.74 }, ramps = { { t = 0.65, offset = 0, width = 18 } },
 	},
 
+	{
+		id = "alpine",
+		name = "Pinewater Pass",
+		theme = "alpine",
+		difficulty = "Medium",
+		feature = "A long bridge over a mountain lake, pine forest and snowy peaks",
+		icon = "🏔️",
+		width = 54,
+		scale = 1.6,
+		laps = 3,
+		controls = {
+			v(0, 0, 0),
+			v(0, 0, -240),
+			v(50, 6, -380),
+			v(180, 16, -450),
+			v(330, 22, -420),
+			v(420, 18, -300),
+			v(440, 10, -160),
+			v(400, 12, -40),
+			v(300, 14, 40),
+			v(170, 14, 60),
+			v(60, 10, 120),
+			v(-40, 4, 200),
+			v(-110, 0, 150),
+			v(-90, 0, 60),
+		},
+		-- The road crosses this lake on a bridge.
+		lakes = { { x = 235, z = 50, r = 55 } },
+		boostPads = { { t = 0.06, offset = 0 }, { t = 0.5, offset = 0.3 }, { t = 0.84, offset = -0.3 } },
+		itemRows = { 0.22, 0.6 },
+		ramps = { { t = 0.93, offset = 0, width = 18 } },
+	},
 	{
 		id = "sunny",
 		name = "Sunny Loop",
@@ -406,7 +520,7 @@ Tracks.List = {
 } :: { Track.TrackDef }
 
 -- Tracks that can come up in map voting.
-Tracks.VotePool = { "emberfort", "toyroom", "kitchen", "backyard", "sunny", "canyon", "neon" }
+Tracks.VotePool = { "alpine", "emberfort", "toyroom", "kitchen", "backyard", "sunny", "canyon", "neon" }
 
 -- A Grand Prix is every track in order (kept for a future cup mode).
 Tracks.Cup = { name = "Starter Cup", tracks = { "sunny", "canyon", "neon" } }

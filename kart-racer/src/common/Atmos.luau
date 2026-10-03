@@ -52,8 +52,11 @@ function Atmos.applyTheme(theme: any, seconds: number?)
 	-- the time of day changes at once; everything else fades.
 	Lighting.ClockTime = theme.clock
 	Lighting.GlobalShadows = true
-	Lighting.EnvironmentDiffuseScale = 0.5
-	Lighting.EnvironmentSpecularScale = 0.5
+	-- Realistic themes let the sky light and reflect everything (PBR), with
+	-- softer shadow edges; toy worlds keep flatter, cartoon lighting.
+	Lighting.EnvironmentDiffuseScale = if theme.realistic then 1 else 0.5
+	Lighting.EnvironmentSpecularScale = if theme.realistic then 1 else 0.5
+	Lighting.ShadowSoftness = if theme.realistic then 0.15 else 0.2
 	tween(Lighting, fade, {
 		Brightness = theme.brightness,
 		Ambient = rgb(theme.ambient),
@@ -75,8 +78,28 @@ function Atmos.applyTheme(theme: any, seconds: number?)
 	tween(bloom, fade, { Intensity = theme.bloom })
 
 	local grade = effect("ColorCorrectionEffect", "KartGrade") :: ColorCorrectionEffect
-	grade.Contrast = 0.08
+	grade.Contrast = theme.contrast or 0.08
 	tween(grade, fade, { TintColor = rgb(theme.tint), Saturation = theme.saturation })
+
+	-- Volumetric clouds for outdoor themes (they live under Terrain).
+	local terrain = workspace:FindFirstChildOfClass("Terrain")
+	if terrain then
+		local clouds = terrain:FindFirstChild("KartClouds") :: Clouds?
+		if not clouds then
+			local made = Instance.new("Clouds")
+			made.Name = "KartClouds"
+			made.Cover = 0
+			made.Density = 0
+			made.Parent = terrain
+			clouds = made
+		end
+		local cloud = clouds :: Clouds
+		local c = theme.clouds
+		cloud.Enabled = c ~= nil
+		if c then
+			tween(cloud, fade, { Cover = c.cover, Density = c.density })
+		end
+	end
 
 	local rays = effect("SunRaysEffect", "KartSunRays") :: SunRaysEffect
 	rays.Spread = 0.6

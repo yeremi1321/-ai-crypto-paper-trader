@@ -30,6 +30,7 @@ local LobbyBuilder = require(script.Parent.LobbyBuilder)
 local Net = require(script.Parent.Net)
 local PracticeService = require(script.Parent.PracticeService)
 local RaceService = require(script.Parent.RaceService)
+local TerrainBuilder = require(script.Parent.TerrainBuilder)
 
 local RoundService = {}
 
@@ -315,6 +316,10 @@ local function finishVoting()
 	deadline = now() + Voting.AnnounceSeconds
 	handles.setDeparture(true)
 	dirty = true
+	-- Start shaping the winning track's land now, during the reveal, so the
+	-- race usually loads straight away (TrackBuilder waits for it if not).
+	local trackId = winner :: string
+	task.spawn(TerrainBuilder.ensure, trackId)
 end
 
 local function startRace()

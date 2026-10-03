@@ -74,8 +74,11 @@ function Atmos.applyTheme(theme: any, seconds: number?)
 	-- the time of day changes at once; everything else fades.
 	Lighting.ClockTime = theme.clock
 	Lighting.GlobalShadows = true
-	Lighting.EnvironmentDiffuseScale = 0.5
-	Lighting.EnvironmentSpecularScale = 0.5
+	-- Realistic themes let the sky light and reflect everything (PBR), with
+	-- softer shadow edges; toy worlds keep flatter, cartoon lighting.
+	Lighting.EnvironmentDiffuseScale = if theme.realistic then 1 else 0.5
+	Lighting.EnvironmentSpecularScale = if theme.realistic then 1 else 0.5
+	Lighting.ShadowSoftness = if theme.realistic then 0.15 else 0.2
 	tween(Lighting, fade, {
 		Brightness = theme.brightness,
 		Ambient = rgb(theme.ambient),
@@ -97,8 +100,28 @@ function Atmos.applyTheme(theme: any, seconds: number?)
 	tween(bloom, fade, { Intensity = theme.bloom })
 
 	local grade = effect("ColorCorrectionEffect", "KartGrade") :: ColorCorrectionEffect
-	grade.Contrast = 0.08
+	grade.Contrast = theme.contrast or 0.08
 	tween(grade, fade, { TintColor = rgb(theme.tint), Saturation = theme.saturation })
+
+	-- Volumetric clouds for outdoor themes (they live under Terrain).
+	local terrain = workspace:FindFirstChildOfClass("Terrain")
+	if terrain then
+		local clouds = terrain:FindFirstChild("KartClouds") :: Clouds?
+		if not clouds then
+			local made = Instance.new("Clouds")
+			made.Name = "KartClouds"
+			made.Cover = 0
+			made.Density = 0
+			made.Parent = terrain
+			clouds = made
+		end
+		local cloud = clouds :: Clouds
+		local c = theme.clouds
+		cloud.Enabled = c ~= nil
+		if c then
+			tween(cloud, fade, { Cover = c.cover, Density = c.density })
+		end
+	end
 
 	local rays = effect("SunRaysEffect", "KartSunRays") :: SunRaysEffect
 	rays.Spread = 0.6
@@ -1942,6 +1965,352 @@ return Karts
       </Item>
       <Item class="ModuleScript" referent="13">
         <Properties>
+          <string name="Name">Landscape</string>
+          <string name="Source"><![CDATA[--!strict
+-- Plans the land around a track: the ground, earth banks under raised road,
+-- rolling hills, lakes, distant snow-capped mountains and desert mesas.
+-- It's pure data, so tests can check that nothing lands on the road;
+-- server/TerrainBuilder turns the plan into Roblox Terrain.
+--
+-- Each theme's `terrain` table (in Tracks.Themes) sets the materials and
+-- counts. A track can also place its own lakes (`lakes = { { x, z, r } }`, in
+-- the same units as its control points); the road may cross those on a bridge.
+-- Placement is seeded by the track id, so every server builds the same land.
+
+local RoadGeometry = require("./RoadGeometry")
+local Scenery = require("./Scenery")
+local Track = require("./Track")
+local Tracks = require("./Tracks")
+
+export type Ball = { x: number, y: number, z: number, r: number, material: string }
+export type Mesa = { x: number, z: number, r: number, bottom: number, top: number, material: string, band: string? }
+export type Lake = { x: number, z: number, r: number, surface: number, shore: string, liquid: string, bridged: boolean }
+-- One earth block under the road, from top-centre point a to b, hanging `depth` down.
+export type Bank = { ax: number, ay: number, az: number, bx: number, by: number, bz: number, width: number, depth: number }
+
+export type Plan = {
+	trackId: string,
+	spec: any,
+	groundTop: number,
+	minX: number,
+	maxX: number,
+	minZ: number,
+	maxZ: number,
+	banks: { Bank },
+	bankAt: { [number]: boolean }, -- road points whose verge is terrain
+	hills: { Ball },
+	mountains: { Ball },
+	caps: { Ball },
+	mesas: { Mesa },
+	lakes: { Lake },
+}
+
+local Landscape = {}
+
+Landscape.BankSpread = 1.8 -- each stud of bank height widens its foot by this much
+
+local function rng(seedText: string): () -> number
+	local seed = 7
+	for i = 1, #seedText do
+		seed = (seed * 31 + string.byte(seedText, i)) % 2147483647
+	end
+	return function(): number
+		seed = (seed * 48271) % 2147483647
+		return seed / 2147483647
+	end
+end
+
+-- Flat distance from (x, z) to the nearest road point, and that point's index.
+local function nearestRoad(track: Track.Built, x: number, z: number): (number, number)
+	local best, index = math.huge, 1
+	for i, p in track.points do
+		local dx, dz = p.x - x, p.z - z
+		local d = dx * dx + dz * dz
+		if d < best then
+			best, index = d, i
+		end
+	end
+	return math.sqrt(best), index
+end
+
+function Landscape.plan(track: Track.Built): Plan?
+	local def = track.def
+	local theme = Tracks.Themes[def.theme]
+	local spec = theme and theme.terrain
+	if not spec then
+		return nil
+	end
+	local random = rng(def.id .. ":land")
+	local pts = track.points
+	local n = #pts
+	local half = def.width / 2
+	local barrier = half + Track.ShoulderWidth + 1
+	local drop = spec.drop or 0.7
+
+	local minY, minX, maxX, minZ, maxZ = math.huge, math.huge, -math.huge, math.huge, -math.huge
+	for _, p in pts do
+		minY = math.min(minY, p.y)
+		minX, maxX = math.min(minX, p.x), math.max(maxX, p.x)
+		minZ, maxZ = math.min(minZ, p.z), math.max(maxZ, p.z)
+	end
+	local groundTop = minY - drop
+	local cx, cz = (minX + maxX) / 2, (minZ + maxZ) / 2
+	local extent = math.max(maxX - minX, maxZ - minZ) / 2
+
+	local plan: Plan = {
+		trackId = def.id,
+		spec = spec,
+		groundTop = groundTop,
+		minX = 0,
+		maxX = 0,
+		minZ = 0,
+		maxZ = 0,
+		banks = {},
+		bankAt = {},
+		hills = {},
+		mountains = {},
+		caps = {},
+		mesas = {},
+		lakes = {},
+	}
+
+	-- How far a raised road's bank reaches sideways at point i.
+	local function bankReach(i: number): number
+		return barrier + (pts[i].y - minY) * Landscape.BankSpread / 2
+	end
+	local landmarks = Scenery.setPieceSpots(track)
+	local function clearOfRoad(x: number, z: number, radius: number, margin: number): boolean
+		local d, i = nearestRoad(track, x, z)
+		if d <= radius + bankReach(i) + margin or Scenery.shortcutDistance(track, x, z) <= radius + margin then
+			return false
+		end
+		for _, spot in landmarks do
+			local dx, dz = spot.x - x, spot.z - z
+			if math.sqrt(dx * dx + dz * dz) < radius + Scenery.SetPieceRadius + margin then
+				return false
+			end
+		end
+		return true
+	end
+
+	-- Lakes the track asks for (the road may bridge them), then random ones.
+	local scale = def.scale or 1
+	for _, l in (def :: any).lakes or {} do
+		table.insert(plan.lakes, {
+			x = l.x * scale,
+			z = l.z * scale,
+			r = l.r * scale,
+			surface = groundTop - 1.4,
+			shore = (spec.lakes and spec.lakes.shore) or "Sand",
+			liquid = (spec.lakes and spec.lakes.liquid) or "Water",
+			bridged = true,
+		})
+	end
+	local function clearOfLakes(x: number, z: number, radius: number, margin: number): boolean
+		for _, l in plan.lakes do
+			local dx, dz = l.x - x, l.z - z
+			if math.sqrt(dx * dx + dz * dz) < l.r + radius + margin then
+				return false
+			end
+		end
+		return true
+	end
+	local lakeRule = spec.lakes
+	if lakeRule then
+		local placed, tries = 0, 0
+		while placed < (lakeRule.count or 0) and tries < 400 do
+			tries += 1
+			local r = lakeRule.min + random() * (lakeRule.max - lakeRule.min)
+			local a = random() * math.pi * 2
+			local dist = random() * (extent + 220)
+			local x, z = cx + math.cos(a) * dist, cz + math.sin(a) * dist
+			if clearOfRoad(x, z, r, 30) and clearOfLakes(x, z, r, 40) then
+				placed += 1
+				table.insert(plan.lakes, { x = x, z = z, r = r, surface = groundTop - 1.4, shore = lakeRule.shore or "Sand", liquid = lakeRule.liquid or "Water", bridged = false })
+			end
+		end
+	end
+
+	-- Earth banks: raised road sits on terrain instead of floating, except
+	-- over other road (a bridge) or over a lake the track crosses.
+	local overpass = RoadGeometry.overpasses(track, barrier + 40, 6)
+	for i, p in pts do
+		local overLake = false
+		for _, l in plan.lakes do
+			if l.bridged then
+				local dx, dz = l.x - p.x, l.z - p.z
+				if math.sqrt(dx * dx + dz * dz) < l.r + barrier + 8 then
+					overLake = true
+				end
+			end
+		end
+		plan.bankAt[i] = spec.embank ~= false and not overpass[i] and not overLake
+	end
+	if spec.embank ~= false then
+		local frames = RoadGeometry.frames(track)
+		for i = 1, n do
+			local j = i % n + 1
+			if plan.bankAt[i] and plan.bankAt[j] then
+				local a, b = frames[i], frames[j]
+				local height = math.max(a.y, b.y) - minY
+				-- Road at ground level needs nothing: the slab is its verge.
+				local tiers = if height < 0.5 then 0 elseif height < 3 then 1 else 3
+				local mx, mz = (a.x + b.x) / 2, (a.z + b.z) / 2
+				for k = 0, tiers - 1 do
+					local lower = height * k / 3
+					local width = (barrier + 4) * 2 + lower * Landscape.BankSpread
+					-- Stop short of any other stretch of road lower than this tier,
+					-- so a hill section's bank never buries the road beside it.
+					local tierTop = math.max(a.y, b.y) - drop - lower
+					for q = 1, n do
+						local apart = math.min(math.abs(q - i), n - math.abs(q - i))
+						local other = pts[q]
+						if apart > 6 and other.y < tierTop + 2 then
+							local dx, dz = other.x - mx, other.z - mz
+							local room = math.sqrt(dx * dx + dz * dz) - barrier - 6
+							width = math.min(width, math.max((barrier + 4) * 2, room * 2))
+						end
+					end
+					table.insert(plan.banks, {
+						ax = a.x,
+						ay = a.y - drop - lower,
+						az = a.z,
+						bx = b.x,
+						by = b.y - drop - lower,
+						bz = b.z,
+						width = width,
+						depth = math.max(4, a.y - drop - lower - groundTop + 6),
+					})
+				end
+			end
+		end
+	end
+
+	-- Rolling hills, clear of the road and its banks.
+	local hillRule = spec.hills
+	if hillRule then
+		local placed, tries = 0, 0
+		while placed < hillRule.count and tries < hillRule.count * 30 do
+			tries += 1
+			local r = hillRule.min + random() * (hillRule.max - hillRule.min)
+			local a = random() * math.pi * 2
+			local dist = random() * (extent + 320)
+			local x, z = cx + math.cos(a) * dist, cz + math.sin(a) * dist
+			local foot = r * 0.79 -- footprint radius of a cap 0.38r tall
+			if clearOfRoad(x, z, foot, 25) and clearOfLakes(x, z, foot, 15) then
+				placed += 1
+				table.insert(plan.hills, { x = x, y = groundTop - r * 0.62, z = z, r = r, material = hillRule.material or spec.ground })
+			end
+		end
+	end
+
+	-- Desert mesas: flat-topped rock with a coloured band.
+	local mesaRule = spec.mesas
+	if mesaRule then
+		local placed, tries = 0, 0
+		while placed < mesaRule.count and tries < mesaRule.count * 40 do
+			tries += 1
+			local r = mesaRule.min + random() * (mesaRule.max - mesaRule.min)
+			local a = random() * math.pi * 2
+			local dist = extent * 0.3 + random() * (extent + (mesaRule.ring or 300))
+			local x, z = cx + math.cos(a) * dist, cz + math.sin(a) * dist
+			if clearOfRoad(x, z, r, 40) and clearOfLakes(x, z, r, 20) then
+				placed += 1
+				local height = mesaRule.minHeight + random() * (mesaRule.maxHeight - mesaRule.minHeight)
+				table.insert(plan.mesas, { x = x, z = z, r = r, bottom = groundTop - 4, top = groundTop + height, material = mesaRule.material, band = mesaRule.band })
+			end
+		end
+	end
+
+	-- Distant mountains in a ring: a main mass, two shoulders, a peak and a cap.
+	local mountainRule = spec.mountains
+	local reach = extent + 200
+	if mountainRule then
+		local count = mountainRule.count
+		for k = 0, count - 1 do
+			local r = mountainRule.min + random() * (mountainRule.max - mountainRule.min)
+			local a = (k + random() * 0.6) / count * math.pi * 2
+			local dist = extent + (mountainRule.ring or 400) + random() * 260
+			local x, z = cx + math.cos(a) * dist, cz + math.sin(a) * dist
+			if clearOfRoad(x, z, r * 1.25, 60) then
+				local material = mountainRule.material or "Rock"
+				local baseY = groundTop - r * 0.35
+				table.insert(plan.mountains, { x = x, y = baseY, z = z, r = r, material = material })
+				local sx, sz = -math.sin(a), math.cos(a)
+				for _, side in { -1, 1 } do
+					local o = r * (0.65 + random() * 0.2)
+					table.insert(plan.mountains, { x = x + sx * side * o, y = groundTop - r * 0.25, z = z + sz * side * o, r = r * (0.5 + random() * 0.15), material = material })
+				end
+				local peakY = baseY + r * 0.72
+				table.insert(plan.mountains, { x = x + (random() - 0.5) * r * 0.2, y = peakY, z = z + (random() - 0.5) * r * 0.2, r = r * 0.45, material = material })
+				if mountainRule.cap then
+					table.insert(plan.caps, { x = x, y = baseY + r * 0.98, z = z, r = r * 0.3, material = mountainRule.cap })
+				end
+				reach = math.max(reach, dist + r * 1.3)
+			end
+		end
+	end
+
+	-- Ground slab out to the horizon features.
+	local margin = math.max(reach - extent, 400) + 60
+	plan.minX, plan.maxX = cx - extent - margin, cx + extent + margin
+	plan.minZ, plan.maxZ = cz - extent - margin, cz + extent + margin
+	return plan
+end
+
+-- Height of the land at (x, z), or nil over water (props skip those spots).
+function Landscape.groundAt(plan: Plan, x: number, z: number): number?
+	for _, l in plan.lakes do
+		local dx, dz = l.x - x, l.z - z
+		if dx * dx + dz * dz < l.r * l.r then
+			return nil
+		end
+	end
+	local h = plan.groundTop
+	for _, bank in plan.banks do
+		local abx, abz = bank.bx - bank.ax, bank.bz - bank.az
+		local len2 = abx * abx + abz * abz
+		if len2 > 0 then
+			-- The block spans its segment plus 2 studs at each end (TerrainBuilder).
+			local len = math.sqrt(len2)
+			local t = ((x - bank.ax) * abx + (z - bank.az) * abz) / len2
+			if t * len >= -2 and t * len <= len + 2 then
+				local px, pz = bank.ax + abx * t, bank.az + abz * t
+				local dx, dz = x - px, z - pz
+				if dx * dx + dz * dz < (bank.width / 2) ^ 2 then
+					h = math.max(h, bank.ay + (bank.by - bank.ay) * math.clamp(t, 0, 1))
+				end
+			end
+		end
+	end
+	local function ball(b: Ball)
+		local dx, dz = b.x - x, b.z - z
+		local d2 = dx * dx + dz * dz
+		if d2 < b.r * b.r then
+			h = math.max(h, b.y + math.sqrt(b.r * b.r - d2))
+		end
+	end
+	for _, b in plan.hills do
+		ball(b)
+	end
+	for _, b in plan.mountains do
+		ball(b)
+	end
+	for _, m in plan.mesas do
+		local dx, dz = m.x - x, m.z - z
+		if dx * dx + dz * dz < m.r * m.r then
+			h = math.max(h, m.top)
+		end
+	end
+	return h
+end
+
+return Landscape
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="14">
+        <Properties>
           <string name="Name">LobbyLayout</string>
           <string name="Source"><![CDATA[--!strict
 -- Compact indoor voting hall with garage, trophies and party bays.
@@ -2067,7 +2436,7 @@ return LobbyLayout
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="14">
+      <Item class="ModuleScript" referent="15">
         <Properties>
           <string name="Name">PlayerData</string>
           <string name="Source"><![CDATA[--!strict
@@ -2394,7 +2763,7 @@ return PlayerData
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="15">
+      <Item class="ModuleScript" referent="16">
         <Properties>
           <string name="Name">RaceRules</string>
           <string name="Source"><![CDATA[--!strict
@@ -2480,7 +2849,7 @@ return RaceRules
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="16">
+      <Item class="ModuleScript" referent="17">
         <Properties>
           <string name="Name">RemoteNames</string>
           <string name="Source"><![CDATA[--!strict
@@ -2513,7 +2882,7 @@ return {
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="17">
+      <Item class="ModuleScript" referent="18">
         <Properties>
           <string name="Name">Rewards</string>
           <string name="Source"><![CDATA[--!strict
@@ -2630,7 +2999,117 @@ return Rewards
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="18">
+      <Item class="ModuleScript" referent="19">
+        <Properties>
+          <string name="Name">RoadGeometry</string>
+          <string name="Source"><![CDATA[--!strict
+-- The road's cross-section, shared by the road builder and its tests.
+--
+-- Every centreline point gets one frame: its position and a level sideways
+-- unit vector (positive = right of travel, the same sign Track.spot uses).
+-- The road, curbs, lines, shoulders and barriers all take their edges from
+-- these frames, so each piece ends exactly where the next one starts: no
+-- gaps on the outside of a bend, no overlapping slabs on the inside.
+
+local Track = require("./Track")
+
+export type Frame = {
+	x: number,
+	y: number,
+	z: number,
+	rx: number, -- sideways unit vector (level)
+	rz: number,
+	turn: number, -- smoothed signed turn here (radians per point, + = right)
+}
+
+local RoadGeometry = {}
+
+local function heading(ax: number, az: number, bx: number, bz: number): number
+	return math.atan2(bx - ax, bz - az)
+end
+
+local function wrapAngle(a: number): number
+	return (a + math.pi) % (2 * math.pi) - math.pi
+end
+
+function RoadGeometry.frames(track: Track.Built): { Frame }
+	local pts = track.points
+	local n = #pts
+	local raw = {}
+	for i = 1, n do
+		local a, b, c = pts[(i - 2) % n + 1], pts[i], pts[i % n + 1]
+		raw[i] = wrapAngle(heading(b.x, b.z, c.x, c.z) - heading(a.x, a.z, b.x, b.z))
+	end
+	local frames = {}
+	for i = 1, n do
+		local prev, nextPoint = pts[(i - 2) % n + 1], pts[i % n + 1]
+		local tx, tz = nextPoint.x - prev.x, nextPoint.z - prev.z
+		local l = math.sqrt(tx * tx + tz * tz)
+		tx, tz = tx / l, tz / l
+		local sum = 0
+		for k = -2, 2 do
+			sum += raw[(i - 1 + k) % n + 1]
+		end
+		local p = pts[i]
+		-- heading() grows to the left of travel, so flip it: + = turning right.
+		frames[i] = { x = p.x, y = p.y, z = p.z, rx = -tz, rz = tx, turn = -sum / 5 }
+	end
+	return frames
+end
+
+-- A point `lateral` studs to the right of frame f, `lift` above the road.
+function RoadGeometry.edge(f: Frame, lateral: number, lift: number?): Track.Vec
+	return Track.v(f.x + f.rx * lateral, f.y + (lift or 0), f.z + f.rz * lateral)
+end
+
+-- Segments where an edge at `lateral` runs backwards (the bend is tighter
+-- than the offset, so a strip there would fold over itself).
+function RoadGeometry.folds(frames: { Frame }, lateral: number): { number }
+	local out = {}
+	local n = #frames
+	for i = 1, n do
+		local a, b = frames[i], frames[i % n + 1]
+		local ea, eb = RoadGeometry.edge(a, lateral), RoadGeometry.edge(b, lateral)
+		local dot = (eb.x - ea.x) * (b.x - a.x) + (eb.z - ea.z) * (b.z - a.z)
+		if dot <= 0 then
+			table.insert(out, i)
+		end
+	end
+	return out
+end
+
+-- Corners get red-and-white curbs; straights get painted edge lines.
+RoadGeometry.CurbTurn = 0.035 -- about a 340-stud radius at 12-stud spacing
+function RoadGeometry.isCorner(f: Frame): boolean
+	return math.abs(f.turn) > RoadGeometry.CurbTurn
+end
+
+-- Points carrying road over other road (a bridge): something lower passes
+-- underneath within `reach` studs. Embankments and pillars skip these.
+function RoadGeometry.overpasses(track: Track.Built, reach: number, clearance: number): { [number]: boolean }
+	local pts = track.points
+	local n = #pts
+	local out = {}
+	for i, p in pts do
+		for j, q in pts do
+			local apart = math.min(math.abs(i - j), n - math.abs(i - j))
+			if apart > 12 and q.y < p.y - clearance then
+				local dx, dz = q.x - p.x, q.z - p.z
+				if dx * dx + dz * dz < reach * reach then
+					out[i] = true
+					break
+				end
+			end
+		end
+	end
+	return out
+end
+
+return RoadGeometry
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="20">
         <Properties>
           <string name="Name">Scenery</string>
           <string name="Source"><![CDATA[--!strict
@@ -2663,15 +3142,21 @@ Scenery.Themes = {
 		{ kind = "mesa", count = 18, near = 70, far = 300, minSize = 0.8, maxSize = 1.4, radius = 35 },
 	},
 	sunny = {
-		{ kind = "tree", count = 170, near = 12, far = 220, minSize = 0.8, maxSize = 1.5, radius = 8 },
+		{ kind = "tree", count = 150, near = 12, far = 220, minSize = 0.8, maxSize = 1.5, radius = 8 },
+		{ kind = "pine", count = 60, near = 30, far = 260, minSize = 0.9, maxSize = 1.6, radius = 7 },
 		{ kind = "bush", count = 80, near = 6, far = 120, minSize = 0.7, maxSize = 1.3, radius = 4 },
 		{ kind = "billboard", count = 8, near = 14, far = 30, minSize = 1, maxSize = 1, radius = 14 },
 		{ kind = "flag", count = 18, near = 4, far = 10, minSize = 1, maxSize = 1, radius = 3 },
 	},
+	-- Mesas are terrain here (Landscape), so only the smaller things are props.
 	canyon = {
-		{ kind = "mesa", count = 22, near = 60, far = 320, minSize = 0.8, maxSize = 1.8, radius = 40 },
 		{ kind = "rock", count = 110, near = 8, far = 200, minSize = 0.6, maxSize = 1.8, radius = 9 },
 		{ kind = "cactus", count = 70, near = 8, far = 160, minSize = 0.8, maxSize = 1.4, radius = 4 },
+	},
+	alpine = {
+		{ kind = "pine", count = 240, near = 10, far = 260, minSize = 0.8, maxSize = 1.7, radius = 7 },
+		{ kind = "rock", count = 50, near = 12, far = 220, minSize = 0.6, maxSize = 1.6, radius = 8 },
+		{ kind = "flag", count = 14, near = 4, far = 10, minSize = 1, maxSize = 1, radius = 3 },
 	},
 	-- Tiny racers, oversized world: everything here is giant.
 	toyroom = {
@@ -2836,7 +3321,7 @@ return Scenery
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="19">
+      <Item class="ModuleScript" referent="21">
         <Properties>
           <string name="Name">Track</string>
           <string name="Source"><![CDATA[--!strict
@@ -2879,6 +3364,9 @@ export type TrackDef = {
 	tunnels: { { from: number, to: number, style: string } }?,
 	-- Big themed landmarks placed beside the road.
 	setPieces: { { kind: string, t: number, side: number, gap: number? } }?,
+	-- Lakes the road may cross on a bridge (realistic themes with terrain).
+	-- Same units as the control points: scaled by `scale`.
+	lakes: { { x: number, z: number, r: number } }?,
 }
 
 export type Zone = { kind: string, t: number, length: number, offset: number?, width: number?, period: number?, duty: number? }
@@ -3244,7 +3732,7 @@ return Track
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="20">
+      <Item class="ModuleScript" referent="22">
         <Properties>
           <string name="Name">Tracks</string>
           <string name="Source"><![CDATA[--!strict
@@ -3263,39 +3751,68 @@ local v = Track.v
 local Tracks = {}
 
 Tracks.Themes = {
+	-- Sunny Loop: realistic countryside. Grass hills, two lakes, snowy peaks.
 	sunny = {
-		road = { 70, 70, 78 },
-		shoulder = { 120, 170, 80 },
-		ground = { 100, 160, 70 },
-		wall = { 235, 235, 240 },
-		accent = { 255, 210, 60 },
-		curb = { { 220, 40, 40 }, { 245, 245, 245 } },
-		line = { 245, 245, 245 },
-		clock = 14,
-		-- Lighting: hazy summer afternoon.
-		ambient = { 120, 120, 130 },
-		brightness = 3,
-		atmosphere = { density = 0.3, haze = 1.2, glare = 0.4, color = { 200, 220, 255 }, decay = { 110, 140, 200 } },
-		bloom = 0.6,
-		tint = { 255, 250, 240 },
-		saturation = 0.15,
+		realistic = true,
+		road = { 62, 63, 66 },
+		shoulder = { 96, 84, 62 },
+		ground = { 86, 128, 58 },
+		wall = { 205, 204, 198 },
+		accent = { 255, 196, 40 },
+		curb = { { 196, 38, 34 }, { 236, 236, 232 } },
+		line = { 236, 236, 228 },
+		clock = 14.5,
+		-- Lighting: clear summer afternoon with soft shadows and real clouds.
+		ambient = { 95, 100, 110 },
+		brightness = 3.2,
+		atmosphere = { density = 0.32, haze = 1.6, glare = 0.5, color = { 199, 210, 225 }, decay = { 106, 124, 150 } },
+		bloom = 0.25,
+		tint = { 255, 252, 246 },
+		saturation = 0.04,
+		contrast = 0.12,
+		clouds = { cover = 0.55, density = 0.75 },
+		terrain = {
+			ground = "Grass",
+			bank = "Grass",
+			drop = 0.7,
+			hills = { count = 16, min = 50, max = 140, material = "LeafyGrass" },
+			lakes = { count = 2, min = 55, max = 120, shore = "Sand", liquid = "Water" },
+			mountains = { count = 10, min = 170, max = 280, ring = 520, material = "Rock", cap = "Snow" },
+			colors = { Grass = { 82, 124, 52 }, LeafyGrass = { 72, 110, 46 }, Rock = { 104, 100, 96 }, Sand = { 196, 180, 140 }, Snow = { 238, 242, 246 }, Ground = { 102, 88, 66 }, Mud = { 70, 58, 46 } },
+			water = { color = { 28, 74, 86 }, transparency = 0.35, reflectance = 0.6, waveSize = 0.1, waveSpeed = 7 },
+		},
 	},
+	-- Canyon Climb: realistic desert. Dunes, banded mesas and an oasis.
 	canyon = {
-		road = { 92, 80, 72 },
-		shoulder = { 196, 150, 100 },
-		ground = { 180, 120, 80 },
-		wall = { 150, 90, 60 },
+		realistic = true,
+		road = { 74, 68, 64 },
+		shoulder = { 176, 140, 98 },
+		ground = { 190, 146, 98 },
+		wall = { 200, 190, 174 },
 		accent = { 255, 140, 60 },
-		curb = { { 230, 110, 40 }, { 250, 235, 210 } },
-		line = { 250, 230, 190 },
+		curb = { { 186, 60, 40 }, { 236, 226, 206 } },
+		line = { 240, 232, 210 },
 		clock = 17.2,
 		-- Lighting: dusty golden hour.
-		ambient = { 140, 100, 80 },
-		brightness = 2.6,
-		atmosphere = { density = 0.38, haze = 2.2, glare = 1.2, color = { 255, 200, 150 }, decay = { 200, 110, 70 } },
-		bloom = 0.9,
-		tint = { 255, 235, 210 },
-		saturation = 0.2,
+		ambient = { 120, 96, 82 },
+		brightness = 2.8,
+		atmosphere = { density = 0.36, haze = 2, glare = 1, color = { 240, 200, 160 }, decay = { 180, 110, 74 } },
+		bloom = 0.3,
+		tint = { 255, 240, 222 },
+		saturation = 0.06,
+		contrast = 0.12,
+		clouds = { cover = 0.3, density = 0.5 },
+		terrain = {
+			ground = "Sand",
+			bank = "Sandstone",
+			drop = 0.7,
+			hills = { count = 10, min = 60, max = 150, material = "Sand" },
+			mesas = { count = 14, min = 50, max = 120, minHeight = 60, maxHeight = 150, material = "Sandstone", band = "Rock", ring = 420 },
+			lakes = { count = 1, min = 45, max = 70, shore = "Grass", liquid = "Water" },
+			mountains = { count = 8, min = 180, max = 280, ring = 650, material = "Sandstone" },
+			colors = { Sand = { 206, 164, 112 }, Sandstone = { 176, 108, 72 }, Rock = { 120, 82, 62 }, Grass = { 110, 128, 60 }, Mud = { 90, 70, 50 } },
+			water = { color = { 40, 90, 92 }, transparency = 0.35, reflectance = 0.5, waveSize = 0.08, waveSpeed = 6 },
+		},
 	},
 	-- Midnight Toy Room: a giant bedroom at night, lit by a night light.
 	toyroom = {
@@ -3349,6 +3866,18 @@ Tracks.Themes = {
 		bloom = 0.6,
 		tint = { 255, 252, 235 },
 		saturation = 0.3,
+		roadMaterial = "Ground", -- packed dirt
+		wallMaterial = "Wood",
+		clouds = { cover = 0.4, density = 0.6 },
+		terrain = {
+			ground = "Grass",
+			bank = "Grass",
+			drop = 0.7,
+			hills = { count = 6, min = 40, max = 90, material = "LeafyGrass" },
+			lakes = { count = 1, min = 40, max = 60, shore = "Mud", liquid = "Water" },
+			colors = { Grass = { 92, 150, 58 }, LeafyGrass = { 80, 136, 50 }, Mud = { 96, 76, 54 } },
+			water = { color = { 50, 100, 90 }, transparency = 0.45, reflectance = 0.5, waveSize = 0.06, waveSpeed = 5 },
+		},
 	},
 	-- The Kart Carnival lobby: bright, clear afternoon.
 	carnival = {
@@ -3370,6 +3899,7 @@ Tracks.Themes = {
 	-- Kart HQ, the indoor lobby: soft, clear white light with cool blue fill,
 	-- and enough bloom for the cyan trim to glow without washing out.
 	hq = {
+		realistic = true,
 		road = { 40, 48, 78 },
 		shoulder = { 28, 38, 72 },
 		ground = { 16, 22, 44 },
@@ -3380,10 +3910,41 @@ Tracks.Themes = {
 		clock = 14,
 		ambient = { 128, 136, 165 },
 		brightness = 2,
-		atmosphere = { density = 0.12, haze = 0, glare = 0, color = { 200, 215, 240 }, decay = { 120, 140, 190 } },
+		atmosphere = { density = 0.18, haze = 0.8, glare = 0.2, color = { 200, 215, 240 }, decay = { 120, 140, 190 } },
 		bloom = 0.04,
 		tint = { 245, 250, 255 },
 		saturation = 0.02,
+		clouds = { cover = 0.45, density = 0.7 }, -- seen through the lobby window
+	},
+	-- Pinewater Pass: a mountain lake, pine forest and snowy peaks.
+	alpine = {
+		realistic = true,
+		road = { 58, 59, 62 },
+		shoulder = { 90, 84, 70 },
+		ground = { 70, 110, 60 },
+		wall = { 205, 205, 200 },
+		accent = { 70, 170, 255 },
+		curb = { { 200, 40, 40 }, { 238, 238, 234 } },
+		line = { 238, 238, 230 },
+		clock = 10.5,
+		ambient = { 92, 100, 112 },
+		brightness = 3.1,
+		atmosphere = { density = 0.3, haze = 1.2, glare = 0.4, color = { 200, 215, 235 }, decay = { 100, 125, 160 } },
+		bloom = 0.25,
+		tint = { 250, 252, 255 },
+		saturation = 0.05,
+		contrast = 0.12,
+		clouds = { cover = 0.62, density = 0.8 },
+		terrain = {
+			ground = "Grass",
+			bank = "Grass",
+			drop = 0.7,
+			hills = { count = 18, min = 50, max = 150, material = "LeafyGrass" },
+			lakes = { count = 1, min = 60, max = 100, shore = "Ground", liquid = "Water" },
+			mountains = { count = 11, min = 200, max = 320, ring = 480, material = "Rock", cap = "Snow" },
+			colors = { Grass = { 74, 112, 52 }, LeafyGrass = { 60, 96, 44 }, Rock = { 98, 96, 94 }, Snow = { 240, 244, 248 }, Ground = { 96, 84, 64 }, Sand = { 170, 160, 130 }, Mud = { 62, 54, 44 } },
+			water = { color = { 22, 70, 92 }, transparency = 0.3, reflectance = 0.7, waveSize = 0.08, waveSpeed = 6 },
+		},
 	},
 	fortress = {
 		road = { 78, 72, 69 }, shoulder = { 52, 46, 45 }, ground = { 32, 29, 33 },
@@ -3392,6 +3953,15 @@ Tracks.Themes = {
 		clock = 0.5, ambient = { 100, 91, 100 }, brightness = 1.8,
 		atmosphere = { density = 0.24, haze = 0.7, glare = 0, color = { 135, 112, 119 }, decay = { 65, 53, 72 } },
 		bloom = 0.18, tint = { 255, 238, 219 }, saturation = 0.05,
+		roadMaterial = "Slate", wallMaterial = "Cobblestone", shoulderMaterial = "Slate",
+		terrain = {
+			ground = "Basalt",
+			drop = 5, -- below the lava canals
+			embank = false, -- the road rides a stone causeway on pillars
+			lakes = { count = 3, min = 40, max = 80, shore = "Basalt", liquid = "CrackedLava" },
+			mountains = { count = 8, min = 180, max = 280, ring = 420, material = "Basalt", cap = "CrackedLava" },
+			colors = { Basalt = { 44, 40, 44 }, CrackedLava = { 230, 100, 40 } },
+		},
 	},
 	neon = {
 		road = { 30, 30, 42 },
@@ -3426,6 +3996,38 @@ Tracks.List = {
 		itemRows = { 0.1, 0.42, 0.74 }, ramps = { { t = 0.65, offset = 0, width = 18 } },
 	},
 
+	{
+		id = "alpine",
+		name = "Pinewater Pass",
+		theme = "alpine",
+		difficulty = "Medium",
+		feature = "A long bridge over a mountain lake, pine forest and snowy peaks",
+		icon = "🏔️",
+		width = 54,
+		scale = 1.6,
+		laps = 3,
+		controls = {
+			v(0, 0, 0),
+			v(0, 0, -240),
+			v(50, 6, -380),
+			v(180, 16, -450),
+			v(330, 22, -420),
+			v(420, 18, -300),
+			v(440, 10, -160),
+			v(400, 12, -40),
+			v(300, 14, 40),
+			v(170, 14, 60),
+			v(60, 10, 120),
+			v(-40, 4, 200),
+			v(-110, 0, 150),
+			v(-90, 0, 60),
+		},
+		-- The road crosses this lake on a bridge.
+		lakes = { { x = 235, z = 50, r = 55 } },
+		boostPads = { { t = 0.06, offset = 0 }, { t = 0.5, offset = 0.3 }, { t = 0.84, offset = -0.3 } },
+		itemRows = { 0.22, 0.6 },
+		ramps = { { t = 0.93, offset = 0, width = 18 } },
+	},
 	{
 		id = "sunny",
 		name = "Sunny Loop",
@@ -3655,7 +4257,7 @@ Tracks.List = {
 } :: { Track.TrackDef }
 
 -- Tracks that can come up in map voting.
-Tracks.VotePool = { "emberfort", "toyroom", "kitchen", "backyard", "sunny", "canyon", "neon" }
+Tracks.VotePool = { "alpine", "emberfort", "toyroom", "kitchen", "backyard", "sunny", "canyon", "neon" }
 
 -- A Grand Prix is every track in order (kept for a future cup mode).
 Tracks.Cup = { name = "Starter Cup", tracks = { "sunny", "canyon", "neon" } }
@@ -3676,7 +4278,7 @@ return Tracks
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="21">
+      <Item class="ModuleScript" referent="23">
         <Properties>
           <string name="Name">Voting</string>
           <string name="Source"><![CDATA[--!strict
@@ -3770,15 +4372,15 @@ return Voting
       </Item>
     </Item>
   </Item>
-  <Item class="ServerScriptService" referent="22">
+  <Item class="ServerScriptService" referent="24">
     <Properties>
       <string name="Name">ServerScriptService</string>
     </Properties>
-    <Item class="Folder" referent="23">
+    <Item class="Folder" referent="25">
       <Properties>
         <string name="Name">Server</string>
       </Properties>
-      <Item class="ModuleScript" referent="24">
+      <Item class="ModuleScript" referent="26">
         <Properties>
           <string name="Name">DataService</string>
           <string name="Source"><![CDATA[-- Loads and saves player data (coins, unlocks, equipped kart, settings,
@@ -3967,7 +4569,7 @@ return DataService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="25">
+      <Item class="ModuleScript" referent="27">
         <Properties>
           <string name="Name">FortressBuilder</string>
           <string name="Source"><![CDATA[-- Original fortress course dressing. Masonry and lava stay outside the
@@ -4058,7 +4660,7 @@ return FortressBuilder
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="26">
+      <Item class="ModuleScript" referent="28">
         <Properties>
           <string name="Name">ItemService</string>
           <string name="Source"><![CDATA[-- Item boxes, rolling items and everything the six items do on the track.
@@ -4591,7 +5193,7 @@ return ItemService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="27">
+      <Item class="ModuleScript" referent="29">
         <Properties>
           <string name="Name">Landmarks</string>
           <string name="Source"><![CDATA[-- Big themed pieces for the oversized-world tracks: tunnels (the bed, garden
@@ -4981,12 +5583,17 @@ return Landmarks
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="28">
+      <Item class="ModuleScript" referent="30">
         <Properties>
           <string name="Name">LobbyBuilder</string>
           <string name="Source"><![CDATA[-- Compact indoor Kart HQ: soft lighting, four voting pads, garage,
 -- trophy room and party bays. No practice hall or viewing lounge.
 -- Clients draw the wall screens and animate proximity doors.
+--
+-- Realistic finish: concrete walls, a dark marble floor, brushed-metal
+-- trim, fabric banners and glowing light fixtures (see `finish`), and a
+-- panoramic window behind spawn looking out over a real terrain lake, pine
+-- trees and snowy mountains (see `buildVista`).
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
@@ -4996,6 +5603,10 @@ local Karts = require(Shared.Karts)
 local LobbyLayout = require(Shared.LobbyLayout)
 local KartRig = require(ReplicatedStorage.Common.KartRig)
 local Shapes = require(ReplicatedStorage.Common.Shapes)
+local Tracks = require(Shared.Tracks)
+
+local Props = require(script.Parent.Props)
+local TerrainBuilder = require(script.Parent.TerrainBuilder)
 
 
 local LobbyBuilder = {}
@@ -5030,6 +5641,9 @@ local O = LobbyLayout.Origin
 local HW, HD = LobbyLayout.HalfWidth, LobbyLayout.HalfDepth
 local HEIGHT, DECK = LobbyLayout.Height, LobbyLayout.DeckHeight
 local WALL = 4 -- chamber wall thickness
+
+local finish: (Instance) -> ()
+local buildVista: () -> ()
 
 local function rgb(t: { number }): Color3
 	return Color3.fromRGB(t[1], t[2], t[3])
@@ -5286,6 +5900,90 @@ local function roomShell(parent: Instance, room: LobbyLayout.Room, height: numbe
 end
 
 ---------------------------------------------------------------------------
+-- Realistic finish and the view outside
+---------------------------------------------------------------------------
+
+-- Each palette colour gets a real material. Screens, glass and anything
+-- already given a material keep theirs.
+local FINISHES = {
+	{ C.wall, Enum.Material.Concrete, 0 },
+	{ C.wallLight, Enum.Material.Concrete, 0 },
+	{ C.floor, Enum.Material.Marble, 0.04 },
+	{ C.panel, Enum.Material.Metal, 0.05 },
+	{ C.navy, Enum.Material.Fabric, 0 },
+	{ C.steel, Enum.Material.Metal, 0.12 },
+	{ C.gold, Enum.Material.Metal, 0.25 },
+	{ C.silver, Enum.Material.Metal, 0.25 },
+	{ C.bronze, Enum.Material.Metal, 0.2 },
+	{ C.pink, Enum.Material.Fabric, 0 },
+	{ C.lamp, Enum.Material.Neon, 0 }, -- light fixtures glow
+}
+finish = function(root: Instance)
+	for _, p in root:GetDescendants() do
+		if p:IsA("BasePart") and p.Material == Enum.Material.SmoothPlastic then
+			for _, f in FINISHES do
+				if p.Color == f[1] then
+					p.Material = f[2]
+					p.Reflectance = f[3]
+					break
+				end
+			end
+		end
+	end
+end
+
+-- The landscape seen through the back window: a lake right outside, pine
+-- trees round its shore, grassy hills and a ring of snowy peaks. Built in
+-- Terrain next to the lobby, and rebuilt whenever a track's land replaces it.
+buildVista = function()
+	local lakeZ = O.z + HD + 240
+	local vista = {
+		spec = { ground = "Grass", bank = "Grass" },
+		groundTop = -2,
+		minX = O.x - 1000,
+		maxX = O.x + 1000,
+		minZ = O.z - 260,
+		maxZ = O.z + HD + 1500,
+		banks = {},
+		bankAt = {},
+		hills = {},
+		mountains = {},
+		caps = {},
+		mesas = {},
+		lakes = { { x = O.x, z = lakeZ, r = 150, surface = -3.4, shore = "Sand", liquid = "Water", bridged = false } },
+	}
+	for i, h in { { -330, 170, 110 }, { 340, 210, 130 }, { -520, 420, 150 }, { 500, 470, 140 }, { -160, 560, 120 }, { 220, 600, 130 } } do
+		vista.hills[i] = { x = O.x + h[1], y = -2 - h[3] * 0.62, z = O.z + HD + h[2], r = h[3], material = "LeafyGrass" }
+	end
+	for _, m in { { -620, 900, 300 }, { -200, 1050, 360 }, { 260, 980, 330 }, { 680, 880, 290 }, { 20, 1250, 380 } } do
+		local x, z, r = O.x + m[1], O.z + HD + m[2], m[3]
+		table.insert(vista.mountains, { x = x, y = -2 - r * 0.35, z = z, r = r, material = "Rock" })
+		table.insert(vista.mountains, { x = x + r * 0.7, y = -2 - r * 0.25, z = z + r * 0.2, r = r * 0.55, material = "Rock" })
+		table.insert(vista.mountains, { x = x, y = -2 + r * 0.37, z = z, r = r * 0.45, material = "Rock" })
+		table.insert(vista.caps, { x = x, y = -2 + r * 0.63, z = z, r = r * 0.3, material = "Snow" })
+	end
+	TerrainBuilder.apply(vista, true)
+
+	-- Pines round the lake (parts, rebuilt with the land).
+	local old = Workspace:FindFirstChild("LobbyVista")
+	if old then
+		old:Destroy()
+	end
+	local trees = Instance.new("Folder")
+	trees.Name = "LobbyVista"
+	local theme = Tracks.Themes.alpine
+	for i = 0, 41 do
+		local a = i / 42 * math.pi * 2
+		local r = 180 + (i * 37 % 60)
+		local x, z = O.x + math.cos(a) * r, lakeZ + math.sin(a) * r
+		if z > O.z + HD + 30 then
+			Props.build({ kind = "pine", x = x, y = -2, z = z, size = 1.1 + (i % 5) * 0.12, yaw = a }, theme, trees)
+		end
+	end
+	trees.Parent = Workspace
+end
+
+---------------------------------------------------------------------------
 -- Build
 ---------------------------------------------------------------------------
 export type Handles = {
@@ -5313,7 +6011,16 @@ function LobbyBuilder.build(): Handles
   end
   wall(shell, W(side * HW, 0, -HD), W(side * HW, 0, HD), HEIGHT, WALL, openings)
  end
- wall(shell, W(-HW, 0, HD), W(HW, 0, HD), HEIGHT, WALL, {})
+ -- Back wall with a panoramic window over the lake (behind the spawn deck).
+ local windowW, windowBottom, windowTop = 96, DECK + 5, 34
+ wall(shell, W(-HW, 0, HD), W(HW, 0, HD), HEIGHT, WALL, { { at = HW, width = windowW, bottom = windowBottom, top = windowTop } })
+ local windowMid = (windowBottom + windowTop) / 2
+ Shapes.box(shell, Vector3.new(windowW, windowTop - windowBottom, 0.3), CFrame.new(W(0, windowMid, HD)), { color = Color3.fromRGB(190, 215, 230), material = GLASS, transparency = 0.82, reflectance = 0.15, collide = true, name = "WindowGlass" })
+ for x = -windowW / 2, windowW / 2, windowW / 6 do
+  Shapes.box(shell, Vector3.new(1, windowTop - windowBottom, 1.4), CFrame.new(W(x, windowMid, HD)), { color = C.steel, collide = true, name = "Mullion" })
+ end
+ Shapes.box(shell, Vector3.new(windowW + 2, 1.2, 3), CFrame.new(W(0, windowBottom - 0.6, HD - 1)), { color = C.steel, collide = true, name = "Sill" })
+ Shapes.box(shell, Vector3.new(windowW + 2, 1.2, 1.6), CFrame.new(W(0, windowTop + 0.6, HD)), { color = C.steel, name = "WindowHead" })
  wall(shell, W(-HW, 0, -HD), W(HW, 0, -HD), HEIGHT, WALL, {
   { at = HW - 54, width = 18, bottom = 0, top = 15 }, { at = HW + 54, width = 18, bottom = 0, top = 15 },
  })
@@ -5372,7 +6079,7 @@ function LobbyBuilder.build(): Handles
  spawn.Transparency = 1
  spawn.Duration = 0
  spawn.Parent = shell
- local logo = Shapes.box(shell, Vector3.new(40, 7, 0.4), facing(W(0, 22, HD - 2.5), -Vector3.zAxis), { color = C.navy })
+ local logo = Shapes.box(shell, Vector3.new(40, 6, 0.4), facing(W(0, 38.5, HD - 2.5), -Vector3.zAxis), { color = C.navy })
  text(logo, "KART HQ · RACE CLUB", C.white, 14)
  local pedestalCf = CFrame.new(W(0, 0, 7))
  local stepX, stepHeights = { 0, -10, 10 }, { 2.4, 1.6, 0.8 }
@@ -5447,7 +6154,9 @@ function LobbyBuilder.build(): Handles
   token:SetAttribute("TokenId", i)
   table.insert(tokens, token)
  end
+ finish(lobby)
  lobby.Parent = Workspace
+ TerrainBuilder.onCleared(buildVista)
 	local function setKartDisplay(slot: number, name: string?, kartId: string?, look: any?)
 		local existing = displays:FindFirstChild(`Slot{slot}`)
 		if existing then
@@ -5548,7 +6257,7 @@ return LobbyBuilder
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Script" referent="29">
+      <Item class="Script" referent="31">
         <Properties>
           <string name="Name">Main</string>
           <token name="RunContext">0</token>
@@ -5566,7 +6275,7 @@ print("[KartRacer] server ready - walk under the READY arch (or press READY) to 
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="30">
+      <Item class="ModuleScript" referent="32">
         <Properties>
           <string name="Name">Net</string>
           <string name="Source"><![CDATA[-- Creates the RemoteEvents listed in Shared.RemoteNames under ReplicatedStorage.Remotes.
@@ -5591,7 +6300,7 @@ return Net
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="31">
+      <Item class="ModuleScript" referent="33">
         <Properties>
           <string name="Name">PracticeService</string>
           <string name="Source"><![CDATA[-- Practice karts on the lobby loop. Anyone not in a race can take one out to
@@ -5684,7 +6393,7 @@ return PracticeService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="32">
+      <Item class="ModuleScript" referent="34">
         <Properties>
           <string name="Name">Props</string>
           <string name="Source"><![CDATA[-- Scenery models built from parts. Scenery.luau decides where they go; this
@@ -5730,18 +6439,56 @@ end
 
 local builders: { [string]: (any, any, Instance) -> () } = {}
 
-builders.tree = function(prop, _theme, parent)
-	local s = prop.size
-	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
-	part(parent, Vector3.new(2, 14 * s, 2) , base * CFrame.new(0, 7 * s, 0), Color3.fromRGB(110, 75, 45), Enum.Material.SmoothPlastic)
-	local leaf = vary(Color3.fromRGB(70, 150, 60), 0.25, prop.x + prop.z)
-	part(parent, Vector3.one * 12 * s, base * CFrame.new(0, 16 * s, 0), leaf, Enum.Material.SmoothPlastic, Enum.PartType.Ball)
-	part(parent, Vector3.one * 8 * s, base * CFrame.new(3 * s, 13 * s, 1 * s), leaf, Enum.Material.SmoothPlastic, Enum.PartType.Ball)
+-- Realistic themes use textured materials (bark, leaves, rock, concrete);
+-- the toy-world themes keep smooth plastic.
+local function mat(theme: any, realistic: Enum.Material): Enum.Material
+	return if theme.realistic then realistic else Enum.Material.SmoothPlastic
 end
 
-builders.bush = function(prop, _theme, parent)
+builders.tree = function(prop, theme, parent)
 	local s = prop.size
-	part(parent, Vector3.new(7, 5, 7) * s, CFrame.new(prop.x, prop.y + 1.5 * s, prop.z), vary(Color3.fromRGB(80, 160, 70), 0.2, prop.z), Enum.Material.SmoothPlastic, Enum.PartType.Ball)
+	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
+	local leafMaterial = mat(theme, Enum.Material.LeafyGrass)
+	part(parent, Vector3.new(2, 14 * s, 2), base * CFrame.new(0, 7 * s, 0), Color3.fromRGB(96, 70, 48), mat(theme, Enum.Material.Wood))
+	-- A couple of branches, then an uneven crown of overlapping leaf clumps.
+	if theme.realistic then
+		for k = 0, 1 do
+			local a = k * math.pi + prop.yaw
+			part(parent, Vector3.new(0.8, 6 * s, 0.8), base * CFrame.new(math.cos(a) * 1.6 * s, 11 * s, math.sin(a) * 1.6 * s) * CFrame.Angles(math.sin(a) * 0.6, 0, -math.cos(a) * 0.6), Color3.fromRGB(96, 70, 48), Enum.Material.Wood)
+		end
+	end
+	local leaf = vary(if theme.realistic then Color3.fromRGB(66, 104, 44) else Color3.fromRGB(70, 150, 60), 0.25, prop.x + prop.z)
+	part(parent, Vector3.one * 12 * s, base * CFrame.new(0, 16 * s, 0), leaf, leafMaterial, Enum.PartType.Ball)
+	part(parent, Vector3.one * 8 * s, base * CFrame.new(3 * s, 13 * s, 1 * s), leaf, leafMaterial, Enum.PartType.Ball)
+	if theme.realistic then
+		part(parent, Vector3.one * 9 * s, base * CFrame.new(-3 * s, 14 * s, -2 * s), vary(leaf, 0.15, prop.z), leafMaterial, Enum.PartType.Ball)
+		part(parent, Vector3.one * 7 * s, base * CFrame.new(1 * s, 20 * s, -1 * s), vary(leaf, 0.15, prop.x), leafMaterial, Enum.PartType.Ball)
+	end
+end
+
+-- A conifer: a tall trunk and stacked, narrowing tiers of needles.
+builders.pine = function(prop, theme, parent)
+	local s = prop.size
+	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
+	part(parent, Vector3.new(1.6, 26 * s, 1.6), base * CFrame.new(0, 13 * s, 0), Color3.fromRGB(84, 62, 46), mat(theme, Enum.Material.Wood))
+	local needles = vary(Color3.fromRGB(38, 72, 46), 0.2, prop.x + prop.z)
+	local tiers = 5
+	for k = 0, tiers - 1 do
+		local f = k / (tiers - 1)
+		local width = (13 - f * 9) * s
+		local tierCf = base * CFrame.new(0, (7 + k * 4.6) * s, 0) * CFrame.Angles(0, k * 0.7, 0)
+		local p = part(parent, Vector3.new(width, 6.5 * s, width), tierCf, vary(needles, 0.1, k + prop.x), mat(theme, Enum.Material.Grass))
+		local mesh = Instance.new("SpecialMesh")
+		mesh.MeshType = Enum.MeshType.Sphere
+		mesh.Parent = p
+	end
+	part(parent, Vector3.new(1.2, 3 * s, 1.2), base * CFrame.new(0, 29 * s, 0), needles, mat(theme, Enum.Material.Grass))
+end
+
+builders.bush = function(prop, theme, parent)
+	local s = prop.size
+	local color = vary(if theme.realistic then Color3.fromRGB(70, 110, 48) else Color3.fromRGB(80, 160, 70), 0.2, prop.z)
+	part(parent, Vector3.new(7, 5, 7) * s, CFrame.new(prop.x, prop.y + 1.5 * s, prop.z), color, mat(theme, Enum.Material.LeafyGrass), Enum.PartType.Ball)
 end
 
 builders.flag = function(prop, theme, parent)
@@ -5783,7 +6530,7 @@ builders.grandstand = function(prop, theme, parent)
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
 	local steps = 5
 	for i = 0, steps - 1 do
-		local step = part(parent, Vector3.new(60, 2.5, 5), base * CFrame.new(0, 1.25 + i * 2.5, i * 4.5), Color3.fromRGB(150, 150, 160), Enum.Material.SmoothPlastic)
+		local step = part(parent, Vector3.new(60, 2.5, 5), base * CFrame.new(0, 1.25 + i * 2.5, i * 4.5), Color3.fromRGB(150, 150, 160), mat(theme, Enum.Material.Concrete))
 		step.CanCollide = true
 		-- Crowd: little coloured blocks.
 		for c = -27, 27, 3 do
@@ -5792,7 +6539,7 @@ builders.grandstand = function(prop, theme, parent)
 			part(parent, Vector3.new(1.4, 2, 1.2), base * CFrame.new(c, 3.5 + i * 2.5, i * 4.5 - 0.5), Color3.fromHSV(h, 0.6, 0.9), Enum.Material.SmoothPlastic)
 		end
 	end
-	local roof = part(parent, Vector3.new(64, 1, 26), base * CFrame.new(0, 20, 9) * CFrame.Angles(math.rad(-8), 0, 0), rgb(theme.accent), Enum.Material.SmoothPlastic)
+	local roof = part(parent, Vector3.new(64, 1, 26), base * CFrame.new(0, 20, 9) * CFrame.Angles(math.rad(-8), 0, 0), rgb(theme.accent), mat(theme, Enum.Material.Metal))
 	roof.CanCollide = true
 	for _, x in { -30, 30 } do
 		part(parent, Vector3.new(1.2, 20, 1.2), base * CFrame.new(x, 10, 20), Color3.fromRGB(90, 90, 100), Enum.Material.SmoothPlastic)
@@ -5801,10 +6548,16 @@ end
 
 builders.rock = function(prop, theme, parent)
 	local s = prop.size
-	local color = vary(rgb(theme.wall), 0.2, prop.x)
+	local tone = if theme.terrain and theme.terrain.colors and theme.terrain.colors.Rock then rgb(theme.terrain.colors.Rock) else rgb(theme.wall)
+	local color = vary(tone, 0.2, prop.x)
+	local material = mat(theme, Enum.Material.Rock)
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
-	part(parent, Vector3.new(10, 7, 8) * s, base * CFrame.new(0, 2.5 * s, 0) * CFrame.Angles(0.2, 0, 0.15), color, Enum.Material.SmoothPlastic)
-	part(parent, Vector3.new(6, 5, 6) * s, base * CFrame.new(3 * s, 4.5 * s, 1 * s) * CFrame.Angles(-0.3, 0.6, 0.2), color, Enum.Material.SmoothPlastic)
+	-- Sunk a little into the ground so boulders sit rather than perch.
+	part(parent, Vector3.new(10, 7, 8) * s, base * CFrame.new(0, 2 * s, 0) * CFrame.Angles(0.2, 0, 0.15), color, material)
+	part(parent, Vector3.new(6, 5, 6) * s, base * CFrame.new(3 * s, 4 * s, 1 * s) * CFrame.Angles(-0.3, 0.6, 0.2), color, material)
+	if theme.realistic then
+		part(parent, Vector3.new(5, 3, 4) * s, base * CFrame.new(-4 * s, 1 * s, 2 * s) * CFrame.Angles(0.4, 1.1, -0.2), vary(color, 0.1, prop.z), material)
+	end
 end
 
 builders.mesa = function(prop, theme, parent)
@@ -6013,7 +6766,7 @@ return Props
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="33">
+      <Item class="ModuleScript" referent="35">
         <Properties>
           <string name="Name">RaceService</string>
           <string name="Source"><![CDATA[-- Runs one race: builds the track, puts karts on the grid, counts down,
@@ -6800,67 +7553,240 @@ return RaceService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="34">
+      <Item class="ModuleScript" referent="36">
         <Properties>
-          <string name="Name">RoadRibbon</string>
-          <string name="Source"><![CDATA[-- Shared road edges form a continuous ribbon rather than overlapping slabs.
--- Two wedges per triangle provide native, upload-free geometry and collision.
-local RoadRibbon = {}
-local function triangle(parent, a, b, c, color, material)
- local ab, ac, bc = b - a, c - a, c - b
- local lengths = { ab:Dot(ab), ac:Dot(ac), bc:Dot(bc) }
- if lengths[1] > lengths[2] and lengths[1] > lengths[3] then
-  a, c = c, a
- elseif lengths[2] > lengths[3] then
-  a, b = b, a
- end
- ab, ac, bc = b - a, c - a, c - b
- local cross = ac:Cross(ab)
- if cross.Magnitude < 0.001 then return end
- local right = cross.Unit
- local back = bc.Unit
- local up = back:Cross(right).Unit
- local height = math.abs(ab:Dot(up))
- for _, spec in {
-  { center = (a + b) / 2, right = right, back = back, length = math.abs(ab:Dot(back)) },
-  { center = (a + c) / 2, right = -right, back = -back, length = math.abs(ac:Dot(back)) },
- } do
-  if spec.length < 0.001 then continue end
-  local wedge = Instance.new("WedgePart")
-  wedge.Name = "RoadRibbon"
-  wedge.Anchored = true
-  wedge.Size = Vector3.new(0.16, height, spec.length)
-  wedge.CFrame = CFrame.fromMatrix(spec.center, spec.right, up, spec.back)
-  wedge.Color = color
-  wedge.Material = material
-  wedge.TopSurface = Enum.SurfaceType.Smooth
-  wedge.BottomSurface = Enum.SurfaceType.Smooth
-  wedge:SetAttribute("Surface", "road")
-  wedge.Parent = parent
- end
+          <string name="Name">RoadSurface</string>
+          <string name="Source"><![CDATA[-- Builds the road and everything alongside it from one set of frames
+-- (shared/RoadGeometry), so every piece meets the next exactly:
+--   * road: a solid 2-stud slab built from triangles (two wedges each), so
+--     curves and hills have no gaps, steps or overlapping, flickering slabs
+--   * shoulders: the same triangle strips either side, unless terrain
+--     forms the verge there (Landscape plan, `plan.bankAt`)
+--   * curbs on corners, painted edge lines on straights, a dashed centre line
+--   * barriers: one piece per segment, end to end, with gaps for shortcuts
+--
+-- Realistic themes get asphalt, concrete jersey barriers and red-and-white
+-- concrete curbs; the toy-world themes keep their own colours.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RoadGeometry = require(ReplicatedStorage.Shared.RoadGeometry)
+local Track = require(ReplicatedStorage.Shared.Track)
+
+local RoadSurface = {}
+
+RoadSurface.Thickness = 2
+local SHOULDER_DROP = 0.12 -- shoulders sit just under the road so edges read
+
+export type Style = { color: Color3, material: Enum.Material, collide: boolean, surface: string? }
+
+local function v3(p: any): Vector3
+	return Vector3.new(p.x, p.y, p.z)
 end
-function RoadRibbon.build(track, parent, color, material)
- local points = track.points
- local left, right = {}, {}
- local half = track.def.width / 2
- for i, p in points do
-  local prev, nextPoint = points[(i - 2) % #points + 1], points[i % #points + 1]
-  local tangent = Vector3.new(nextPoint.x - prev.x, 0, nextPoint.z - prev.z).Unit
-  local side = Vector3.new(-tangent.Z, 0, tangent.X)
-  local center = Vector3.new(p.x, p.y - 0.12, p.z)
-  left[i], right[i] = center - side * half, center + side * half
- end
- for i = 1, #points do
-  local j = i % #points + 1
-  triangle(parent, left[i], right[i], left[j], color, material)
-  triangle(parent, right[i], right[j], left[j], color, material)
- end
+
+-- One solid triangle: two wedges filling a, b, c, with the slab hanging
+-- `thickness` studs below the surface (so the top face is exactly abc).
+local function triangle(parent: Instance, a: Vector3, b: Vector3, c: Vector3, thickness: number, style: Style, name: string)
+	local ab, ac, bc = b - a, c - a, c - b
+	local abd, acd, bcd = ab:Dot(ab), ac:Dot(ac), bc:Dot(bc)
+	if abd > acd and abd > bcd then
+		c, a = a, c
+	elseif acd > bcd and acd > abd then
+		a, b = b, a
+	end
+	ab, ac, bc = b - a, c - a, c - b
+	local cross = ac:Cross(ab)
+	if cross.Magnitude < 1e-4 or bc.Magnitude < 1e-4 then
+		return
+	end
+	local right = cross.Unit
+	local up = bc:Cross(right).Unit
+	local back = bc.Unit
+	local height = math.abs(ab:Dot(up))
+	local down = if right.Y > 0 then -right else right
+	local sink = down * (thickness / 2)
+	for _, spec in {
+		{ center = (a + b) / 2, right = right, back = back, length = math.abs(ab:Dot(back)) },
+		{ center = (a + c) / 2, right = -right, back = -back, length = math.abs(ac:Dot(back)) },
+	} do
+		if spec.length > 1e-3 and height > 1e-3 then
+			local wedge = Instance.new("WedgePart")
+			wedge.Name = name
+			wedge.Anchored = true
+			wedge.Size = Vector3.new(thickness, height, spec.length)
+			wedge.CFrame = CFrame.fromMatrix(spec.center + sink, spec.right, up, spec.back)
+			wedge.Color = style.color
+			wedge.Material = style.material
+			wedge.CanCollide = style.collide
+			wedge.CanQuery = style.collide
+			wedge.CanTouch = false
+			wedge.TopSurface = Enum.SurfaceType.Smooth
+			wedge.BottomSurface = Enum.SurfaceType.Smooth
+			if style.surface then
+				wedge:SetAttribute("Surface", style.surface)
+			end
+			wedge.Parent = parent
+		end
+	end
 end
-return RoadRibbon
+RoadSurface.triangle = triangle
+
+-- A box laid along the chord from a to b (lines, curbs, barriers).
+local function chordBox(parent: Instance, a: Vector3, b: Vector3, width: number, height: number, lift: number, extend: number, style: Style, name: string): Part?
+	local along = b - a
+	if along.Magnitude < 0.05 then
+		return nil
+	end
+	local mid = (a + b) / 2 + Vector3.new(0, lift + height / 2, 0)
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Anchored = true
+	p.Size = Vector3.new(width, height, along.Magnitude + extend)
+	p.CFrame = CFrame.lookAt(mid, mid + along)
+	p.Color = style.color
+	p.Material = style.material
+	p.CanCollide = style.collide
+	p.CanQuery = style.collide
+	p.CanTouch = false
+	p.CastShadow = style.collide
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Parent = parent
+	return p
+end
+
+export type Options = {
+	theme: any,
+	walled: boolean,
+	plan: any?, -- Landscape plan (terrain verges where plan.bankAt[i])
+	wallOpen: (side: number, distance: number, length: number) -> boolean,
+}
+
+function RoadSurface.build(track: any, frames: { any }, parent: Instance, opts: Options)
+	local theme = opts.theme
+	local def = track.def
+	local half = def.width / 2
+	local sw = Track.ShoulderWidth
+	local n = #frames
+	local realistic = theme.realistic == true
+	local function rgb(c: { number }): Color3
+		return Color3.fromRGB(c[1], c[2], c[3])
+	end
+	local neon = def.theme == "neon"
+
+	local surface = Instance.new("Folder")
+	surface.Name = "RoadSurface"
+	surface.Parent = parent
+	local verge = Instance.new("Folder")
+	verge.Name = "Shoulders"
+	verge.Parent = parent
+	local markings = parent:FindFirstChild("Markings") or Instance.new("Folder")
+	markings.Name = "Markings"
+	markings.Parent = parent
+	local barriers = Instance.new("Folder")
+	barriers.Name = "Barriers"
+	barriers.Parent = parent
+
+	local roadMaterial = theme.roadMaterial and Enum.Material[theme.roadMaterial] or (if realistic then Enum.Material.Asphalt else Enum.Material.SmoothPlastic)
+	local road: Style = { color = rgb(theme.road), material = roadMaterial, collide = true, surface = "road" }
+	local shoulder: Style = {
+		color = rgb(theme.shoulder),
+		material = theme.shoulderMaterial and Enum.Material[theme.shoulderMaterial] or (if realistic then Enum.Material.Ground else Enum.Material.SmoothPlastic),
+		collide = true,
+		surface = "offroad",
+	}
+	-- Bridge decks (raised road with nothing under it) are concrete in realistic themes.
+	local deck: Style = { color = Color3.fromRGB(150, 148, 142), material = Enum.Material.Concrete, collide = true, surface = "offroad" }
+	local paint = if neon then Enum.Material.Neon else Enum.Material.SmoothPlastic
+	local curbStyles: { Style } = {
+		{ color = rgb(theme.curb[1]), material = if realistic then Enum.Material.Concrete else paint, collide = false },
+		{ color = rgb(theme.curb[2]), material = if realistic then Enum.Material.Concrete else paint, collide = false },
+	}
+	local line: Style = { color = rgb(theme.line), material = paint, collide = false }
+
+	local th = RoadSurface.Thickness
+	for i = 1, n do
+		local j = i % n + 1
+		local a, b = frames[i], frames[j]
+		local aL, aR = v3(RoadGeometry.edge(a, -half)), v3(RoadGeometry.edge(a, half))
+		local bL, bR = v3(RoadGeometry.edge(b, -half)), v3(RoadGeometry.edge(b, half))
+		triangle(surface, aL, aR, bL, th, road, "Road")
+		triangle(surface, aR, bR, bL, th, road, "Road")
+
+		-- Shoulders (where terrain isn't the verge).
+		local plan = opts.plan
+		local terrainVerge = plan and plan.bankAt[i] and plan.bankAt[j]
+		if not terrainVerge and opts.walled then
+			local style = if realistic and plan then deck else shoulder
+			for _, side in { -1, 1 } do
+				local ai = v3(RoadGeometry.edge(a, side * half, -SHOULDER_DROP))
+				local ao = v3(RoadGeometry.edge(a, side * (half + sw), -SHOULDER_DROP))
+				local bi = v3(RoadGeometry.edge(b, side * half, -SHOULDER_DROP))
+				local bo = v3(RoadGeometry.edge(b, side * (half + sw), -SHOULDER_DROP))
+				triangle(verge, ai, ao, bi, th, style, "Shoulder")
+				triangle(verge, ao, bo, bi, th, style, "Shoulder")
+			end
+		end
+
+		-- Curbs on corners (both sides), edge lines on straights.
+		local corner = RoadGeometry.isCorner(a) and RoadGeometry.isCorner(b)
+		for _, side in { -1, 1 } do
+			if corner and opts.walled then
+				local p0 = v3(RoadGeometry.edge(a, side * (half - 1.5)))
+				local p1 = v3(RoadGeometry.edge(b, side * (half - 1.5)))
+				chordBox(markings, p0, p1, 3, 0.14, 0, 0, curbStyles[i % 2 + 1], "Curb")
+			else
+				local p0 = v3(RoadGeometry.edge(a, side * (half - 1.4)))
+				local p1 = v3(RoadGeometry.edge(b, side * (half - 1.4)))
+				chordBox(markings, p0, p1, 0.8, 0.06, 0, 0, line, "EdgeLine")
+			end
+		end
+		if i % 4 < 2 then
+			chordBox(markings, v3(RoadGeometry.edge(a, 0)), v3(RoadGeometry.edge(b, 0)), 0.6, 0.06, 0, 0, line, "CentreLine")
+		end
+	end
+
+	-- Barriers, one piece per segment, skipping shortcut gaps and the rare
+	-- inside-of-a-hairpin segment that would run backwards.
+	if opts.walled then
+		local wallAt = half + sw + 0.9
+		local folded = {}
+		for _, side in { -1, 1 } do
+			folded[side] = {}
+			for _, i in RoadGeometry.folds(frames, side * wallAt) do
+				folded[side][i] = true
+			end
+		end
+		local wallColor = rgb(theme.wall)
+		local wallMaterial = theme.wallMaterial and Enum.Material[theme.wallMaterial] or (if neon then Enum.Material.Neon else Enum.Material.SmoothPlastic)
+		for i = 1, n do
+			local j = i % n + 1
+			local a, b = frames[i], frames[j]
+			local segLen = (v3(b) - v3(a)).Magnitude
+			local distance = track.cum[i] + segLen / 2
+			for _, side in { -1, 1 } do
+				if not folded[side][i] and not opts.wallOpen(side, distance, segLen) then
+					local p0 = v3(RoadGeometry.edge(a, side * wallAt))
+					local p1 = v3(RoadGeometry.edge(b, side * wallAt))
+					if realistic then
+						-- Concrete jersey barrier: wide foot, narrow top, a painted band.
+						chordBox(barriers, p0, p1, 2, 1.2, -0.2, 0.5, { color = wallColor, material = Enum.Material.Concrete, collide = true }, "Wall")
+						chordBox(barriers, p0, p1, 1.1, 2.4, 1, 0.5, { color = wallColor, material = Enum.Material.Concrete, collide = true }, "Wall")
+						chordBox(barriers, p0, p1, 1.16, 0.35, 2.6, 0.5, { color = if i % 2 == 0 then rgb(theme.curb[1]) else rgb(theme.curb[2]), material = Enum.Material.SmoothPlastic, collide = false }, "WallBand")
+					else
+						chordBox(barriers, p0, p1, 1, 4, -0.5, 0.5, { color = wallColor, material = wallMaterial, collide = true }, "Wall")
+					end
+				end
+			end
+		end
+	end
+	return surface
+end
+
+return RoadSurface
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="35">
+      <Item class="ModuleScript" referent="37">
         <Properties>
           <string name="Name">RoundService</string>
           <string name="Source"><![CDATA[-- The round loop:
@@ -6895,6 +7821,7 @@ local LobbyBuilder = require(script.Parent.LobbyBuilder)
 local Net = require(script.Parent.Net)
 local PracticeService = require(script.Parent.PracticeService)
 local RaceService = require(script.Parent.RaceService)
+local TerrainBuilder = require(script.Parent.TerrainBuilder)
 
 local RoundService = {}
 
@@ -7180,6 +8107,10 @@ local function finishVoting()
 	deadline = now() + Voting.AnnounceSeconds
 	handles.setDeparture(true)
 	dirty = true
+	-- Start shaping the winning track's land now, during the reveal, so the
+	-- race usually loads straight away (TrackBuilder waits for it if not).
+	local trackId = winner :: string
+	task.spawn(TerrainBuilder.ensure, trackId)
 end
 
 local function startRace()
@@ -7495,27 +8426,229 @@ return RoundService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="36">
+      <Item class="ModuleScript" referent="38">
+        <Properties>
+          <string name="Name">TerrainBuilder</string>
+          <string name="Source"><![CDATA[-- Turns a Landscape plan into Roblox Terrain: grass or sand ground, earth
+-- banks under raised road, hills, lakes of real water with sandy shores,
+-- mesas and snow-capped mountains. Terrain is smooth, textured and lit by
+-- Future lighting, which is what makes the outdoor tracks look realistic.
+--
+-- Only one track's land exists at a time. `ensure` builds it once (the round
+-- calls it as soon as the winning track is announced, so the land is usually
+-- ready before the race loads); calling it again for the same track is free.
+-- Anything registered with `onCleared` (the lobby's view) is rebuilt after.
+
+local Workspace = game:GetService("Workspace")
+
+local TerrainBuilder = {}
+
+local current: string? = nil
+local building: string? = nil
+local keepers: { () -> () } = {}
+
+local function material(name: string?): Enum.Material
+	local ok, value = pcall(function()
+		return (Enum.Material :: any)[name or "Grass"]
+	end)
+	return if ok and value then value else Enum.Material.Grass
+end
+
+local function terrainOf(): Terrain?
+	local terrain = Workspace:FindFirstChildOfClass("Terrain")
+	-- Lune's test DOM has no Terrain methods; skip building there.
+	if not terrain or typeof((terrain :: any).FillBlock) ~= "function" then
+		return nil
+	end
+	return terrain
+end
+
+-- Things that must survive a track change (the lobby's window view).
+function TerrainBuilder.onCleared(rebuild: () -> ())
+	table.insert(keepers, rebuild)
+	rebuild()
+end
+
+-- Counts fills by kind; the smoke test checks these without real Terrain.
+TerrainBuilder.lastCounts = {} :: { [string]: number }
+
+-- `additive` adds to the land already there (the lobby's view) instead of
+-- replacing it.
+function TerrainBuilder.apply(plan: any, additive: boolean?)
+	local counts = { slab = 0, bank = 0, hill = 0, mountain = 0, cap = 0, mesa = 0, lake = 0 }
+	if not additive then
+		TerrainBuilder.lastCounts = counts
+	end
+	local terrain = terrainOf()
+	local spec = plan.spec
+	-- Big fills take time; yield now and then so the server keeps ticking
+	-- (the lobby, countdowns and other players) while the land is shaped.
+	local fills = 0
+	local function breathe()
+		fills += 1
+		if terrain and fills % 6 == 0 then
+			task.wait()
+		end
+	end
+	local ground = material(spec.ground)
+	local bankMaterial = material(spec.bank or spec.ground)
+	local function fillBlock(cf: CFrame, size: Vector3, m: Enum.Material, kind: string)
+		counts[kind] += 1
+		if terrain then
+			terrain:FillBlock(cf, size, m)
+			breathe()
+		end
+	end
+	local function fillBall(b: any, kind: string)
+		counts[kind] += 1
+		if terrain then
+			terrain:FillBall(Vector3.new(b.x, b.y, b.z), b.r, material(b.material))
+			breathe()
+		end
+	end
+	local function fillCylinder(cf: CFrame, height: number, radius: number, m: Enum.Material)
+		if terrain then
+			terrain:FillCylinder(cf, height, radius, m)
+			breathe()
+		end
+	end
+
+	if terrain and not additive then
+		terrain:Clear()
+		for name, c in spec.colors or {} do
+			pcall(function()
+				terrain:SetMaterialColor(material(name), Color3.fromRGB(c[1], c[2], c[3]))
+			end)
+		end
+		local water = spec.water
+		if water then
+			terrain.WaterColor = Color3.fromRGB(water.color[1], water.color[2], water.color[3])
+			terrain.WaterTransparency = water.transparency or 0.4
+			terrain.WaterReflectance = water.reflectance or 0.5
+			terrain.WaterWaveSize = water.waveSize or 0.12
+			terrain.WaterWaveSpeed = water.waveSpeed or 8
+		end
+	end
+
+	-- Ground: a slab whose top is just under the lowest road.
+	local top = plan.groundTop
+	local sx, sz = plan.maxX - plan.minX, plan.maxZ - plan.minZ
+	fillBlock(CFrame.new((plan.minX + plan.maxX) / 2, top - 8, (plan.minZ + plan.maxZ) / 2), Vector3.new(sx, 16, sz), ground, "slab")
+
+	-- Banks follow the road's slope (the block is pitched along the segment).
+	for _, bank in plan.banks do
+		local a = Vector3.new(bank.ax, bank.ay, bank.az)
+		local b = Vector3.new(bank.bx, bank.by, bank.bz)
+		local length = (b - a).Magnitude
+		if length > 0.1 then
+			local cf = CFrame.lookAt((a + b) / 2, b) * CFrame.new(0, -bank.depth / 2, 0)
+			fillBlock(cf, Vector3.new(bank.width, bank.depth, length + 4), bankMaterial, "bank")
+		end
+	end
+
+	for _, hill in plan.hills do
+		fillBall(hill, "hill")
+	end
+	for _, m in plan.mesas do
+		counts.mesa += 1
+		local height = m.top - m.bottom
+		fillCylinder(CFrame.new(m.x, m.bottom + height / 2, m.z), height, m.r, material(m.material))
+		if m.band then
+			-- A darker rock band two thirds of the way up, slightly proud.
+			fillCylinder(CFrame.new(m.x, m.bottom + height * 0.66, m.z), height * 0.12, m.r + 1.5, material(m.band))
+		end
+		-- A softer skirt of fallen sand round the foot.
+		fillCylinder(CFrame.new(m.x, top - 1, m.z), 6, m.r * 1.25, ground)
+	end
+	for _, mountain in plan.mountains do
+		fillBall(mountain, "mountain")
+	end
+	for _, cap in plan.caps do
+		fillBall(cap, "cap")
+	end
+
+	-- Lakes: a sandy shore, the basin dug out, then water and a muddy bed.
+	for _, lake in plan.lakes do
+		counts.lake += 1
+		local shore = material(lake.shore)
+		fillCylinder(CFrame.new(lake.x, top - 2, lake.z), 4.2, lake.r + 12, shore)
+		fillCylinder(CFrame.new(lake.x, top + 4, lake.z), 24, lake.r, Enum.Material.Air)
+		fillCylinder(CFrame.new(lake.x, top - 11, lake.z), 2, lake.r + 2, Enum.Material.Mud)
+		local depth = 9
+		fillCylinder(CFrame.new(lake.x, lake.surface - depth / 2, lake.z), depth, lake.r, material(lake.liquid))
+	end
+
+	if not additive then
+		for _, rebuild in keepers do
+			local ok, err = pcall(rebuild)
+			if not ok then
+				warn("[TerrainBuilder] keeper failed:", err)
+			end
+		end
+	end
+end
+
+-- Builds the land for a track once; safe to call from several threads.
+function TerrainBuilder.ensure(trackId: string, plan: any?)
+	if current == trackId then
+		return
+	end
+	while building do
+		task.wait(0.1)
+		if current == trackId then
+			return
+		end
+	end
+	building = trackId
+	local ok, err = pcall(function()
+		local p = plan
+		if not p then
+			local ReplicatedStorage = game:GetService("ReplicatedStorage")
+			local Landscape = require(ReplicatedStorage.Shared.Landscape)
+			local Track = require(ReplicatedStorage.Shared.Track)
+			local Tracks = require(ReplicatedStorage.Shared.Tracks)
+			p = Landscape.plan(Track.build(Tracks.get(trackId)))
+		end
+		if p then
+			TerrainBuilder.apply(p)
+		end
+	end)
+	building = nil
+	if ok then
+		current = trackId
+	else
+		warn("[TerrainBuilder]", err)
+	end
+end
+
+return TerrainBuilder
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="39">
         <Properties>
           <string name="Name">TrackBuilder</string>
-          <string name="Source"><![CDATA[-- Builds a track's parts from its centerline: road, curbs and lane lines,
--- grass shoulders, walls, bridge pillars, boost pads, the start line, the
--- ground and scenery (see Scenery.luau / Props.luau). Lighting is applied on
+          <string name="Source"><![CDATA[-- Builds a track from its centerline: the road and everything along it
+-- (RoadSurface), the land (Landscape + TerrainBuilder for realistic themes, a
+-- flat floor otherwise), bridge pillars, boost pads, the start line, zones,
+-- shortcuts, landmarks and scenery (see Scenery.luau / Props.luau). Lighting is applied on
 -- each client (common/Atmos), so lobby players keep the lobby's look.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage.Shared
+local Landscape = require(Shared.Landscape)
+local RoadGeometry = require(Shared.RoadGeometry)
 local Scenery = require(Shared.Scenery)
 local Track = require(Shared.Track)
 local Tracks = require(Shared.Tracks)
 
 local Landmarks = require(script.Parent.Landmarks)
 local Props = require(script.Parent.Props)
+local RoadSurface = require(script.Parent.RoadSurface)
+local TerrainBuilder = require(script.Parent.TerrainBuilder)
 local Shapes = require(ReplicatedStorage.Common.Shapes)
-
-local BANK_MAX = math.rad(6) -- corners tilt inward a little
 
 local TrackBuilder = {}
 
@@ -7541,20 +8674,6 @@ local function part(parent: Instance, name: string, size: Vector3, cf: CFrame, c
 	return p
 end
 
--- Markings sit just above the road; raycasts and collisions ignore them.
-local function decal(parent: Instance, size: Vector3, cf: CFrame, color: Color3, glow: boolean): Part
-	local p = part(parent, "Marking", size, cf, color, if glow then Enum.Material.Neon else Enum.Material.SmoothPlastic)
-	p.CanCollide = false
-	p.CanQuery = false
-	p.CanTouch = false
-	p.CastShadow = false
-	return p
-end
-
-local function flatAngle(a: Vector3, b: Vector3): number
-	return math.atan2(b.X - a.X, b.Z - a.Z)
-end
-
 export type Options = {
 	folderName: string?, -- default "Track"; the lobby practice loop uses its own folder
 	ground: boolean?, -- build ground under the track (default true)
@@ -7566,7 +8685,7 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 	local def = Tracks.get(trackId)
 	local track = Track.build(def)
 	local theme = Tracks.Themes[def.theme]
-	local roadColor, shoulderColor, wallColor = rgb(theme.road), rgb(theme.shoulder), rgb(theme.wall)
+	local roadColor, wallColor = rgb(theme.road), rgb(theme.wall)
 	local walled = def.walls ~= false
 
 	local folderName = opts.folderName or "Track"
@@ -7586,23 +8705,6 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 	local markings = Instance.new("Folder")
 	markings.Name = "Markings"
 	markings.Parent = folder
-	local neon = def.theme == "neon"
-	local curbColors = { rgb(theme.curb[1]), rgb(theme.curb[2]) }
-	local lineColor = rgb(theme.line)
-
-	-- Banking: smoothed signed turn per segment (positive = turning left).
-	local signedTurn = {}
-	for i = 1, n do
-		local a, b, c = v3(pts[i]), v3(pts[i % n + 1]), v3(pts[(i + 1) % n + 1])
-		signedTurn[i] = ((flatAngle(b, c) - flatAngle(a, b)) + math.pi) % (2 * math.pi) - math.pi
-	end
-	local function bank(i: number): number
-		local sum = 0
-		for k = -3, 3 do
-			sum += signedTurn[(i - 1 + k) % n + 1]
-		end
-		return math.clamp(sum / 7 * 4, -BANK_MAX, BANK_MAX)
-	end
 
 	-- Wall openings where shortcuts leave and rejoin the road.
 	local openings = {}
@@ -7620,78 +8722,39 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		return false
 	end
 
-	for i = 1, n do
-		local a, b, c = v3(pts[i]), v3(pts[i % n + 1]), v3(pts[(i + 1) % n + 1])
-		local length = (b - a).Magnitude
-		-- Lengthen segments on the outside of bends so the edges have no gaps.
-		local turn = math.abs(signedTurn[i])
-		local extra = 1 + (half + sw + 1) * turn
-		local roll = 0 -- ribbon and checkpoint road height share the same surface
-		local cf = CFrame.lookAt((a + b) / 2, b) * CFrame.Angles(0, 0, roll)
-		local segLen = length + extra
-		local segDistance = track.cum[i] + length / 2
-
-		local road = part(folder, "Road", Vector3.new(def.width, 1, segLen), cf * CFrame.new(0, -0.5, 0), roadColor, if def.theme == "fortress" then Enum.Material.Slate else Enum.Material.SmoothPlastic)
-		road:SetAttribute("Surface", "road")
-		-- Retain segment metadata but use the continuous ribbon for collision.
-		road.Transparency = 1
-		road.CanCollide = false
-		road.CanQuery = false
-		road.CanTouch = false
-		for _, side in (if walled then { -1, 1 } else {}) :: { number } do
-			local shoulder = part(folder, "Shoulder", Vector3.new(sw, 1, segLen), cf * CFrame.new(side * (half + sw / 2), -0.52, 0), shoulderColor, Enum.Material.SmoothPlastic)
-			shoulder:SetAttribute("Surface", "offroad")
-			if not wallOpen(side, segDistance, segLen) then
-				part(folder, "Wall", Vector3.new(1, 4, segLen), cf * CFrame.new(side * (half + sw + 0.5), 1.5, 0), wallColor, if def.theme == "neon" then Enum.Material.Neon elseif def.theme == "fortress" then Enum.Material.Cobblestone else Enum.Material.SmoothPlastic)
-			end
-		end
-
-		-- Red-and-white curbs through corners, lane lines on the straights.
-		if turn > 0.02 and walled then
-			for _, side in { -1, 1 } do
-				decal(markings, Vector3.new(3, 0.1, length + 0.6), cf * CFrame.new(side * (half - 1.5), 0.05, 0), curbColors[i % 2 + 1], neon)
-			end
-		else
-			for _, side in { -1, 1 } do
-				decal(markings, Vector3.new(0.8, 0.06, length + 0.4), cf * CFrame.new(side * (half - 1.2), 0.03, 0), lineColor, neon)
-			end
-		end
-		if i % 3 ~= 0 then
-			decal(markings, Vector3.new(0.7, 0.06, length * 0.7), cf * CFrame.new(0, 0.03, 0), lineColor, neon)
-		end
-
-		minY = math.min(minY, a.Y)
-		minX, maxX = math.min(minX, a.X), math.max(maxX, a.X)
-		minZ, maxZ = math.min(minZ, a.Z), math.max(maxZ, a.Z)
+	for _, p in pts do
+		minY = math.min(minY, p.y)
+		minX, maxX = math.min(minX, p.x), math.max(maxX, p.x)
+		minZ, maxZ = math.min(minZ, p.z), math.max(maxZ, p.z)
 	end
 
-	local ribbon = Instance.new("Folder")
-	ribbon.Name = "RoadSurface"
-	ribbon.Parent = folder
-	require(script.Parent.RoadRibbon).build(track, ribbon, roadColor,
-		if def.theme == "fortress" then Enum.Material.Slate else Enum.Material.Asphalt)
+	-- Land: realistic themes get Terrain (hills, lakes, mountains, banks under
+	-- raised road); the toy-world themes keep a flat part floor.
+	local plan = if opts.ground ~= false then Landscape.plan(track) else nil
+	if plan then
+		TerrainBuilder.ensure(trackId, plan)
+	end
 
-	-- Pillars under raised road, skipped where they would land on the road below.
+	-- Road, curbs, lines, shoulders and barriers from one set of frames.
+	local frames = RoadGeometry.frames(track)
+	RoadSurface.build(track, frames, folder, { theme = theme, walled = walled, plan = plan, wallOpen = wallOpen })
+
+	-- Pillars under raised road that has no earth bank, skipped where they
+	-- would land on the road below.
+	local overpass = RoadGeometry.overpasses(track, half + sw + 6, 8)
+	local pillarColor = if theme.realistic then Color3.fromRGB(150, 148, 142) else wallColor
+	local pillarMaterial = if theme.realistic then Enum.Material.Concrete else Enum.Material.SmoothPlastic
 	for i = 1, n, 6 do
 		local p = pts[i]
-		if p.y - minY > 8 then
-			local blocked = false
-			for j, q in pts do
-				local apart = math.min(math.abs(i - j), n - math.abs(i - j))
-				if apart > 20 and math.abs(q.x - p.x) < half + sw + 6 and math.abs(q.z - p.z) < half + sw + 6 and q.y < p.y - 8 then
-					blocked = true
-					break
-				end
-			end
-			if not blocked then
-				local h = p.y - minY
-				part(folder, "Pillar", Vector3.new(6, h, 6), CFrame.new(p.x, minY + h / 2 - 1, p.z), wallColor, Enum.Material.SmoothPlastic)
-			end
+		local banked = plan and plan.bankAt[i]
+		if p.y - minY > 8 and not banked and not overpass[i] then
+			local h = p.y - minY + 4
+			part(folder, "Pillar", Vector3.new(6, h, 6), CFrame.new(p.x, p.y - 1 - h / 2, p.z), pillarColor, pillarMaterial)
 		end
 	end
 
-	-- Ground under everything.
-	if opts.ground ~= false then
+	-- Flat floor under everything (themes without terrain).
+	if opts.ground ~= false and not plan then
 		local margin = 300
 		local sizeX, sizeZ = maxX - minX + margin * 2, maxZ - minZ + margin * 2
 		local tile = 1000
@@ -7769,18 +8832,19 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 	end
 
 	-- Shortcut paths: a narrow road through the gap in the wall.
+	local shortcutMaterial = if theme.realistic then Enum.Material.Asphalt else Enum.Material.SmoothPlastic
 	for _, sc in def.shortcuts or {} do
 		local sa, sb = Track.shortcutEnds(track, sc)
 		local pa, pb = v3(sa), v3(sb)
 		local length = (pb - pa).Magnitude + sc.width
 		local scCf = CFrame.lookAt((pa + pb) / 2, pb)
-		local road = part(folder, "ShortcutRoad", Vector3.new(sc.width, 1, length), scCf * CFrame.new(0, -0.5, 0), roadColor:Lerp(rgb(theme.accent), 0.25), Enum.Material.SmoothPlastic)
+		local road = part(folder, "ShortcutRoad", Vector3.new(sc.width, 1, length), scCf * CFrame.new(0, -0.5, 0), roadColor:Lerp(rgb(theme.accent), 0.25), shortcutMaterial)
 		road:SetAttribute("Surface", sc.surface or "road")
 		-- Connect each end to the road edge across the grass shoulder.
 		for _, endpoint in { { at = sc.from, p = pa }, { at = sc.to, p = pb } } do
 			local edge = v3(Track.spot(track, endpoint.at * track.length, sc.side * half))
 			local link = (endpoint.p - edge)
-			part(folder, "ShortcutLink", Vector3.new(sc.width, 1, link.Magnitude + sc.width), CFrame.lookAt((edge + endpoint.p) / 2, endpoint.p) * CFrame.new(0, -0.49, 0), roadColor:Lerp(rgb(theme.accent), 0.25), Enum.Material.SmoothPlastic)
+			part(folder, "ShortcutLink", Vector3.new(sc.width, 1, link.Magnitude + sc.width), CFrame.lookAt((edge + endpoint.p) / 2, endpoint.p) * CFrame.new(0, -0.49, 0), roadColor:Lerp(rgb(theme.accent), 0.25), shortcutMaterial)
 		end
 		-- Little arrows hint the way in.
 		for _, side in { -1, 1 } do
@@ -7845,7 +8909,16 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		scenery.Name = "Scenery"
 		scenery.Parent = folder
 		for _, prop in Scenery.place(track) do
-			Props.build(prop, theme, scenery)
+			if plan then
+				-- Stand props on the land; skip any that would be in a lake.
+				local y = Landscape.groundAt(plan, prop.x, prop.z)
+				if y then
+					prop.y = y
+					Props.build(prop, theme, scenery)
+				end
+			else
+				Props.build(prop, theme, scenery)
+			end
 		end
 	end
 
@@ -7863,7 +8936,7 @@ return TrackBuilder
       </Item>
     </Item>
   </Item>
-  <Item class="StarterPlayer" referent="37">
+  <Item class="StarterPlayer" referent="40">
     <Properties>
       <string name="Name">StarterPlayer</string>
       <float name="CameraMaxZoomDistance">80</float>
@@ -7871,15 +8944,15 @@ return TrackBuilder
       <float name="HealthDisplayDistance">0</float>
       <float name="NameDisplayDistance">45</float>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="38">
+    <Item class="StarterPlayerScripts" referent="41">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="Folder" referent="39">
+      <Item class="Folder" referent="42">
         <Properties>
           <string name="Name">Client</string>
         </Properties>
-        <Item class="ModuleScript" referent="40">
+        <Item class="ModuleScript" referent="43">
           <Properties>
             <string name="Name">GarageUI</string>
             <string name="Source"><![CDATA[-- The garage: a live 3D preview of your kart plus tabs for kart type (stats),
@@ -8232,7 +9305,7 @@ return GarageUI
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="41">
+        <Item class="ModuleScript" referent="44">
           <Properties>
             <string name="Name">Hud</string>
             <string name="Source"><![CDATA[-- In-race screens: place, lap, item slot with roulette, standings, countdown,
@@ -8461,7 +9534,7 @@ return Hud
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="42">
+        <Item class="ModuleScript" referent="45">
           <Properties>
             <string name="Name">KartController</string>
             <string name="Source"><![CDATA[-- Drives your kart: reads input, runs KartPhysics on this client (you own the
@@ -8917,7 +9990,7 @@ return KartController
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="43">
+        <Item class="ModuleScript" referent="46">
           <Properties>
             <string name="Name">KartVisuals</string>
             <string name="Source"><![CDATA[-- Makes every nearby kart look alive, on this client only: the body leans into
@@ -9078,7 +10151,7 @@ return KartVisuals
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="44">
+        <Item class="ModuleScript" referent="47">
           <Properties>
             <string name="Name">LobbyScreens</string>
             <string name="Source"><![CDATA[-- Local wall displays and proximity doors for Kart HQ. SurfaceGuis belong
@@ -9362,7 +10435,7 @@ return LobbyScreens
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="45">
+        <Item class="ModuleScript" referent="48">
           <Properties>
             <string name="Name">LobbyUI</string>
             <string name="Source"><![CDATA[-- Lobby screens: the status bar (phase + countdown, always visible), coins,
@@ -9819,7 +10892,7 @@ return LobbyUI
 ]]></string>
           </Properties>
         </Item>
-        <Item class="LocalScript" referent="46">
+        <Item class="LocalScript" referent="49">
           <Properties>
             <string name="Name">Main</string>
             <string name="Source"><![CDATA[-- Client entry point: wires remotes to the lobby screens, garage, race HUD,
@@ -10101,7 +11174,7 @@ end)
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="47">
+        <Item class="ModuleScript" referent="50">
           <Properties>
             <string name="Name">Spectate</string>
             <string name="Source"><![CDATA[-- Spectator camera: follows a racer's kart from behind. Used by lobby players
@@ -10203,7 +11276,7 @@ return Spectate
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="48">
+        <Item class="ModuleScript" referent="51">
           <Properties>
             <string name="Name">TrackAnimator</string>
             <string name="Source"><![CDATA[-- Animates the current track on this client: crossers (toy robot, toy train,
@@ -10318,7 +11391,7 @@ return TrackAnimator
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="49">
+        <Item class="ModuleScript" referent="52">
           <Properties>
             <string name="Name">TrackPreview</string>
             <string name="Source"><![CDATA[-- Animated mini-map of a track, drawn from the same track data the race
@@ -10462,7 +11535,7 @@ return TrackPreview
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="50">
+        <Item class="ModuleScript" referent="53">
           <Properties>
             <string name="Name">UI</string>
             <string name="Source"><![CDATA[-- Shared look for every screen: rounded panels, chunky buttons sized for
@@ -10723,7 +11796,7 @@ return UI
       </Item>
     </Item>
   </Item>
-  <Item class="Workspace" referent="51">
+  <Item class="Workspace" referent="54">
     <Properties>
       <string name="Name">Workspace</string>
       <float name="Gravity">150</float>

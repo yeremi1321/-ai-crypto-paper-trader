@@ -31,6 +31,9 @@ local KartController = {}
 
 local STUCK_SECONDS = 4 -- pressing the gas but not moving this long resets the kart
 
+-- Player settings (from saved data): auto-accelerate and camera distance.
+KartController.settings = { autoAccelerate = false, cameraFar = false }
+
 local player = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
 local controls = require(player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule")):GetControls()
@@ -240,6 +243,9 @@ function readInput(): (number, number)
 		throttle = 1
 	elseif brakeHeld then
 		throttle = -1
+	elseif KartController.settings.autoAccelerate and throttle >= 0 then
+		-- Auto-accelerate: always on the gas unless you pull back to brake.
+		throttle = 1
 	end
 	return throttle, steer
 end
@@ -258,7 +264,8 @@ local function updateCamera(s: Session, dt: number)
 	local airborne = s.state.air > 0.1
 	s.camY += (root.Position.Y - s.camY) * math.min(1, dt * (if airborne then 2.5 else 8))
 	local base = Vector3.new(root.Position.X, s.camY, root.Position.Z)
-	local target = base + Vector3.new(0, 6.5, 0) - forward * 17
+	local back = if KartController.settings.cameraFar then 23 else 17
+	local target = base + Vector3.new(0, if KartController.settings.cameraFar then 8.5 else 6.5, 0) - forward * back
 	local look = base + forward * 10 + Vector3.new(0, 2, 0)
 	camera.CFrame = camera.CFrame:Lerp(CFrame.lookAt(target, look), math.min(1, dt * 10))
 	local fov = if s.state.boost > 0 then 84 else 70

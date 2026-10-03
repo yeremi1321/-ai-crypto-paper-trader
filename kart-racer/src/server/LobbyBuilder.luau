@@ -212,6 +212,7 @@ export type Handles = {
 	setPodium: (rows: { any }) -> (),
 	setSpectator: (title: string, body: string) -> (),
 	setKartDisplay: (slot: number, name: string?, kartId: string?, look: any?) -> (),
+	celebrate: (place: number, character: Model) -> (),
 	readyPrompt: ProximityPrompt,
 	garagePrompt: ProximityPrompt,
 	spectatePrompt: ProximityPrompt,
@@ -479,7 +480,51 @@ function LobbyBuilder.build(): Handles
 		setVoteOption(i, nil)
 	end
 
+	-- Top three players stand on their podium step, cheer, and get confetti.
+	local function celebrate(place: number, character: Model)
+		local h = stepHeights[place]
+		if not h or not character.Parent then
+			return
+		end
+		local spot = podiumCf * CFrame.new(stepX[place], h + 3, -3)
+		local root = character:FindFirstChild("HumanoidRootPart") :: BasePart?
+		if root then
+			root.CFrame = spot
+		end
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			pcall(function()
+				humanoid:PlayEmote(if place == 1 then "cheer" else "wave")
+			end)
+		end
+		local burst = Shapes.box(lobby, Vector3.new(1, 1, 1), spot * CFrame.new(0, 10, 0), { color = PALETTE.white, transparency = 1 })
+		local confetti = Instance.new("ParticleEmitter")
+		confetti.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+		confetti.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, PALETTE.pink),
+			ColorSequenceKeypoint.new(0.33, PALETTE.yellow),
+			ColorSequenceKeypoint.new(0.66, PALETTE.sky),
+			ColorSequenceKeypoint.new(1, PALETTE.mint),
+		})
+		confetti.Size = NumberSequence.new(0.6)
+		confetti.Lifetime = NumberRange.new(2, 3)
+		confetti.Speed = NumberRange.new(20, 30)
+		confetti.SpreadAngle = Vector2.new(60, 60)
+		confetti.Acceleration = Vector3.new(0, -20, 0)
+		confetti.Rotation = NumberRange.new(0, 360)
+		confetti.RotSpeed = NumberRange.new(-200, 200)
+		confetti.Rate = 120
+		confetti.Parent = burst
+		task.delay(1.5, function()
+			confetti.Enabled = false
+		end)
+		task.delay(5, function()
+			burst:Destroy()
+		end)
+	end
+
 	return {
+		celebrate = celebrate,
 		setStatus = function(title: string, body: string)
 			statusTitle.Text = title
 			statusBody.Text = body

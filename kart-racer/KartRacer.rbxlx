@@ -119,6 +119,7 @@ end
 
 local Shared = child(ReplicatedStorage, "Shared")
 local KartPhysics = require(child(Shared, "KartPhysics"))
+local Cosmetics = require(child(Shared, "Cosmetics"))
 local KartBodies = require(child(Shared, "KartBodies"))
 local Karts = require(child(Shared, "Karts"))
 
@@ -280,21 +281,26 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 
 	-- Wheels sit on the road: the body's center rides BODY_DROP below the ball's center.
 	local groundToBody = KartRig.BallRadius - BODY_DROP
-	local wheelY = body.wheelRadius - groundToBody
+	-- Wheel style (cosmetic): scales the body's own wheels.
+	local wheelStyle = Cosmetics.find("wheels", (chosen :: any).wheels) or Cosmetics.Wheels[1]
+	local wheelRadius = body.wheelRadius * wheelStyle.radius
+	local wheelWidth = body.wheelWidth * wheelStyle.width
+	local tyreColor = Color3.fromRGB(wheelStyle.color[1], wheelStyle.color[2], wheelStyle.color[3])
+	local wheelY = wheelRadius - groundToBody
 	local rearZ = -math.huge
 	for _, w in body.wheels do
 		rearZ = math.max(rearZ, w[2])
 	end
 	for i, w in body.wheels do
 		local name = if w[2] >= rearZ then (if w[1] < 0 then "WheelRL" else "WheelRR") else `Wheel{i}`
-		local d = body.wheelRadius * 2
+		local d = wheelRadius * 2
 		local wheelCf = drop * CFrame.new(w[1], wheelY, w[2])
 		local wheel = Instance.new("Part")
 		wheel.Name = name
 		wheel.Shape = Enum.PartType.Cylinder
-		wheel.Size = Vector3.new(body.wheelWidth, d, d)
+		wheel.Size = Vector3.new(wheelWidth, d, d)
 		wheel.CFrame = root.CFrame * wheelCf
-		wheel.Color = Color3.fromRGB(26, 26, 30)
+		wheel.Color = tyreColor
 		wheel.Material = Enum.Material.SmoothPlastic
 		wheel.CanCollide = false
 		wheel.CanQuery = false
@@ -304,9 +310,9 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 		-- Wheels turn on their own joint: front ones steer, all of them spin.
 		local joint = motor("WheelJoint", root, wheel, wheelCf)
 		joint:SetAttribute("Front", w[2] < rearZ)
-		visual(model, root, `{name}Hub`, Vector3.new(body.wheelWidth + 0.06, d * 0.55, d * 0.55), wheelCf, accent, Enum.Material.SmoothPlastic, "Cylinder", wheel)
+		visual(model, root, `{name}Hub`, Vector3.new(wheelWidth + 0.06, d * 0.55, d * 0.55), wheelCf, accent, if wheelStyle.glow then Enum.Material.Neon else Enum.Material.SmoothPlastic, "Cylinder", wheel)
 		-- A spoke so you can see the wheel turning.
-		visual(model, root, `{name}Spoke`, Vector3.new(body.wheelWidth + 0.08, d * 0.5, d * 0.14), wheelCf, Color3.fromRGB(240, 240, 245), Enum.Material.SmoothPlastic, nil, wheel)
+		visual(model, root, `{name}Spoke`, Vector3.new(wheelWidth + 0.08, d * 0.5, d * 0.14), wheelCf, Color3.fromRGB(240, 240, 245), Enum.Material.SmoothPlastic, nil, wheel)
 		if w[2] >= rearZ then
 			local sparks = Instance.new("ParticleEmitter")
 			sparks.Name = "DriftSparks"
@@ -321,6 +327,78 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 			sparks.Enabled = false
 			sparks.Parent = wheel
 		end
+	end
+
+	-- Stickers on both sides.
+	local sticker = Cosmetics.find("sticker", (chosen :: any).sticker)
+	if sticker and sticker.id ~= "none" then
+		for _, side in { -1, 1 } do
+			local panel = visual(model, root, "Sticker", Vector3.new(0.05, 1.8, 1.8), drop * CFrame.new(side * 2.45, 0.9, 0.2), Color3.new(1, 1, 1), nil, nil, bodyRoot)
+			panel.Transparency = 1
+			local gui = Instance.new("SurfaceGui")
+			gui.Face = if side < 0 then Enum.NormalId.Left else Enum.NormalId.Right
+			gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+			gui.PixelsPerStud = 40
+			gui.LightInfluence = 0.5
+			gui.Parent = panel
+			local label = Instance.new("TextLabel")
+			label.Size = UDim2.fromScale(1, 1)
+			label.BackgroundTransparency = 1
+			label.TextScaled = true
+			label.Text = sticker.icon
+			label.Parent = gui
+		end
+	end
+
+	-- Licence plate on the back.
+	local plateText = (chosen :: any).plate
+	if type(plateText) == "string" and plateText ~= "" then
+		local plate = visual(model, root, "Plate", Vector3.new(1.8, 0.6, 0.08), drop * CFrame.new(0, 0.2, 3.65), Color3.fromRGB(250, 250, 240), nil, nil, bodyRoot)
+		local gui = Instance.new("SurfaceGui")
+		gui.Face = Enum.NormalId.Back
+		gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+		gui.PixelsPerStud = 60
+		gui.Parent = plate
+		local label = Instance.new("TextLabel")
+		label.Size = UDim2.fromScale(1, 1)
+		label.BackgroundTransparency = 1
+		label.Font = Enum.Font.FredokaOne
+		label.TextScaled = true
+		label.TextColor3 = Color3.fromRGB(40, 40, 60)
+		label.Text = plateText
+		label.Parent = gui
+	end
+
+	-- Trail streaming from the back.
+	local trailStyle = Cosmetics.find("trail", (chosen :: any).trail)
+	if trailStyle and #trailStyle.colors > 0 then
+		local a0 = Instance.new("Attachment")
+		a0.Name = "TrailTop"
+		a0.Position = Vector3.new(0, 0.9, 3.4)
+		a0.Parent = bodyRoot
+		local a1 = Instance.new("Attachment")
+		a1.Name = "TrailBottom"
+		a1.Position = Vector3.new(0, -0.3, 3.4)
+		a1.Parent = bodyRoot
+		local keys = {}
+		for i, c in trailStyle.colors do
+			local t = if #trailStyle.colors == 1 then 0 else (i - 1) / (#trailStyle.colors - 1)
+			table.insert(keys, ColorSequenceKeypoint.new(t, Color3.fromRGB(c[1], c[2], c[3])))
+		end
+		if #keys == 1 then
+			table.insert(keys, ColorSequenceKeypoint.new(1, keys[1].Value))
+		end
+		local trail = Instance.new("Trail")
+		trail.Name = "KartTrail"
+		trail.Attachment0 = a0
+		trail.Attachment1 = a1
+		trail.Color = ColorSequence.new(keys)
+		trail.Transparency = NumberSequence.new(0.2, 1)
+		trail.Lifetime = 0.45
+		trail.MinLength = 0.2
+		trail.LightEmission = if trailStyle.id == "smoke" then 0 else 0.6
+		trail.FaceCamera = true
+		trail.Parent = bodyRoot
 	end
 
 	local seatPos = body.seat
@@ -353,7 +431,7 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 
 	model:SetAttribute("KartId", def.id)
 	model:SetAttribute("Body", body.id)
-	model:SetAttribute("WheelRadius", body.wheelRadius)
+	model:SetAttribute("WheelRadius", wheelRadius)
 	model.Parent = parent
 	return model
 end
@@ -651,6 +729,131 @@ return AIDriver
       </Item>
       <Item class="ModuleScript" referent="8">
         <Properties>
+          <string name="Name">Cosmetics</string>
+          <string name="Source"><![CDATA[--!strict
+-- Kart cosmetics you unlock with coins. They change looks only, never speed
+-- or handling, so every choice stays equally competitive.
+
+local KartBodies = require("./KartBodies")
+
+export type Item = { id: string, name: string, price: number, icon: string? }
+
+local Cosmetics = {}
+
+-- Wheel styles: radius and width multipliers on the body's own wheels.
+Cosmetics.Wheels = {
+	{ id = "standard", name = "Standard", price = 0, icon = "⚫", radius = 1, width = 1, color = { 26, 26, 30 } },
+	{ id = "chunky", name = "Chunky", price = 150, icon = "🛞", radius = 1.15, width = 1.5, color = { 30, 30, 34 } },
+	{ id = "slick", name = "Slick", price = 150, icon = "🏁", radius = 0.95, width = 1.25, color = { 20, 20, 24 } },
+	{ id = "monster", name = "Monster", price = 400, icon = "🦖", radius = 1.35, width = 1.4, color = { 34, 30, 28 } },
+	{ id = "whitewall", name = "Whitewall", price = 250, icon = "⚪", radius = 1, width = 1.1, color = { 240, 240, 245 } },
+	{ id = "neon", name = "Neon Rims", price = 500, icon = "💡", radius = 1.05, width = 1.1, color = { 20, 20, 26 }, glow = true },
+}
+
+-- Stickers go on both sides of the body.
+Cosmetics.Stickers = {
+	{ id = "none", name = "None", price = 0, icon = "🚫" },
+	{ id = "star", name = "Star", price = 50, icon = "⭐" },
+	{ id = "flame", name = "Flames", price = 100, icon = "🔥" },
+	{ id = "bolt", name = "Lightning", price = 100, icon = "⚡" },
+	{ id = "rainbow", name = "Rainbow", price = 150, icon = "🌈" },
+	{ id = "cool", name = "Cool", price = 150, icon = "😎" },
+	{ id = "frog", name = "Frog", price = 200, icon = "🐸" },
+	{ id = "pizza", name = "Pizza", price = 200, icon = "🍕" },
+	{ id = "hundred", name = "Hundred", price = 300, icon = "💯" },
+}
+
+-- Horns: a sound id when you have one uploaded; otherwise a "HONK!" bubble.
+Cosmetics.Horns = {
+	{ id = "beep", name = "Beep Beep", price = 0, icon = "📯", text = "BEEP BEEP!", soundId = "" },
+	{ id = "duck", name = "Rubber Duck", price = 100, icon = "🦆", text = "QUACK!", soundId = "" },
+	{ id = "trumpet", name = "Fanfare", price = 200, icon = "🎺", text = "TA-DAAA!", soundId = "" },
+	{ id = "moo", name = "Moo", price = 200, icon = "🐄", text = "MOOO!", soundId = "" },
+	{ id = "boing", name = "Boing", price = 250, icon = "🪀", text = "BOING!", soundId = "" },
+}
+
+-- Trails streaming from the back of the kart.
+Cosmetics.Trails = {
+	{ id = "none", name = "None", price = 0, icon = "🚫", colors = {} },
+	{ id = "smoke", name = "Puffy Smoke", price = 0, icon = "☁️", colors = { { 240, 240, 245 }, { 200, 200, 210 } } },
+	{ id = "rainbow", name = "Rainbow", price = 300, icon = "🌈", colors = { { 255, 80, 80 }, { 255, 210, 60 }, { 80, 220, 120 }, { 80, 150, 255 }, { 190, 110, 255 } } },
+	{ id = "fire", name = "Fire", price = 300, icon = "🔥", colors = { { 255, 220, 80 }, { 255, 110, 40 }, { 200, 40, 40 } } },
+	{ id = "ice", name = "Ice", price = 300, icon = "❄️", colors = { { 230, 250, 255 }, { 120, 200, 255 } } },
+	{ id = "bubbles", name = "Bubbles", price = 250, icon = "🫧", colors = { { 200, 235, 255 }, { 255, 200, 240 } } },
+}
+
+Cosmetics.PlateMaxLength = 8
+Cosmetics.NameMaxLength = 16
+
+local LISTS: { [string]: { any } } = {
+	wheels = Cosmetics.Wheels,
+	sticker = Cosmetics.Stickers,
+	horn = Cosmetics.Horns,
+	trail = Cosmetics.Trails,
+}
+Cosmetics.Lists = LISTS
+
+function Cosmetics.find(kind: string, id: string?): any?
+	if kind == "body" then
+		for _, b in KartBodies.List do
+			if b.id == id then
+				return b
+			end
+		end
+		return nil
+	end
+	for _, item in LISTS[kind] or {} do
+		if item.id == id then
+			return item
+		end
+	end
+	return nil
+end
+
+function Cosmetics.price(kind: string, id: string): number?
+	local item = Cosmetics.find(kind, id)
+	if not item then
+		return nil
+	end
+	return item.price or 0
+end
+
+-- Defaults every new player owns.
+function Cosmetics.starterOwned(): { [string]: { [string]: boolean } }
+	local owned: { [string]: { [string]: boolean } } = { body = {} }
+	for _, b in KartBodies.List do
+		if (b :: any).price == nil or (b :: any).price == 0 then
+			owned.body[b.id] = true
+		end
+	end
+	for kind, list in LISTS do
+		owned[kind] = {}
+		for _, item in list do
+			if item.price == 0 then
+				owned[kind][item.id] = true
+			end
+		end
+	end
+	return owned
+end
+
+-- Plate and name text: letters, numbers and spaces only, trimmed to length.
+-- (The server also runs Roblox text filtering before anyone else sees it.)
+function Cosmetics.cleanText(text: any, maxLength: number): string
+	local s = if type(text) == "string" then text else ""
+	s = string.gsub(s, "[^%w ]", "")
+	s = string.gsub(s, "%s+", " ")
+	s = string.gsub(s, "^%s+", "")
+	s = string.gsub(s, "%s+$", "")
+	return string.sub(s, 1, maxLength)
+end
+
+return Cosmetics
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="9">
+        <Properties>
           <string name="Name">Items</string>
           <string name="Source"><![CDATA[--!strict
 -- Item definitions and the item box roll. Front runners mostly get defensive
@@ -747,7 +950,7 @@ return Items
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="9">
+      <Item class="ModuleScript" referent="10">
         <Properties>
           <string name="Name">KartBodies</string>
           <string name="Source"><![CDATA[--!strict
@@ -966,7 +1169,7 @@ return KartBodies
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="10">
+      <Item class="ModuleScript" referent="11">
         <Properties>
           <string name="Name">KartPhysics</string>
           <string name="Source"><![CDATA[--!strict
@@ -1258,7 +1461,7 @@ return KartPhysics
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="11">
+      <Item class="ModuleScript" referent="12">
         <Properties>
           <string name="Name">Karts</string>
           <string name="Source"><![CDATA[--!strict
@@ -1334,7 +1537,7 @@ return Karts
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="12">
+      <Item class="ModuleScript" referent="13">
         <Properties>
           <string name="Name">LobbyLayout</string>
           <string name="Source"><![CDATA[--!strict
@@ -1440,7 +1643,334 @@ return LobbyLayout
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="13">
+      <Item class="ModuleScript" referent="14">
+        <Properties>
+          <string name="Name">PlayerData</string>
+          <string name="Source"><![CDATA[--!strict
+-- A player's saved data and every rule for changing it: coins, unlocked and
+-- equipped cosmetics, kart name and plate, settings, best laps, mastery,
+-- lifetime stats and challenges. Pure data so the server validates
+-- purchases and rewards in one tested place.
+
+local Cosmetics = require("./Cosmetics")
+local KartBodies = require("./KartBodies")
+local Karts = require("./Karts")
+local Rewards = require("./Rewards")
+
+export type Equipped = {
+	kart: string, -- stats class
+	body: string,
+	main: number,
+	accent: number,
+	wheels: string,
+	sticker: string,
+	horn: string,
+	trail: string,
+	plate: string,
+	name: string,
+}
+
+export type Mastery = { races: number, finishes: number, podiums: number, wins: number, bestLap: number?, bestRace: number? }
+
+export type Data = {
+	version: number,
+	coins: number,
+	owned: { [string]: { [string]: boolean } },
+	equipped: Equipped,
+	settings: { autoAccelerate: boolean, reducedEffects: boolean, cameraFar: boolean },
+	mastery: { [string]: Mastery },
+	stats: { races: number, wins: number, podiums: number, shortcuts: number, cleanRaces: number, jumps: number, improvedLaps: number },
+	challenges: { [string]: boolean },
+	tokens: { [string]: boolean },
+}
+
+local PlayerData = {}
+
+PlayerData.Version = 1
+PlayerData.StartingCoins = 200
+
+function PlayerData.new(): Data
+	return {
+		version = PlayerData.Version,
+		coins = PlayerData.StartingCoins,
+		owned = Cosmetics.starterOwned(),
+		equipped = {
+			kart = Karts.Default,
+			body = KartBodies.Default,
+			main = 1,
+			accent = 10,
+			wheels = "standard",
+			sticker = "none",
+			horn = "beep",
+			trail = "smoke",
+			plate = "",
+			name = "",
+		},
+		settings = { autoAccelerate = false, reducedEffects = false, cameraFar = false },
+		mastery = {},
+		stats = { races = 0, wins = 0, podiums = 0, shortcuts = 0, cleanRaces = 0, jumps = 0, improvedLaps = 0 },
+		challenges = {},
+		tokens = {},
+	}
+end
+
+-- Fills in anything missing from older or damaged saves.
+function PlayerData.migrate(saved: any): Data
+	local fresh = PlayerData.new()
+	if type(saved) ~= "table" then
+		return fresh
+	end
+	local function merge(into: any, defaults: any)
+		for k, v in defaults do
+			if into[k] == nil or type(into[k]) ~= type(v) then
+				into[k] = v
+			elseif type(v) == "table" and next(v) ~= nil and type(next(v)) == "string" then
+				merge(into[k], v)
+			end
+		end
+	end
+	merge(saved, fresh)
+	-- Make sure starter items stay owned even if the catalog grew.
+	for kind, ids in Cosmetics.starterOwned() do
+		saved.owned[kind] = saved.owned[kind] or {}
+		for id in ids do
+			saved.owned[kind][id] = true
+		end
+	end
+	saved.version = PlayerData.Version
+	PlayerData.validateEquipped(saved)
+	return saved
+end
+
+-- Puts back defaults for anything equipped that isn't owned or no longer exists.
+function PlayerData.validateEquipped(d: Data)
+	local e = d.equipped
+	if not Cosmetics.find("body", e.body) or not d.owned.body[e.body] then
+		e.body = KartBodies.Default
+	end
+	for kind, default in { wheels = "standard", sticker = "none", horn = "beep", trail = "smoke" } do
+		local id = (e :: any)[kind]
+		if not Cosmetics.find(kind, id) or not (d.owned[kind] or {})[id] then
+			(e :: any)[kind] = default
+		end
+	end
+	e.kart = Karts.get(e.kart).id
+	e.main = math.clamp(math.floor(tonumber(e.main) or 1), 1, #KartBodies.Palette)
+	e.accent = math.clamp(math.floor(tonumber(e.accent) or 10), 1, #KartBodies.Palette)
+	e.plate = Cosmetics.cleanText(e.plate, Cosmetics.PlateMaxLength)
+	e.name = Cosmetics.cleanText(e.name, Cosmetics.NameMaxLength)
+end
+
+function PlayerData.owns(d: Data, kind: string, id: string): boolean
+	return (d.owned[kind] or {})[id] == true
+end
+
+function PlayerData.buy(d: Data, kind: string, id: string): (boolean, string?)
+	local price = Cosmetics.price(kind, id)
+	if price == nil then
+		return false, "That item doesn't exist"
+	end
+	if PlayerData.owns(d, kind, id) then
+		return false, "You already own it"
+	end
+	if d.coins < price then
+		return false, "Not enough coins"
+	end
+	d.coins -= price
+	d.owned[kind] = d.owned[kind] or {}
+	d.owned[kind][id] = true
+	return true
+end
+
+-- Equip a cosmetic you own, a kart class, or paint.
+function PlayerData.equip(d: Data, kind: string, value: any): (boolean, string?)
+	local e = d.equipped
+	if kind == "kart" then
+		e.kart = Karts.get(tostring(value)).id
+		return true
+	elseif kind == "main" or kind == "accent" then
+		local n = math.floor(tonumber(value) or 0)
+		if n < 1 or n > #KartBodies.Palette then
+			return false, "Unknown colour"
+		end
+		(e :: any)[kind] = n
+		return true
+	elseif kind == "body" or Cosmetics.Lists[kind] then
+		local id = tostring(value)
+		if not Cosmetics.find(kind, id) then
+			return false, "That item doesn't exist"
+		end
+		if not PlayerData.owns(d, kind, id) then
+			return false, "Unlock it first"
+		end
+		(e :: any)[kind] = id
+		return true
+	end
+	return false, "Unknown setting"
+end
+
+-- What the kart builder needs (KartRig look).
+function PlayerData.look(d: Data)
+	local e = d.equipped
+	return {
+		body = e.body,
+		main = e.main,
+		accent = e.accent,
+		wheels = e.wheels,
+		sticker = e.sticker,
+		trail = e.trail,
+		plate = e.plate,
+	}
+end
+
+export type RaceSummary = {
+	coins: number,
+	lines: { string },
+	newBestLap: boolean,
+	badge: number?,
+	challenges: { string },
+}
+
+-- Applies one race to the save data and returns what was earned.
+-- `stats` comes from the server's own tracking of that race.
+function PlayerData.applyRace(d: Data, trackId: string, trackLength: number, trackCount: number, stats: Rewards.RaceStats, awardIds: { string }): RaceSummary
+	local summary: RaceSummary = { coins = 0, lines = {}, newBestLap = false, badge = nil, challenges = {} }
+	local function earn(amount: number, line: string)
+		summary.coins += amount
+		d.coins += amount
+		table.insert(summary.lines, `+{amount} 🪙  {line}`)
+	end
+
+	earn(Rewards.placeCoins(stats.place, stats.finished), if stats.finished then `Finished {stats.place}` else "Took part")
+	for _, id in awardIds do
+		local info = Rewards.AwardInfo[id]
+		earn(Rewards.AwardCoins, `{info.icon} {info.name}`)
+	end
+
+	-- Lifetime stats.
+	local s = d.stats
+	s.races += 1
+	s.shortcuts += stats.shortcutsTaken
+	s.jumps += stats.jumps
+	if stats.finished then
+		if stats.place == 1 then
+			s.wins += 1
+		end
+		if stats.place <= 3 then
+			s.podiums += 1
+		end
+		if stats.hitsTaken == 0 then
+			s.cleanRaces += 1
+		end
+	end
+
+	-- Track mastery and personal bests.
+	local m = d.mastery[trackId]
+	if not m then
+		m = { races = 0, finishes = 0, podiums = 0, wins = 0 }
+		d.mastery[trackId] = m
+	end
+	local before = Rewards.badge(m, trackLength)
+	m.races += 1
+	if stats.finished then
+		m.finishes += 1
+		if stats.place <= 3 then
+			m.podiums += 1
+		end
+		if stats.place == 1 then
+			m.wins += 1
+		end
+		if stats.time and (not m.bestRace or stats.time < m.bestRace) then
+			m.bestRace = stats.time
+		end
+	end
+	if stats.bestLap then
+		if m.bestLap and stats.bestLap < m.bestLap then
+			s.improvedLaps += 1
+			summary.newBestLap = true
+			table.insert(summary.lines, "⏱ New best lap!")
+		elseif not m.bestLap then
+			summary.newBestLap = true
+		end
+		if not m.bestLap or stats.bestLap < m.bestLap then
+			m.bestLap = stats.bestLap
+		end
+	end
+	local after = Rewards.badge(m, trackLength)
+	if after > before then
+		summary.badge = after
+		table.insert(summary.lines, `{Rewards.BadgeIcons[after]} {Rewards.BadgeNames[after]} mastery badge!`)
+	end
+
+	-- Challenges.
+	local tracksRaced = 0
+	for _ in d.mastery do
+		tracksRaced += 1
+	end
+	local tokenCount = 0
+	for _ in d.tokens do
+		tokenCount += 1
+	end
+	local view = {
+		wins = s.wins,
+		podiums = s.podiums,
+		shortcuts = s.shortcuts,
+		cleanRaces = s.cleanRaces,
+		jumps = s.jumps,
+		improvedLaps = s.improvedLaps,
+		tracksRaced = tracksRaced,
+		trackCount = trackCount,
+		tokens = tokenCount,
+		tokenCount = math.huge, -- tokens are checked when found, not after races
+	}
+	for _, c in Rewards.Challenges do
+		if not d.challenges[c.id] and c.check(view) then
+			d.challenges[c.id] = true
+			table.insert(summary.challenges, c.name)
+			earn(c.reward, `✅ Challenge: {c.name}`)
+		end
+	end
+	return summary
+end
+
+-- A golden token found in the lobby. Returns coins earned (0 if already found).
+function PlayerData.foundToken(d: Data, tokenId: string, totalTokens: number): (number, boolean)
+	if d.tokens[tokenId] then
+		return 0, false
+	end
+	d.tokens[tokenId] = true
+	local coins = Rewards.TokenCoins
+	local count = 0
+	for _ in d.tokens do
+		count += 1
+	end
+	local completedAll = false
+	if count >= totalTokens and not d.challenges.tokens then
+		d.challenges.tokens = true
+		for _, c in Rewards.Challenges do
+			if c.id == "tokens" then
+				coins += c.reward
+			end
+		end
+		completedAll = true
+	end
+	d.coins += coins
+	return coins, completedAll
+end
+
+function PlayerData.setSetting(d: Data, key: string, value: any): boolean
+	if d.settings[key] == nil or type(value) ~= "boolean" then
+		return false
+	end
+	(d.settings :: any)[key] = value
+	return true
+end
+
+return PlayerData
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="15">
         <Properties>
           <string name="Name">RaceRules</string>
           <string name="Source"><![CDATA[--!strict
@@ -1526,7 +2056,7 @@ return RaceRules
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="14">
+      <Item class="ModuleScript" referent="16">
         <Properties>
           <string name="Name">RemoteNames</string>
           <string name="Source"><![CDATA[--!strict
@@ -1543,11 +2073,13 @@ return {
 	Results = "Results", -- (info) placements and rewards
 	Notify = "Notify", -- (text)
 	OpenGarage = "OpenGarage", -- () the garage prompt was used
+	Profile = "Profile", -- (data, canSave) your coins, unlocks, equipped kart, settings, records
+	Honk = "Honk", -- (kartName, text) someone honked
 	Spectate = "Spectate", -- () start watching the current race
 
 	-- client -> server
-	ChooseKart = "ChooseKart", -- (kartId)
-	ChooseLook = "ChooseLook", -- ({ body, main, accent }) body design and paint
+	GarageAction = "GarageAction", -- (action, kind, value) buy / equip / text / setting
+	HonkRequest = "HonkRequest", -- () press H to honk your horn
 	Ready = "Ready", -- (isReady)
 	Vote = "Vote", -- (trackId) same as standing on a vote pad
 	UseItem = "UseItem", -- (aimBack) aimBack = throw/drop behind you
@@ -1557,7 +2089,124 @@ return {
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="15">
+      <Item class="ModuleScript" referent="17">
+        <Properties>
+          <string name="Name">Rewards</string>
+          <string name="Source"><![CDATA[--!strict
+-- Coins, end-of-race awards, challenges and track mastery badges. Everything
+-- here is computed by the server from what it saw happen in the race (place,
+-- hits, shortcuts, jumps, lap times), never from what a client claims.
+
+local Rewards = {}
+
+Rewards.PlaceCoins = { 120, 100, 85, 70, 60, 50, 45, 40 }
+Rewards.DnfCoins = 20
+Rewards.AwardCoins = 40
+Rewards.TokenCoins = 25
+
+export type RaceStats = {
+	id: string, -- racer id
+	name: string,
+	place: number,
+	finished: boolean,
+	time: number?,
+	bestLap: number?,
+	worstPlace: number,
+	hitsTaken: number,
+	shortcutsTaken: number,
+	jumps: number,
+	isCpu: boolean,
+}
+
+export type Award = { id: string, name: string, icon: string, winner: string }
+
+function Rewards.placeCoins(place: number, finished: boolean): number
+	if not finished then
+		return Rewards.DnfCoins
+	end
+	return Rewards.PlaceCoins[place] or Rewards.PlaceCoins[#Rewards.PlaceCoins]
+end
+
+Rewards.AwardInfo = {
+	comeback = { name = "Best Comeback", icon = "🔥" },
+	clean = { name = "Cleanest Driver", icon = "🧼" },
+	shortcut = { name = "Shortcut Expert", icon = "🗺️" },
+	flyer = { name = "High Flyer", icon = "🦅" },
+}
+
+-- Picks award winners for a finished race. Ties go to the better placing.
+function Rewards.awards(rows: { RaceStats }): { Award }
+	local out: { Award } = {}
+	local function best(score: (RaceStats) -> number?, minimum: number): RaceStats?
+		local winner: RaceStats? = nil
+		local winnerScore = -math.huge
+		for _, r in rows do
+			local s = score(r)
+			if s and s >= minimum and (s > winnerScore or (s == winnerScore and winner and r.place < winner.place)) then
+				winner, winnerScore = r, s
+			end
+		end
+		return winner
+	end
+	local function add(id: string, r: RaceStats?)
+		if r then
+			local info = Rewards.AwardInfo[id]
+			table.insert(out, { id = id, name = info.name, icon = info.icon, winner = r.id })
+		end
+	end
+	add("comeback", best(function(r)
+		return if r.finished then r.worstPlace - r.place else nil
+	end, 3))
+	add("clean", best(function(r)
+		-- Only clean finishers; better place scores higher.
+		return if r.finished and r.hitsTaken == 0 then 100 - r.place else nil
+	end, 0))
+	add("shortcut", best(function(r)
+		return r.shortcutsTaken
+	end, 1))
+	add("flyer", best(function(r)
+		return r.jumps
+	end, 4))
+	return out
+end
+
+-- One-time challenges. `check` reads the lifetime stats in the save data.
+Rewards.Challenges = {
+	{ id = "firstWin", name = "Win a race", reward = 150, check = function(s) return s.wins >= 1 end },
+	{ id = "podium3", name = "Finish on the podium 3 times", reward = 150, check = function(s) return s.podiums >= 3 end },
+	{ id = "shortcut3", name = "Take 3 shortcuts", reward = 100, check = function(s) return s.shortcuts >= 3 end },
+	{ id = "cleanRace", name = "Finish a race without being hit", reward = 120, check = function(s) return s.cleanRaces >= 1 end },
+	{ id = "jumps10", name = "Land 10 big jumps", reward = 100, check = function(s) return s.jumps >= 10 end },
+	{ id = "personalBest", name = "Beat one of your best lap times", reward = 80, check = function(s) return s.improvedLaps >= 1 end },
+	{ id = "explorer", name = "Race on every track", reward = 200, check = function(s) return s.tracksRaced >= s.trackCount end },
+	{ id = "tokens", name = "Find all golden tokens in the lobby", reward = 300, check = function(s) return s.tokens >= s.tokenCount end },
+}
+
+-- Mastery badge for a track: 1 bronze (finished a race), 2 silver (podium),
+-- 3 gold (won, with a best lap under the gold time).
+function Rewards.goldLap(trackLength: number): number
+	return trackLength / 92
+end
+
+function Rewards.badge(mastery: { finishes: number, podiums: number, wins: number, bestLap: number? }, trackLength: number): number
+	if mastery.wins >= 1 and mastery.bestLap and mastery.bestLap <= Rewards.goldLap(trackLength) then
+		return 3
+	elseif mastery.podiums >= 1 then
+		return 2
+	elseif mastery.finishes >= 1 then
+		return 1
+	end
+	return 0
+end
+
+Rewards.BadgeNames = { "Bronze", "Silver", "Gold" }
+Rewards.BadgeIcons = { "🥉", "🥈", "🥇" }
+
+return Rewards
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="18">
         <Properties>
           <string name="Name">Scenery</string>
           <string name="Source"><![CDATA[--!strict
@@ -1759,7 +2408,7 @@ return Scenery
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="16">
+      <Item class="ModuleScript" referent="19">
         <Properties>
           <string name="Name">Track</string>
           <string name="Source"><![CDATA[--!strict
@@ -2167,7 +2816,7 @@ return Track
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="17">
+      <Item class="ModuleScript" referent="20">
         <Properties>
           <string name="Name">Tracks</string>
           <string name="Source"><![CDATA[--!strict
@@ -2560,7 +3209,7 @@ return Tracks
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="18">
+      <Item class="ModuleScript" referent="21">
         <Properties>
           <string name="Name">Voting</string>
           <string name="Source"><![CDATA[--!strict
@@ -2643,15 +3292,204 @@ return Voting
       </Item>
     </Item>
   </Item>
-  <Item class="ServerScriptService" referent="19">
+  <Item class="ServerScriptService" referent="22">
     <Properties>
       <string name="Name">ServerScriptService</string>
     </Properties>
-    <Item class="Folder" referent="20">
+    <Item class="Folder" referent="23">
       <Properties>
         <string name="Name">Server</string>
       </Properties>
-      <Item class="ModuleScript" referent="21">
+      <Item class="ModuleScript" referent="24">
+        <Properties>
+          <string name="Name">DataService</string>
+          <string name="Source"><![CDATA[-- Loads and saves player data (coins, unlocks, equipped kart, settings,
+-- records, mastery, challenges) with retries. A failed load never breaks the
+-- session: the player gets a fresh temporary profile, is told progress won't
+-- save this time, and we never overwrite their real save with it.
+
+local DataStoreService = game:GetService("DataStoreService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TextService = game:GetService("TextService")
+
+local PlayerData = require(ReplicatedStorage.Shared.PlayerData)
+
+local Net = require(script.Parent.Net)
+
+local DataService = {}
+
+local STORE_NAME = "KartProfiles_v1"
+local AUTOSAVE_SECONDS = 60
+
+type Entry = { data: PlayerData.Data, canSave: boolean, dirty: boolean }
+
+local store: DataStore? = nil
+do
+	local ok, result = pcall(function()
+		return DataStoreService:GetDataStore(STORE_NAME)
+	end)
+	if ok then
+		store = result
+	else
+		warn("[DataService] DataStores unavailable; progress will not be saved:", result)
+	end
+end
+
+local entries: { [Player]: Entry } = {}
+local loaded = Instance.new("BindableEvent")
+DataService.Loaded = loaded.Event
+
+local function key(player: Player): string
+	return `p{player.UserId}`
+end
+
+local function retry<T>(fn: () -> T): (boolean, any)
+	local lastErr = nil
+	for attempt = 1, 3 do
+		local ok, result = pcall(fn)
+		if ok then
+			return true, result
+		end
+		lastErr = result
+		task.wait(attempt)
+	end
+	return false, lastErr
+end
+
+function DataService.get(player: Player): PlayerData.Data?
+	local e = entries[player]
+	return e and e.data
+end
+
+-- Yields until the player's data is ready (or they leave).
+function DataService.waitFor(player: Player): PlayerData.Data?
+	while player.Parent and not entries[player] do
+		loaded.Event:Wait()
+	end
+	return DataService.get(player)
+end
+
+function DataService.markDirty(player: Player)
+	local e = entries[player]
+	if e then
+		e.dirty = true
+	end
+end
+
+-- Sends the player their own data (for the garage, settings and coins).
+function DataService.push(player: Player)
+	local e = entries[player]
+	if e then
+		Net.Profile:FireClient(player, e.data, e.canSave)
+	end
+end
+
+function DataService.save(player: Player)
+	local e = entries[player]
+	if not e or not e.canSave or not store then
+		return
+	end
+	local data = e.data
+	local ok, err = retry(function()
+		return (store :: DataStore):UpdateAsync(key(player), function()
+			return data
+		end)
+	end)
+	if ok then
+		e.dirty = false
+	else
+		warn(`[DataService] save failed for {player.Name}:`, err)
+	end
+end
+
+-- Runs Roblox text filtering for kart names and plates others will see.
+function DataService.filter(player: Player, text: string): string
+	if text == "" then
+		return ""
+	end
+	local ok, result = pcall(function()
+		local filtered = TextService:FilterStringAsync(text, player.UserId)
+		return filtered:GetNonChatStringForBroadcastAsync()
+	end)
+	if ok and type(result) == "string" then
+		return result
+	end
+	-- In Studio without API access filtering fails; never show unfiltered text live.
+	return if RunService:IsStudio() then text else ""
+end
+
+local function onPlayerAdded(player: Player)
+	local data: PlayerData.Data
+	local canSave = store ~= nil
+	if store then
+		local ok, result = retry(function()
+			return (store :: DataStore):GetAsync(key(player))
+		end)
+		if ok then
+			data = PlayerData.migrate(result)
+		else
+			warn(`[DataService] load failed for {player.Name}:`, result)
+			data = PlayerData.new()
+			canSave = false
+			task.delay(3, function()
+				if player.Parent then
+					Net.Notify:FireClient(player, "Couldn't load your progress. This session won't be saved.")
+				end
+			end)
+		end
+	else
+		data = PlayerData.new()
+	end
+	if not player.Parent then
+		return
+	end
+	entries[player] = { data = data, canSave = canSave, dirty = false }
+	loaded:Fire(player)
+	DataService.push(player)
+end
+
+function DataService.start()
+	Players.PlayerAdded:Connect(onPlayerAdded)
+	for _, player in Players:GetPlayers() do
+		task.spawn(onPlayerAdded, player)
+	end
+	Players.PlayerRemoving:Connect(function(player)
+		DataService.save(player)
+		entries[player] = nil
+	end)
+	task.spawn(function()
+		while true do
+			task.wait(AUTOSAVE_SECONDS)
+			for player, e in entries do
+				if e.dirty then
+					task.spawn(DataService.save, player)
+				end
+			end
+		end
+	end)
+	game:BindToClose(function()
+		local pending = 0
+		for player in entries do
+			pending += 1
+			task.spawn(function()
+				DataService.save(player)
+				pending -= 1
+			end)
+		end
+		local deadline = os.clock() + 25
+		while pending > 0 and os.clock() < deadline do
+			task.wait(0.25)
+		end
+	end)
+end
+
+return DataService
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="25">
         <Properties>
           <string name="Name">ItemService</string>
           <string name="Source"><![CDATA[-- Item boxes, rolling items and everything the six items do on the track.
@@ -2803,6 +3641,9 @@ function ItemService.explode(pos: Vector3, word: string?, color: Color3?)
 	label.Parent = tag
 	sound(flash, "pop")
 	task.delay(0.25, function()
+		if not flash.Parent then
+			return
+		end
 		sparks.Enabled = false
 		smoke.Enabled = false
 		flash.Transparency = 1
@@ -3181,7 +4022,7 @@ return ItemService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="22">
+      <Item class="ModuleScript" referent="26">
         <Properties>
           <string name="Name">Landmarks</string>
           <string name="Source"><![CDATA[-- Big themed pieces for the oversized-world tracks: tunnels (the bed, garden
@@ -3571,7 +4412,7 @@ return Landmarks
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="23">
+      <Item class="ModuleScript" referent="27">
         <Properties>
           <string name="Name">LobbyBuilder</string>
           <string name="Source"><![CDATA[-- Builds the Kart Carnival lobby from LobbyLayout: spawn plaza, status board,
@@ -3788,6 +4629,7 @@ export type Handles = {
 	setPodium: (rows: { any }) -> (),
 	setSpectator: (title: string, body: string) -> (),
 	setKartDisplay: (slot: number, name: string?, kartId: string?, look: any?) -> (),
+	celebrate: (place: number, character: Model) -> (),
 	readyPrompt: ProximityPrompt,
 	garagePrompt: ProximityPrompt,
 	spectatePrompt: ProximityPrompt,
@@ -4055,7 +4897,51 @@ function LobbyBuilder.build(): Handles
 		setVoteOption(i, nil)
 	end
 
+	-- Top three players stand on their podium step, cheer, and get confetti.
+	local function celebrate(place: number, character: Model)
+		local h = stepHeights[place]
+		if not h or not character.Parent then
+			return
+		end
+		local spot = podiumCf * CFrame.new(stepX[place], h + 3, -3)
+		local root = character:FindFirstChild("HumanoidRootPart") :: BasePart?
+		if root then
+			root.CFrame = spot
+		end
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			pcall(function()
+				humanoid:PlayEmote(if place == 1 then "cheer" else "wave")
+			end)
+		end
+		local burst = Shapes.box(lobby, Vector3.new(1, 1, 1), spot * CFrame.new(0, 10, 0), { color = PALETTE.white, transparency = 1 })
+		local confetti = Instance.new("ParticleEmitter")
+		confetti.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+		confetti.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, PALETTE.pink),
+			ColorSequenceKeypoint.new(0.33, PALETTE.yellow),
+			ColorSequenceKeypoint.new(0.66, PALETTE.sky),
+			ColorSequenceKeypoint.new(1, PALETTE.mint),
+		})
+		confetti.Size = NumberSequence.new(0.6)
+		confetti.Lifetime = NumberRange.new(2, 3)
+		confetti.Speed = NumberRange.new(20, 30)
+		confetti.SpreadAngle = Vector2.new(60, 60)
+		confetti.Acceleration = Vector3.new(0, -20, 0)
+		confetti.Rotation = NumberRange.new(0, 360)
+		confetti.RotSpeed = NumberRange.new(-200, 200)
+		confetti.Rate = 120
+		confetti.Parent = burst
+		task.delay(1.5, function()
+			confetti.Enabled = false
+		end)
+		task.delay(5, function()
+			burst:Destroy()
+		end)
+	end
+
 	return {
+		celebrate = celebrate,
 		setStatus = function(title: string, body: string)
 			statusTitle.Text = title
 			statusBody.Text = body
@@ -4079,15 +4965,17 @@ return LobbyBuilder
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Script" referent="24">
+      <Item class="Script" referent="28">
         <Properties>
           <string name="Name">Main</string>
           <token name="RunContext">0</token>
           <string name="Source"><![CDATA[-- Server entry point.
 
+local DataService = require(script.Parent.DataService)
 local RaceService = require(script.Parent.RaceService)
 local RoundService = require(script.Parent.RoundService)
 
+DataService.start()
 RaceService.start()
 RoundService.start()
 
@@ -4095,7 +4983,7 @@ print("[KartRacer] server ready - walk under the READY arch (or press READY) to 
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="25">
+      <Item class="ModuleScript" referent="29">
         <Properties>
           <string name="Name">Net</string>
           <string name="Source"><![CDATA[-- Creates the RemoteEvents listed in Shared.RemoteNames under ReplicatedStorage.Remotes.
@@ -4120,7 +5008,7 @@ return Net
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="26">
+      <Item class="ModuleScript" referent="30">
         <Properties>
           <string name="Name">PracticeService</string>
           <string name="Source"><![CDATA[-- Practice karts on the lobby loop. Anyone not in a race can take one out to
@@ -4213,7 +5101,7 @@ return PracticeService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="27">
+      <Item class="ModuleScript" referent="31">
         <Properties>
           <string name="Name">Props</string>
           <string name="Source"><![CDATA[-- Scenery models built from parts. Scenery.luau decides where they go; this
@@ -4542,7 +5430,7 @@ return Props
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="28">
+      <Item class="ModuleScript" referent="32">
         <Properties>
           <string name="Name">RaceService</string>
           <string name="Source"><![CDATA[-- Runs one race: builds the track, puts karts on the grid, counts down,
@@ -4611,6 +5499,10 @@ export type Racer = {
 	hitsTaken: number,
 	shortcutsTaken: number,
 	onShortcut: boolean,
+	jumps: number,
+	airSince: number?, -- when the kart left the ground (server-measured)
+	lapStart: number?,
+	bestLap: number?,
 	-- Items (managed by ItemService)
 	item: string?,
 	uses: number,
@@ -4631,6 +5523,8 @@ export type ResultRow = {
 	worstPlace: number,
 	hitsTaken: number,
 	shortcutsTaken: number,
+	jumps: number,
+	bestLap: number?,
 }
 
 type Race = {
@@ -4915,6 +5809,8 @@ local function finishRace(r: Race)
 			worstPlace = racer.worstPlace,
 			hitsTaken = racer.hitsTaken,
 			shortcutsTaken = racer.shortcutsTaken,
+			jumps = racer.jumps,
+			bestLap = racer.bestLap,
 		})
 	end
 	ItemService.clear()
@@ -4981,6 +5877,10 @@ function RaceService.startRace(trackId: string, entrants: { Entrant }, onEnded: 
 			hitsTaken = 0,
 			shortcutsTaken = 0,
 			onShortcut = false,
+			jumps = 0,
+			airSince = nil,
+			lapStart = nil,
+			bestLap = nil,
 			item = nil,
 			uses = 0,
 			itemReadyAt = 0,
@@ -5177,6 +6077,12 @@ local function tickRace(r: Race)
 		if offTrack or root.Position.Y < roadY - FALL_DEPTH then
 			respawn(r, racer)
 		elseif Track.updateProgress(track, racer.progress, proj) then
+			-- Lap times, measured line to line.
+			if racer.lapStart and racer.progress.lap >= 2 then
+				local lapTime = t - racer.lapStart
+				racer.bestLap = math.min(racer.bestLap or math.huge, lapTime)
+			end
+			racer.lapStart = t
 			if racer.progress.lap > track.def.laps and not racer.finishTime then
 				racer.finishTime = t - r.goTime
 				if player then
@@ -5194,6 +6100,17 @@ local function tickRace(r: Race)
 			end
 		end
 		racer.score = Track.score(track, racer.progress)
+
+		-- Big jumps: well above the road for a while, then back down.
+		local height = root.Position.Y - roadY - KartRig.BallRadius
+		if height > 3 then
+			racer.airSince = racer.airSince or t
+		elseif racer.airSince then
+			if t - racer.airSince > 0.45 then
+				racer.jumps += 1
+			end
+			racer.airSince = nil
+		end
 
 		if player then
 			if not player.Parent then
@@ -5300,7 +6217,7 @@ return RaceService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="29">
+      <Item class="ModuleScript" referent="33">
         <Properties>
           <string name="Name">RoundService</string>
           <string name="Source"><![CDATA[-- The round loop:
@@ -5317,13 +6234,18 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage.Shared
+local Cosmetics = require(Shared.Cosmetics)
 local KartBodies = require(Shared.KartBodies)
 local Karts = require(Shared.Karts)
+local PlayerData = require(Shared.PlayerData)
+local Rewards = require(Shared.Rewards)
+local Track = require(Shared.Track)
 local LobbyLayout = require(Shared.LobbyLayout)
 local RaceRules = require(Shared.RaceRules)
 local Tracks = require(Shared.Tracks)
 local Voting = require(Shared.Voting)
 
+local DataService = require(script.Parent.DataService)
 local LobbyBuilder = require(script.Parent.LobbyBuilder)
 local Net = require(script.Parent.Net)
 local PracticeService = require(script.Parent.PracticeService)
@@ -5335,7 +6257,7 @@ local READY_WAIT = 10 -- seconds after the first ready-up before voting opens
 local RESULTS_TIME = 10
 local TICK = 0.25
 
-type Choice = { kart: string, look: KartBodies.Look, ready: boolean }
+type Choice = { ready: boolean }
 
 local phase: "lobby" | "voting" | "racing" | "results" = "lobby"
 local deadline: number? = nil
@@ -5347,7 +6269,6 @@ local lastTrack: string? = nil
 local lastResults: { any } = {}
 local winner: string? = nil
 local handles: LobbyBuilder.Handles
-local foundTokens: { [Player]: { [number]: boolean } } = {}
 local dirty = true
 
 local function now(): number
@@ -5357,10 +6278,19 @@ end
 local function choiceOf(player: Player): Choice
 	local c = choices[player]
 	if not c then
-		c = { kart = Karts.Default, look = KartBodies.sanitize(nil), ready = false }
+		c = { ready = false }
 		choices[player] = c
 	end
 	return c
+end
+
+-- The player's equipped kart class and look (from their saved data).
+local function kartOf(player: Player): (string, any)
+	local data = DataService.get(player)
+	if not data then
+		return Karts.Default, KartBodies.sanitize(nil)
+	end
+	return data.equipped.kart, PlayerData.look(data)
 end
 
 local function rootOf(player: Player): BasePart?
@@ -5476,11 +6406,12 @@ end
 
 local function refreshDisplays()
 	local slot = 0
-	for player, c in choices do
+	for player in choices do
 		if player.Parent then
 			slot += 1
 			if slot <= #LobbyLayout.KartDisplays then
-				handles.setKartDisplay(slot, player.DisplayName, c.kart, c.look)
+				local kartId, look = kartOf(player)
+				handles.setKartDisplay(slot, player.DisplayName, kartId, look)
 			end
 		end
 	end
@@ -5532,7 +6463,9 @@ local function onRaceEnded(rows: { any }, trackId: string)
 	handles.setPodium(lastResults)
 
 	local def = Tracks.get(trackId)
+	local trackLength = Track.build(def).length
 	local out = {}
+	local statRows = {}
 	for _, row in rows do
 		table.insert(out, {
 			place = row.place,
@@ -5541,19 +6474,82 @@ local function onRaceEnded(rows: { any }, trackId: string)
 			userId = row.userId,
 			time = row.time,
 			finished = row.finished,
+			bestLap = row.bestLap,
+		})
+		table.insert(statRows, {
+			id = row.id,
+			name = row.name,
+			place = row.place,
+			finished = row.finished,
+			time = row.time,
+			bestLap = row.bestLap,
+			worstPlace = row.worstPlace,
+			hitsTaken = row.hitsTaken,
+			shortcutsTaken = row.shortcutsTaken,
+			jumps = row.jumps,
+			isCpu = row.isCpu,
 		})
 	end
-	Net.Results:FireAllClients({ trackName = def.name, rows = out })
+
+	-- Awards for everyone to see; coins only go to players.
+	local awards = Rewards.awards(statRows)
+	local awardLines = {}
+	local nameOf = {}
+	for _, r in statRows do
+		nameOf[r.id] = r.name
+	end
+	for _, a in awards do
+		table.insert(awardLines, { icon = a.icon, name = a.name, winner = nameOf[a.winner] })
+	end
+
+	for i, row in rows do
+		local player = row.userId and Players:GetPlayerByUserId(row.userId)
+		if player then
+			local data = DataService.get(player)
+			local mine = nil
+			if data then
+				local myAwards = {}
+				for _, a in awards do
+					if a.winner == row.id then
+						table.insert(myAwards, a.id)
+					end
+				end
+				mine = PlayerData.applyRace(data, trackId, trackLength, #Tracks.VotePool, statRows[i], myAwards)
+				DataService.markDirty(player)
+				DataService.push(player)
+			end
+			Net.Results:FireClient(player, { trackName = def.name, rows = out, awards = awardLines, me = mine })
+		end
+	end
+	-- Everyone else in the lobby sees the results too (no personal rewards).
+	for _, player in Players:GetPlayers() do
+		local raced = false
+		for _, row in rows do
+			if row.userId == player.UserId then
+				raced = true
+			end
+		end
+		if not raced then
+			Net.Results:FireClient(player, { trackName = def.name, rows = out, awards = awardLines })
+		end
+	end
 
 	-- Racers go back to the lobby; they ready up again for the next race.
+	-- The top three players stand on the podium and celebrate.
 	for _, row in rows do
 		if row.userId then
 			local player = Players:GetPlayerByUserId(row.userId)
 			if player then
 				choiceOf(player).ready = false
 				task.defer(function()
-					if player.Parent then
-						player:LoadCharacter()
+					if not player.Parent then
+						return
+					end
+					player:LoadCharacter()
+					if row.place <= 3 then
+						local character = player.Character or player.CharacterAdded:Wait()
+						task.wait(0.3)
+						handles.celebrate(row.place, character)
 					end
 				end)
 			end
@@ -5569,15 +6565,15 @@ local function startRace()
 	local entrants = {}
 	for player in voters do
 		if player.Parent then
-			local c = choiceOf(player)
+			local kartId, look = kartOf(player)
 			PracticeService.stop(player)
 			table.insert(entrants, {
 				id = `u{player.UserId}`,
 				name = player.DisplayName,
 				isCpu = false,
 				player = player,
-				kartId = c.kart,
-				look = c.look,
+				kartId = kartId,
+				look = look,
 				profile = { lane = 0, skill = 1 },
 			})
 		end
@@ -5670,20 +6666,22 @@ local function step()
 		end
 	end
 
-	-- Hidden tokens in the lobby.
+	-- Hidden golden tokens in the lobby (saved, paid once each).
 	for _, player in Players:GetPlayers() do
 		local root = rootOf(player)
-		if root then
+		local data = DataService.get(player)
+		if root and data then
 			for _, token in handles.collectibles do
-				local id = token:GetAttribute("TokenId")
-				local found = foundTokens[player]
-				if found and not found[id] and (token.Position - root.Position).Magnitude < 7 then
-					found[id] = true
+				local id = tostring(token:GetAttribute("TokenId"))
+				if not data.tokens[id] and (token.Position - root.Position).Magnitude < 7 then
+					local coins, all = PlayerData.foundToken(data, id, #handles.collectibles)
 					local count = 0
-					for _ in found do
+					for _ in data.tokens do
 						count += 1
 					end
-					Net.Notify:FireClient(player, `Golden token found! {count}/{#handles.collectibles}`)
+					Net.Notify:FireClient(player, `Golden token! +{coins} 🪙 ({count}/{#handles.collectibles})` .. (if all then " All found!" else ""))
+					DataService.markDirty(player)
+					DataService.push(player)
 				end
 			end
 		end
@@ -5720,9 +6718,11 @@ function RoundService.start()
 
 	local function onPlayer(player: Player)
 		choiceOf(player)
-		foundTokens[player] = {}
 		dirty = true
-		refreshDisplays()
+		task.spawn(function()
+			DataService.waitFor(player)
+			refreshDisplays()
+		end)
 	end
 	Players.PlayerAdded:Connect(onPlayer)
 	for _, player in Players:GetPlayers() do
@@ -5732,7 +6732,6 @@ function RoundService.start()
 		choices[player] = nil
 		voters[player] = nil
 		votes[player.UserId] = nil
-		foundTokens[player] = nil
 		dirty = true
 		task.defer(refreshDisplays)
 	end)
@@ -5749,19 +6748,58 @@ function RoundService.start()
 			dirty = true
 		end
 	end)
-	Net.ChooseKart.OnServerEvent:Connect(function(player, kartId)
-		if not RaceService.isRacing(player) then
-			choiceOf(player).kart = Karts.get(tostring(kartId)).id
-			refreshDisplays()
-			dirty = true
+	-- Garage: everything is checked here; the client only asks.
+	local textCooldown: { [Player]: number } = {}
+	Net.GarageAction.OnServerEvent:Connect(function(player, action, kind, value)
+		local data = DataService.get(player)
+		if not data or type(action) ~= "string" or type(kind) ~= "string" then
+			return
 		end
+		local ok, err = false, nil
+		if action == "buy" then
+			ok, err = PlayerData.buy(data, kind, tostring(value))
+			if ok then
+				ok, err = PlayerData.equip(data, kind, tostring(value))
+			end
+		elseif action == "equip" then
+			if RaceService.isRacing(player) then
+				return
+			end
+			ok, err = PlayerData.equip(data, kind, value)
+		elseif action == "text" and (kind == "plate" or kind == "name") then
+			if os.clock() - (textCooldown[player] or 0) < 2 then
+				return
+			end
+			textCooldown[player] = os.clock()
+			local maxLength = if kind == "plate" then Cosmetics.PlateMaxLength else Cosmetics.NameMaxLength
+			local clean = Cosmetics.cleanText(value, maxLength)
+			data.equipped[kind] = DataService.filter(player, clean)
+			ok = true
+		elseif action == "setting" then
+			ok = PlayerData.setSetting(data, kind, value == true)
+		end
+		if ok then
+			DataService.markDirty(player)
+			refreshDisplays()
+		elseif err then
+			Net.Notify:FireClient(player, err)
+		end
+		DataService.push(player)
 	end)
-	Net.ChooseLook.OnServerEvent:Connect(function(player, look)
-		if not RaceService.isRacing(player) then
-			choiceOf(player).look = KartBodies.sanitize(look)
-			refreshDisplays()
-			dirty = true
+	Players.PlayerRemoving:Connect(function(player)
+		textCooldown[player] = nil
+	end)
+
+	-- Horns: anyone can honk; everyone nearby sees (and hears) it.
+	local honkCooldown: { [Player]: number } = {}
+	Net.HonkRequest.OnServerEvent:Connect(function(player)
+		if os.clock() - (honkCooldown[player] or 0) < 1.5 then
+			return
 		end
+		honkCooldown[player] = os.clock()
+		local data = DataService.get(player)
+		local horn = Cosmetics.find("horn", data and data.equipped.horn or "beep")
+		Net.Honk:FireAllClients(player.DisplayName, horn and horn.id or "beep", player.UserId)
 	end)
 	Net.UseItem.OnServerEvent:Connect(function(player, aimBack)
 		RaceService.useItem(player, aimBack == true)
@@ -5782,8 +6820,8 @@ function RoundService.start()
 		if RaceService.isRacing(player) then
 			return
 		end
-		local c = choiceOf(player)
-		PracticeService.start(player, c.kart, c.look)
+		local kartId, look = kartOf(player)
+		PracticeService.start(player, kartId, look)
 	end)
 
 	task.spawn(function()
@@ -5811,7 +6849,7 @@ return RoundService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="30">
+      <Item class="ModuleScript" referent="34">
         <Properties>
           <string name="Name">TrackBuilder</string>
           <string name="Source"><![CDATA[-- Builds a track's parts from its centerline: road, curbs and lane lines,
@@ -6164,146 +7202,352 @@ return TrackBuilder
       </Item>
     </Item>
   </Item>
-  <Item class="StarterPlayer" referent="31">
+  <Item class="StarterPlayer" referent="35">
     <Properties>
       <string name="Name">StarterPlayer</string>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="32">
+    <Item class="StarterPlayerScripts" referent="36">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="Folder" referent="33">
+      <Item class="Folder" referent="37">
         <Properties>
           <string name="Name">Client</string>
         </Properties>
-        <Item class="ModuleScript" referent="34">
+        <Item class="ModuleScript" referent="38">
           <Properties>
             <string name="Name">GarageUI</string>
-            <string name="Source"><![CDATA[-- The garage: choose your kart type (stats), body design and paint. Opens
--- from the GARAGE button or the garage building in the lobby.
+            <string name="Source"><![CDATA[-- The garage: a live 3D preview of your kart plus tabs for kart type (stats),
+-- body, paint, wheels, stickers, horn, trail, name & plate, records and
+-- settings. Locked items show their coin price; tap to unlock. Every change
+-- goes to the server, which checks it, saves it and sends your data back.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Cosmetics = require(Shared:WaitForChild("Cosmetics"))
 local KartBodies = require(Shared:WaitForChild("KartBodies"))
 local Karts = require(Shared:WaitForChild("Karts"))
+local Rewards = require(Shared:WaitForChild("Rewards"))
+local Track = require(Shared:WaitForChild("Track"))
+local Tracks = require(Shared:WaitForChild("Tracks"))
+local KartRig = require(ReplicatedStorage:WaitForChild("Common"):WaitForChild("KartRig"))
 
 local UI = require(script.Parent.UI)
 
 local GarageUI = {}
 
-GarageUI.onChooseKart = nil :: ((string) -> ())?
-GarageUI.onLook = nil :: ((any) -> ())?
+-- Set by Main: (action, kind, value) sent to the server.
+GarageUI.onAction = nil :: ((string, string, any) -> ())?
 
-local chosenKart = Karts.Default
-local look = { body = KartBodies.Default, main = 1, accent = 10 }
+local data: any = nil
+local canSave = true
+local tab = "kart"
 
-local panel = UI.panel(UI.Screen, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 640, 0, 520), Visible = false })
-UI.label(panel, { Position = UDim2.new(0, 20, 0, 10), Size = UDim2.new(1, -100, 0, 44), Text = "🔧 GARAGE", TextColor3 = UI.Colors.yellow, TextXAlignment = Enum.TextXAlignment.Left })
+local panel = UI.panel(UI.Screen, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 860, 0, 560), Visible = false })
+UI.label(panel, { Position = UDim2.new(0, 20, 0, 10), Size = UDim2.new(0, 260, 0, 44), Text = "🔧 GARAGE", TextColor3 = UI.Colors.yellow, TextXAlignment = Enum.TextXAlignment.Left })
+local coinsLabel = UI.label(panel, { Position = UDim2.new(0, 280, 0, 14), Size = UDim2.new(0, 200, 0, 36), Text = "🪙 0", TextXAlignment = Enum.TextXAlignment.Left })
+local saveNote = UI.label(panel, { Position = UDim2.new(0, 480, 0, 18), Size = UDim2.new(0, 280, 0, 28), Text = "", TextColor3 = UI.Colors.red })
 UI.button(panel, "✕", UI.Colors.red, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 12), Size = UDim2.new(0, 52, 0, 46) }, function()
 	GarageUI.close()
 end)
 
-local function statBar(n: number, lo: number, hi: number): string
-	local filled = math.clamp(math.floor((n - lo) / (hi - lo) * 5 + 0.5), 1, 5)
-	return string.rep("●", filled) .. string.rep("○", 5 - filled)
-end
+-- Preview ------------------------------------------------------------------
+local viewport = Instance.new("ViewportFrame")
+viewport.Position = UDim2.new(0, 20, 0, 66)
+viewport.Size = UDim2.new(0, 300, 0, 300)
+viewport.BackgroundColor3 = Color3.fromRGB(60, 56, 100)
+viewport.Ambient = Color3.fromRGB(170, 170, 190)
+viewport.LightColor = Color3.fromRGB(255, 250, 240)
+viewport.LightDirection = Vector3.new(-1, -2, -1)
+viewport.Parent = panel
+local vpCorner = Instance.new("UICorner")
+vpCorner.CornerRadius = UDim.new(0, 18)
+vpCorner.Parent = viewport
+local world = Instance.new("WorldModel")
+world.Parent = viewport
+local vpCamera = Instance.new("Camera")
+vpCamera.FieldOfView = 40
+vpCamera.CFrame = CFrame.lookAt(Vector3.new(11, 7, -13), Vector3.new(0, 1.6, 0))
+vpCamera.Parent = viewport
+viewport.CurrentCamera = vpCamera
+local floor = Instance.new("Part")
+floor.Anchored = true
+floor.Shape = Enum.PartType.Cylinder
+floor.Size = Vector3.new(0.4, 16, 16)
+floor.CFrame = CFrame.new(0, -0.2, 0) * CFrame.Angles(0, 0, math.rad(90))
+floor.Color = Color3.fromRGB(230, 225, 240)
+floor.Parent = world
+local previewKart: Model? = nil
+local nameLabel = UI.label(panel, { Position = UDim2.new(0, 20, 0, 372), Size = UDim2.new(0, 300, 0, 30), Text = "" })
+local statsLabel = UI.label(panel, { Position = UDim2.new(0, 20, 0, 404), Size = UDim2.new(0, 300, 0, 60), TextScaled = false, TextSize = 16, Text = "", TextColor3 = UI.Colors.muted })
 
--- Kart type cards (these set the stats).
-local cards = Instance.new("Frame")
-cards.BackgroundTransparency = 1
-cards.Position = UDim2.new(0, 20, 0, 64)
-cards.Size = UDim2.new(1, -40, 0, 160)
-cards.Parent = panel
-UI.list(cards, true, 10)
-local cardButtons: { [string]: TextButton } = {}
-for _, def in Karts.List do
-	local c = Color3.fromRGB(def.color[1], def.color[2], def.color[3])
-	local card = UI.button(cards, "", c:Lerp(Color3.new(0, 0, 0), 0.55), { Size = UDim2.new(1 / 3, -7, 1, 0) }, function()
-		chosenKart = def.id
-		if GarageUI.onChooseKart then
-			GarageUI.onChooseKart(def.id)
+local function rebuildPreview()
+	if previewKart then
+		previewKart:Destroy()
+		previewKart = nil
+	end
+	if not data then
+		return
+	end
+	local e = data.equipped
+	local look = { body = e.body, main = e.main, accent = e.accent, wheels = e.wheels, sticker = e.sticker, trail = "none", plate = e.plate }
+	local ok, kart = pcall(KartRig.build, e.kart, if e.name ~= "" then e.name else "My Kart", CFrame.new(0, 0, 0), world, look)
+	if ok then
+		previewKart = kart
+		local tag = kart:FindFirstChild("NameTag")
+		if tag then
+			tag:Destroy()
 		end
-		GarageUI.refresh()
+	end
+	nameLabel.Text = if e.name ~= "" then `"{e.name}"` else KartBodies.get(e.body).name
+	local stats = Karts.get(e.kart)
+	statsLabel.Text = `{stats.name} engine · {stats.blurb}`
+end
+
+RunService.RenderStepped:Connect(function()
+	if previewKart and panel.Visible then
+		local yaw = os.clock() * 0.6
+		local pivot = CFrame.new(0, 0, 0) * CFrame.Angles(0, yaw, 0)
+		previewKart:PivotTo(pivot + Vector3.new(0, KartRig.BallRadius + 0.2, 0))
+	end
+end)
+
+-- Tabs -----------------------------------------------------------------------
+local TABS = {
+	{ id = "kart", name = "Engine" },
+	{ id = "body", name = "Body" },
+	{ id = "paint", name = "Paint" },
+	{ id = "wheels", name = "Wheels" },
+	{ id = "sticker", name = "Stickers" },
+	{ id = "horn", name = "Horn" },
+	{ id = "trail", name = "Trail" },
+	{ id = "name", name = "Name & Plate" },
+	{ id = "records", name = "Records" },
+	{ id = "settings", name = "Settings" },
+}
+local tabBar = Instance.new("Frame")
+tabBar.BackgroundTransparency = 1
+tabBar.Position = UDim2.new(0, 340, 0, 66)
+tabBar.Size = UDim2.new(1, -360, 0, 92)
+tabBar.Parent = panel
+local tabGrid = Instance.new("UIGridLayout")
+tabGrid.CellSize = UDim2.new(0, 96, 0, 40)
+tabGrid.CellPadding = UDim2.new(0, 6, 0, 6)
+tabGrid.SortOrder = Enum.SortOrder.LayoutOrder
+tabGrid.Parent = tabBar
+local tabButtons: { [string]: TextButton } = {}
+for i, t in TABS do
+	tabButtons[t.id] = UI.button(tabBar, t.name, UI.Colors.panelLight, { LayoutOrder = i, TextScaled = true }, function()
+		tab = t.id
+		GarageUI.render()
 	end)
-	UI.label(card, { Size = UDim2.new(1, 0, 0, 30), Text = def.name, TextColor3 = c })
-	UI.label(card, {
-		Position = UDim2.new(0, 0, 0, 34),
-		Size = UDim2.new(1, 0, 1, -34),
-		TextScaled = false,
-		TextSize = 15,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		TextYAlignment = Enum.TextYAlignment.Top,
-		Text = `{def.blurb}\nSpeed  {statBar(def.stats.topSpeed, 88, 108)}\nAccel  {statBar(def.stats.accel, 44, 72)}\nTurn   {statBar(def.stats.handling, 1.9, 2.4)}`,
+end
+
+local content = Instance.new("ScrollingFrame")
+content.BackgroundTransparency = 1
+content.BorderSizePixel = 0
+content.Position = UDim2.new(0, 340, 0, 168)
+content.Size = UDim2.new(1, -360, 1, -184)
+content.ScrollBarThickness = 8
+content.AutomaticCanvasSize = Enum.AutomaticSize.Y
+content.CanvasSize = UDim2.new()
+content.Parent = panel
+
+local function clear()
+	for _, child in content:GetChildren() do
+		child:Destroy()
+	end
+end
+
+local function grid(cell: UDim2)
+	local g = Instance.new("UIGridLayout")
+	g.CellSize = cell
+	g.CellPadding = UDim2.new(0, 8, 0, 8)
+	g.SortOrder = Enum.SortOrder.LayoutOrder
+	g.Parent = content
+end
+
+local function act(action: string, kind: string, value: any)
+	if GarageUI.onAction then
+		GarageUI.onAction(action, kind, value)
+	end
+end
+
+-- A tile for one cosmetic: equipped (highlighted), owned (tap to equip) or locked (tap to buy).
+local function itemTile(kind: string, item: any, order: number)
+	local owned = data.owned[kind] and data.owned[kind][item.id]
+	local equipped = data.equipped[kind] == item.id
+	local price = item.price or 0
+	local color = if equipped then UI.Colors.green elseif owned then UI.Colors.panelLight else Color3.fromRGB(70, 60, 90)
+	local tile = UI.button(content, "", color, { LayoutOrder = order }, function()
+		if owned then
+			act("equip", kind, item.id)
+		else
+			act("buy", kind, item.id)
+		end
+	end)
+	UI.label(tile, { Size = UDim2.new(1, 0, 0.55, 0), Text = item.icon or "🏎️" })
+	UI.label(tile, { Position = UDim2.new(0, 0, 0.55, 0), Size = UDim2.new(1, 0, 0.25, 0), Text = item.name })
+	UI.label(tile, {
+		Position = UDim2.new(0, 0, 0.8, 0),
+		Size = UDim2.new(1, 0, 0.2, 0),
+		Text = if equipped then "Equipped" elseif owned then "Owned" else `🪙 {price}`,
+		TextColor3 = if owned then UI.Colors.muted else UI.Colors.yellow,
 	})
-	cardButtons[def.id] = card
+	UI.highlight(tile, equipped)
 end
 
-local function row(y: number, title: string, height: number): Frame
-	UI.label(panel, { Position = UDim2.new(0, 20, 0, y), Size = UDim2.new(0, 80, 0, height), TextScaled = false, TextSize = 18, Text = title, TextXAlignment = Enum.TextXAlignment.Left })
-	local r = Instance.new("Frame")
-	r.BackgroundTransparency = 1
-	r.Position = UDim2.new(0, 100, 0, y)
-	r.Size = UDim2.new(1, -120, 0, height)
-	r.Parent = panel
-	local grid = Instance.new("UIGridLayout")
-	grid.CellPadding = UDim2.new(0, 6, 0, 6)
-	grid.CellSize = if height > 60 then UDim2.new(0, 160, 0, 40) else UDim2.new(0, 36, 0, 36)
-	grid.SortOrder = Enum.SortOrder.LayoutOrder
-	grid.Parent = r
-	return r
-end
-
-local bodyButtons: { [string]: TextButton } = {}
-local mainSwatches: { TextButton } = {}
-local accentSwatches: { TextButton } = {}
-
-local function sendLook()
-	if GarageUI.onLook then
-		GarageUI.onLook(look)
-	end
-	GarageUI.refresh()
-end
-
-local bodyRow = row(238, "Body", 132)
-for _, body in KartBodies.List do
-	bodyButtons[body.id] = UI.button(bodyRow, body.name, UI.Colors.panelLight, {}, function()
-		look.body = body.id
-		sendLook()
+local function textRow(order: number, title: string, kind: string, maxLength: number)
+	local row = Instance.new("Frame")
+	row.BackgroundTransparency = 1
+	row.Size = UDim2.new(1, -10, 0, 56)
+	row.LayoutOrder = order
+	row.Parent = content
+	UI.label(row, { Size = UDim2.new(0, 120, 1, 0), Text = title, TextXAlignment = Enum.TextXAlignment.Left })
+	local box = Instance.new("TextBox")
+	box.Position = UDim2.new(0, 130, 0, 6)
+	box.Size = UDim2.new(1, -260, 0, 44)
+	box.BackgroundColor3 = Color3.fromRGB(245, 245, 250)
+	box.TextColor3 = Color3.fromRGB(40, 40, 60)
+	box.Font = UI.Font
+	box.TextScaled = true
+	box.ClearTextOnFocus = false
+	box.PlaceholderText = `up to {maxLength} letters`
+	box.Text = data.equipped[kind] or ""
+	box.Parent = row
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = box
+	box:GetPropertyChangedSignal("Text"):Connect(function()
+		if #box.Text > maxLength then
+			box.Text = string.sub(box.Text, 1, maxLength)
+		end
+	end)
+	UI.button(row, "SAVE", UI.Colors.green, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 6), Size = UDim2.new(0, 110, 0, 44) }, function()
+		act("text", kind, box.Text)
 	end)
 end
 
-local function swatches(y: number, title: string, list: { TextButton }, key: string)
-	local r = row(y, title, 36)
-	for i, c in KartBodies.Palette do
-		list[i] = UI.button(r, "", Color3.fromRGB(c[1], c[2], c[3]), {}, function()
-			look[key] = i
-			sendLook()
-		end)
+function GarageUI.render()
+	for id, b in tabButtons do
+		b.BackgroundColor3 = if id == tab then UI.Colors.purple else UI.Colors.panelLight
 	end
-end
-swatches(384, "Paint", mainSwatches, "main")
-swatches(432, "Trim", accentSwatches, "accent")
+	clear()
+	if not data then
+		return
+	end
+	coinsLabel.Text = `🪙 {data.coins}`
+	saveNote.Text = if canSave then "" else "⚠ Progress isn't saving this session"
 
-function GarageUI.refresh()
-	for id, card in cardButtons do
-		UI.highlight(card, id == chosenKart)
-	end
-	for id, b in bodyButtons do
-		UI.highlight(b, id == look.body)
-	end
-	for i, b in mainSwatches do
-		UI.highlight(b, i == look.main)
-	end
-	for i, b in accentSwatches do
-		UI.highlight(b, i == look.accent)
+	if tab == "kart" then
+		grid(UDim2.new(0, 150, 0, 150))
+		for i, def in Karts.List do
+			local equipped = data.equipped.kart == def.id
+			local tile = UI.button(content, "", if equipped then UI.Colors.green else UI.Colors.panelLight, { LayoutOrder = i }, function()
+				act("equip", "kart", def.id)
+			end)
+			UI.label(tile, { Size = UDim2.new(1, 0, 0, 30), Text = def.name })
+			UI.label(tile, { Position = UDim2.new(0, 0, 0, 34), Size = UDim2.new(1, 0, 1, -34), TextScaled = false, TextSize = 14, TextWrapped = true, Text = def.blurb, TextColor3 = UI.Colors.muted })
+			UI.highlight(tile, equipped)
+		end
+	elseif tab == "body" then
+		grid(UDim2.new(0, 112, 0, 112))
+		for i, body in KartBodies.List do
+			itemTile("body", { id = body.id, name = body.name, icon = (body :: any).icon or "🏎️", price = (body :: any).price or 0 }, i)
+		end
+	elseif tab == "paint" then
+		UI.list(content, false, 8)
+		for section, key in { "Paint", "Trim" } do
+			local title = if key == "Paint" then "main" else "accent"
+			UI.label(content, { LayoutOrder = section * 2 - 1, Size = UDim2.new(1, -10, 0, 30), Text = key, TextColor3 = UI.Colors.yellow, TextXAlignment = Enum.TextXAlignment.Left })
+			local row = Instance.new("Frame")
+			row.BackgroundTransparency = 1
+			row.LayoutOrder = section * 2
+			row.Size = UDim2.new(1, -10, 0, 108)
+			row.Parent = content
+			local g = Instance.new("UIGridLayout")
+			g.CellSize = UDim2.new(0, 46, 0, 46)
+			g.CellPadding = UDim2.new(0, 8, 0, 8)
+			g.SortOrder = Enum.SortOrder.LayoutOrder
+			g.Parent = row
+			for i, c in KartBodies.Palette do
+				local b = UI.button(row, "", Color3.fromRGB(c[1], c[2], c[3]), { LayoutOrder = i }, function()
+					act("equip", title, i)
+				end)
+				UI.highlight(b, data.equipped[title] == i)
+			end
+		end
+	elseif tab == "wheels" or tab == "sticker" or tab == "horn" or tab == "trail" then
+		grid(UDim2.new(0, 112, 0, 112))
+		for i, item in Cosmetics.Lists[tab] do
+			itemTile(tab, item, i)
+		end
+	elseif tab == "name" then
+		UI.list(content, false, 10)
+		textRow(1, "Kart name", "name", Cosmetics.NameMaxLength)
+		textRow(2, "Plate", "plate", Cosmetics.PlateMaxLength)
+		UI.label(content, { LayoutOrder = 3, Size = UDim2.new(1, -10, 0, 40), TextScaled = false, TextSize = 15, Text = "Names and plates are checked by Roblox's text filter before others see them.", TextColor3 = UI.Colors.muted })
+	elseif tab == "records" then
+		UI.list(content, false, 6)
+		local order = 0
+		local function line(text: string, color: Color3?)
+			order += 1
+			UI.label(content, { LayoutOrder = order, Size = UDim2.new(1, -10, 0, 28), TextScaled = false, TextSize = 17, TextXAlignment = Enum.TextXAlignment.Left, Text = text, TextColor3 = color or UI.Colors.text })
+		end
+		line("Track mastery", UI.Colors.yellow)
+		for _, def in Tracks.List do
+			local m = data.mastery[def.id]
+			local length = Track.build(def).length
+			local badge = if m then Rewards.badge(m, length) else 0
+			local icon = if badge > 0 then Rewards.BadgeIcons[badge] else "▫️"
+			local best = if m and m.bestLap then UI.time(m.bestLap) else "--"
+			local wins = if m then m.wins else 0
+			line(`{icon} {def.name}   best lap {best}   wins {wins}   gold lap {UI.time(Rewards.goldLap(length))}`)
+		end
+		line(" ")
+		line("Challenges", UI.Colors.yellow)
+		for _, c in Rewards.Challenges do
+			local done = data.challenges[c.id]
+			line(`{if done then "✅" else "⬜"} {c.name}   (+{c.reward} 🪙)`, if done then UI.Colors.muted else nil)
+		end
+		local tokens = 0
+		for _ in data.tokens do
+			tokens += 1
+		end
+		line(" ")
+		line(`Golden tokens found: {tokens}   Races: {data.stats.races}   Wins: {data.stats.wins}`)
+	elseif tab == "settings" then
+		UI.list(content, false, 10)
+		local options = {
+			{ key = "autoAccelerate", name = "Auto-accelerate (great on phones)" },
+			{ key = "reducedEffects", name = "Fewer effects (faster on older devices)" },
+			{ key = "cameraFar", name = "Camera further back" },
+		}
+		for i, o in options do
+			local on = data.settings[o.key]
+			UI.button(content, `{if on then "✅" else "⬜"}  {o.name}`, if on then UI.Colors.green else UI.Colors.panelLight, { LayoutOrder = i, Size = UDim2.new(1, -10, 0, 52) }, function()
+				act("setting", o.key, not on)
+			end)
+		end
 	end
 end
-GarageUI.refresh()
+
+function GarageUI.setData(newData: any, saving: boolean?)
+	data = newData
+	canSave = saving ~= false
+	if panel.Visible then
+		GarageUI.render()
+		rebuildPreview()
+	end
+end
 
 function GarageUI.open()
 	panel.Visible = true
 	UI.pop(panel)
+	GarageUI.render()
+	rebuildPreview()
 end
 
 function GarageUI.close()
@@ -6322,7 +7566,7 @@ return GarageUI
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="35">
+        <Item class="ModuleScript" referent="39">
           <Properties>
             <string name="Name">Hud</string>
             <string name="Source"><![CDATA[-- In-race screens: place, lap, item slot with roulette, standings, countdown,
@@ -6479,13 +7723,13 @@ end
 ---------------------------------------------------------------------------
 -- Results
 ---------------------------------------------------------------------------
-local results = UI.panel(UI.Screen, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 480, 0, 430), Visible = false })
+local results = UI.panel(UI.Screen, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 520, 0, 580), Visible = false })
 local resultsTitle = UI.label(results, { Position = UDim2.new(0, 20, 0, 12), Size = UDim2.new(1, -40, 0, 40), TextColor3 = UI.Colors.yellow, Text = "" })
 local resultsBody = UI.label(results, {
 	Position = UDim2.new(0, 24, 0, 62),
 	Size = UDim2.new(1, -48, 1, -130),
 	TextScaled = false,
-	TextSize = 19,
+	TextSize = 17,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	TextYAlignment = Enum.TextYAlignment.Top,
 	RichText = true,
@@ -6510,7 +7754,7 @@ function Hud.showResults(info: any)
 	resultsBody.Text = table.concat(lines, "\n")
 	results.Visible = true
 	UI.pop(results)
-	task.delay(10, function()
+	task.delay(14, function()
 		results.Visible = false
 	end)
 end
@@ -6550,7 +7794,7 @@ return Hud
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="36">
+        <Item class="ModuleScript" referent="40">
           <Properties>
             <string name="Name">KartController</string>
             <string name="Source"><![CDATA[-- Drives your kart: reads input, runs KartPhysics on this client (you own the
@@ -6585,6 +7829,9 @@ local KartVisuals = require(script.Parent.KartVisuals)
 local KartController = {}
 
 local STUCK_SECONDS = 4 -- pressing the gas but not moving this long resets the kart
+
+-- Player settings (from saved data): auto-accelerate and camera distance.
+KartController.settings = { autoAccelerate = false, cameraFar = false }
 
 local player = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
@@ -6795,6 +8042,9 @@ function readInput(): (number, number)
 		throttle = 1
 	elseif brakeHeld then
 		throttle = -1
+	elseif KartController.settings.autoAccelerate and throttle >= 0 then
+		-- Auto-accelerate: always on the gas unless you pull back to brake.
+		throttle = 1
 	end
 	return throttle, steer
 end
@@ -6813,7 +8063,8 @@ local function updateCamera(s: Session, dt: number)
 	local airborne = s.state.air > 0.1
 	s.camY += (root.Position.Y - s.camY) * math.min(1, dt * (if airborne then 2.5 else 8))
 	local base = Vector3.new(root.Position.X, s.camY, root.Position.Z)
-	local target = base + Vector3.new(0, 6.5, 0) - forward * 17
+	local back = if KartController.settings.cameraFar then 23 else 17
+	local target = base + Vector3.new(0, if KartController.settings.cameraFar then 8.5 else 6.5, 0) - forward * back
 	local look = base + forward * 10 + Vector3.new(0, 2, 0)
 	camera.CFrame = camera.CFrame:Lerp(CFrame.lookAt(target, look), math.min(1, dt * 10))
 	local fov = if s.state.boost > 0 then 84 else 70
@@ -6999,7 +8250,7 @@ return KartController
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="37">
+        <Item class="ModuleScript" referent="41">
           <Properties>
             <string name="Name">KartVisuals</string>
             <string name="Source"><![CDATA[-- Makes every nearby kart look alive, on this client only: the body leans into
@@ -7013,6 +8264,9 @@ return KartController
 local Workspace = game:GetService("Workspace")
 
 local KartVisuals = {}
+
+-- "Fewer effects" setting: quieter exhaust and no trails on other karts.
+KartVisuals.reduced = false
 
 type Anim = { spin: number, lastSpeed: number, lastVy: number, squash: number, lean: number, pitch: number, steer: number }
 local anims: { [Model]: Anim } = setmetatable({}, { __mode = "k" }) :: any
@@ -7092,7 +8346,11 @@ local function animate(kart: Model, dt: number, t: number)
 	local exhaust = kart:FindFirstChild("Exhaust")
 	local puff = exhaust and exhaust:FindFirstChild("ExhaustPuff") :: ParticleEmitter?
 	if puff then
-		puff.Rate = if accel > 5 then 22 elseif math.abs(speed) > 5 then 8 else 4
+		puff.Rate = if KartVisuals.reduced then 0 elseif accel > 5 then 22 elseif math.abs(speed) > 5 then 8 else 4
+	end
+	local trail = kart:FindFirstChild("KartTrail", true) :: Trail?
+	if trail then
+		trail.Enabled = not KartVisuals.reduced or isOwn
 	end
 end
 
@@ -7116,7 +8374,7 @@ return KartVisuals
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="38">
+        <Item class="ModuleScript" referent="42">
           <Properties>
             <string name="Name">LobbyUI</string>
             <string name="Source"><![CDATA[-- Lobby screens: the status bar (phase + countdown, always visible), the
@@ -7152,6 +8410,14 @@ root.Parent = UI.Screen
 local status = UI.panel(root, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 10), Size = UDim2.new(0, 460, 0, 70) })
 local statusTitle = UI.label(status, { Position = UDim2.new(0, 14, 0, 4), Size = UDim2.new(1, -28, 0, 36), Text = "KART CARNIVAL", TextColor3 = UI.Colors.yellow })
 local statusSub = UI.label(status, { Position = UDim2.new(0, 14, 0, 40), Size = UDim2.new(1, -28, 0, 24), Text = "", TextColor3 = UI.Colors.muted })
+
+-- Coins (top left) -----------------------------------------------------------
+local coinPanel = UI.panel(root, { Position = UDim2.new(0, 14, 0, 14), Size = UDim2.new(0, 150, 0, 50) })
+local coinLabel = UI.label(coinPanel, { Position = UDim2.new(0, 10, 0, 6), Size = UDim2.new(1, -20, 1, -12), Text = "🪙 0" })
+
+function LobbyUI.setCoins(coins: number)
+	coinLabel.Text = `🪙 {coins}`
+end
 
 -- Bottom buttons -------------------------------------------------------------
 local isReady = false
@@ -7403,7 +8669,7 @@ return LobbyUI
 ]]></string>
           </Properties>
         </Item>
-        <Item class="LocalScript" referent="39">
+        <Item class="LocalScript" referent="43">
           <Properties>
             <string name="Name">Main</string>
             <string name="Source"><![CDATA[-- Client entry point: wires remotes to the lobby screens, garage, race HUD,
@@ -7475,12 +8741,73 @@ end
 LobbyUI.onSpectateNext = Spectate.cycle
 LobbyUI.onStopSpectating = stopSpectating
 
-GarageUI.onChooseKart = function(kartId)
-	Remotes.ChooseKart:FireServer(kartId)
+GarageUI.onAction = function(action, kind, value)
+	Remotes.GarageAction:FireServer(action, kind, value)
 end
-GarageUI.onLook = function(look)
-	Remotes.ChooseLook:FireServer(look)
-end
+
+-- Your saved data: garage, settings, and which golden tokens you've found.
+local Cosmetics = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Cosmetics"))
+Remotes.Profile.OnClientEvent:Connect(function(data, canSave)
+	GarageUI.setData(data, canSave)
+	KartController.settings.autoAccelerate = data.settings.autoAccelerate
+	KartController.settings.cameraFar = data.settings.cameraFar
+	KartVisuals.reduced = data.settings.reducedEffects
+	LobbyUI.setCoins(data.coins)
+	local lobby = Workspace:FindFirstChild("Lobby")
+	local tokens = lobby and lobby:FindFirstChild("Tokens")
+	if tokens then
+		for _, token in tokens:GetChildren() do
+			local id = tostring(token:GetAttribute("TokenId"))
+			if data.tokens[id] and token:IsA("BasePart") then
+				token.LocalTransparencyModifier = 1
+			end
+		end
+	end
+end)
+
+-- Horns: a bubble over whoever honked (and their sound, if one is set).
+local Players = game:GetService("Players")
+Remotes.Honk.OnClientEvent:Connect(function(_name, hornId, userId)
+	local horn = Cosmetics.find("horn", hornId)
+	local who = Players:GetPlayerByUserId(userId)
+	local character = who and who.Character
+	local head = character and character:FindFirstChild("Head")
+	if not head or not horn then
+		return
+	end
+	local bubble = Instance.new("BillboardGui")
+	bubble.Size = UDim2.new(0, 160, 0, 50)
+	bubble.StudsOffset = Vector3.new(0, 4, 0)
+	bubble.AlwaysOnTop = true
+	bubble.MaxDistance = 150
+	bubble.Parent = head
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.FredokaOne
+	label.TextScaled = true
+	label.TextColor3 = Color3.fromRGB(255, 220, 60)
+	label.TextStrokeTransparency = 0
+	label.Text = `{horn.icon} {horn.text}`
+	label.Parent = bubble
+	if horn.soundId ~= "" then
+		local sound = Instance.new("Sound")
+		sound.SoundId = horn.soundId
+		sound.Parent = head
+		sound:Play()
+		task.delay(3, function()
+			sound:Destroy()
+		end)
+	end
+	task.delay(1.6, function()
+		bubble:Destroy()
+	end)
+end)
+UserInputService.InputBegan:Connect(function(input, processed)
+	if not processed and (input.KeyCode == Enum.KeyCode.H or input.KeyCode == Enum.KeyCode.DPadUp) then
+		Remotes.HonkRequest:FireServer()
+	end
+end)
 
 Remotes.Round.OnClientEvent:Connect(function(state)
 	roundState = state
@@ -7531,6 +8858,22 @@ Remotes.RaceState.OnClientEvent:Connect(function(s)
 end)
 Remotes.ItemState.OnClientEvent:Connect(Hud.setItem)
 Remotes.Results.OnClientEvent:Connect(function(info)
+	-- Awards for everyone, plus your own coins, badges and challenges.
+	local extra = {}
+	if info.awards and #info.awards > 0 then
+		table.insert(extra, "")
+		for _, a in info.awards do
+			table.insert(extra, `{a.icon} {a.name}: {a.winner}`)
+		end
+	end
+	if info.me then
+		table.insert(extra, "")
+		for _, line in info.me.lines do
+			table.insert(extra, line)
+		end
+		table.insert(extra, `<b>Total: +{info.me.coins} 🪙</b>`)
+	end
+	info.extra = extra
 	stopSpectating()
 	Hud.setDriving(false)
 	Hud.showResults(info)
@@ -7605,7 +8948,7 @@ end)
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="40">
+        <Item class="ModuleScript" referent="44">
           <Properties>
             <string name="Name">Spectate</string>
             <string name="Source"><![CDATA[-- Spectator camera: follows a racer's kart from behind. Used by lobby players
@@ -7707,7 +9050,7 @@ return Spectate
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="41">
+        <Item class="ModuleScript" referent="45">
           <Properties>
             <string name="Name">TrackAnimator</string>
             <string name="Source"><![CDATA[-- Animates the current track on this client: crossers (toy robot, toy train,
@@ -7822,7 +9165,7 @@ return TrackAnimator
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="42">
+        <Item class="ModuleScript" referent="46">
           <Properties>
             <string name="Name">UI</string>
             <string name="Source"><![CDATA[-- Shared look for every screen: rounded panels, chunky buttons sized for
@@ -8009,7 +9352,7 @@ return UI
       </Item>
     </Item>
   </Item>
-  <Item class="Workspace" referent="43">
+  <Item class="Workspace" referent="47">
     <Properties>
       <string name="Name">Workspace</string>
       <float name="Gravity">150</float>

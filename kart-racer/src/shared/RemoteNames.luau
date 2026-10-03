@@ -12,11 +12,13 @@ return {
 	Results = "Results", -- (info) placements and rewards
 	Notify = "Notify", -- (text)
 	OpenGarage = "OpenGarage", -- () the garage prompt was used
+	Profile = "Profile", -- (data, canSave) your coins, unlocks, equipped kart, settings, records
+	Honk = "Honk", -- (kartName, text) someone honked
 	Spectate = "Spectate", -- () start watching the current race
 
 	-- client -> server
-	ChooseKart = "ChooseKart", -- (kartId)
-	ChooseLook = "ChooseLook", -- ({ body, main, accent }) body design and paint
+	GarageAction = "GarageAction", -- (action, kind, value) buy / equip / text / setting
+	HonkRequest = "HonkRequest", -- () press H to honk your horn
 	Ready = "Ready", -- (isReady)
 	Vote = "Vote", -- (trackId) same as standing on a vote pad
 	UseItem = "UseItem", -- (aimBack) aimBack = throw/drop behind you

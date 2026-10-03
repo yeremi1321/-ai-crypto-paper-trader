@@ -12,13 +12,18 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage.Shared
+local Cosmetics = require(Shared.Cosmetics)
 local KartBodies = require(Shared.KartBodies)
 local Karts = require(Shared.Karts)
+local PlayerData = require(Shared.PlayerData)
+local Rewards = require(Shared.Rewards)
+local Track = require(Shared.Track)
 local LobbyLayout = require(Shared.LobbyLayout)
 local RaceRules = require(Shared.RaceRules)
 local Tracks = require(Shared.Tracks)
 local Voting = require(Shared.Voting)
 
+local DataService = require(script.Parent.DataService)
 local LobbyBuilder = require(script.Parent.LobbyBuilder)
 local Net = require(script.Parent.Net)
 local PracticeService = require(script.Parent.PracticeService)
@@ -30,7 +35,7 @@ local READY_WAIT = 10 -- seconds after the first ready-up before voting opens
 local RESULTS_TIME = 10
 local TICK = 0.25
 
-type Choice = { kart: string, look: KartBodies.Look, ready: boolean }
+type Choice = { ready: boolean }
 
 local phase: "lobby" | "voting" | "racing" | "results" = "lobby"
 local deadline: number? = nil
@@ -42,7 +47,6 @@ local lastTrack: string? = nil
 local lastResults: { any } = {}
 local winner: string? = nil
 local handles: LobbyBuilder.Handles
-local foundTokens: { [Player]: { [number]: boolean } } = {}
 local dirty = true
 
 local function now(): number
@@ -52,10 +56,19 @@ end
 local function choiceOf(player: Player): Choice
 	local c = choices[player]
 	if not c then
-		c = { kart = Karts.Default, look = KartBodies.sanitize(nil), ready = false }
+		c = { ready = false }
 		choices[player] = c
 	end
 	return c
+end
+
+-- The player's equipped kart class and look (from their saved data).
+local function kartOf(player: Player): (string, any)
+	local data = DataService.get(player)
+	if not data then
+		return Karts.Default, KartBodies.sanitize(nil)
+	end
+	return data.equipped.kart, PlayerData.look(data)
 end
 
 local function rootOf(player: Player): BasePart?
@@ -171,11 +184,12 @@ end
 
 local function refreshDisplays()
 	local slot = 0
-	for player, c in choices do
+	for player in choices do
 		if player.Parent then
 			slot += 1
 			if slot <= #LobbyLayout.KartDisplays then
-				handles.setKartDisplay(slot, player.DisplayName, c.kart, c.look)
+				local kartId, look = kartOf(player)
+				handles.setKartDisplay(slot, player.DisplayName, kartId, look)
 			end
 		end
 	end
@@ -227,7 +241,9 @@ local function onRaceEnded(rows: { any }, trackId: string)
 	handles.setPodium(lastResults)
 
 	local def = Tracks.get(trackId)
+	local trackLength = Track.build(def).length
 	local out = {}
+	local statRows = {}
 	for _, row in rows do
 		table.insert(out, {
 			place = row.place,
@@ -236,19 +252,82 @@ local function onRaceEnded(rows: { any }, trackId: string)
 			userId = row.userId,
 			time = row.time,
 			finished = row.finished,
+			bestLap = row.bestLap,
+		})
+		table.insert(statRows, {
+			id = row.id,
+			name = row.name,
+			place = row.place,
+			finished = row.finished,
+			time = row.time,
+			bestLap = row.bestLap,
+			worstPlace = row.worstPlace,
+			hitsTaken = row.hitsTaken,
+			shortcutsTaken = row.shortcutsTaken,
+			jumps = row.jumps,
+			isCpu = row.isCpu,
 		})
 	end
-	Net.Results:FireAllClients({ trackName = def.name, rows = out })
+
+	-- Awards for everyone to see; coins only go to players.
+	local awards = Rewards.awards(statRows)
+	local awardLines = {}
+	local nameOf = {}
+	for _, r in statRows do
+		nameOf[r.id] = r.name
+	end
+	for _, a in awards do
+		table.insert(awardLines, { icon = a.icon, name = a.name, winner = nameOf[a.winner] })
+	end
+
+	for i, row in rows do
+		local player = row.userId and Players:GetPlayerByUserId(row.userId)
+		if player then
+			local data = DataService.get(player)
+			local mine = nil
+			if data then
+				local myAwards = {}
+				for _, a in awards do
+					if a.winner == row.id then
+						table.insert(myAwards, a.id)
+					end
+				end
+				mine = PlayerData.applyRace(data, trackId, trackLength, #Tracks.VotePool, statRows[i], myAwards)
+				DataService.markDirty(player)
+				DataService.push(player)
+			end
+			Net.Results:FireClient(player, { trackName = def.name, rows = out, awards = awardLines, me = mine })
+		end
+	end
+	-- Everyone else in the lobby sees the results too (no personal rewards).
+	for _, player in Players:GetPlayers() do
+		local raced = false
+		for _, row in rows do
+			if row.userId == player.UserId then
+				raced = true
+			end
+		end
+		if not raced then
+			Net.Results:FireClient(player, { trackName = def.name, rows = out, awards = awardLines })
+		end
+	end
 
 	-- Racers go back to the lobby; they ready up again for the next race.
+	-- The top three players stand on the podium and celebrate.
 	for _, row in rows do
 		if row.userId then
 			local player = Players:GetPlayerByUserId(row.userId)
 			if player then
 				choiceOf(player).ready = false
 				task.defer(function()
-					if player.Parent then
-						player:LoadCharacter()
+					if not player.Parent then
+						return
+					end
+					player:LoadCharacter()
+					if row.place <= 3 then
+						local character = player.Character or player.CharacterAdded:Wait()
+						task.wait(0.3)
+						handles.celebrate(row.place, character)
 					end
 				end)
 			end
@@ -264,15 +343,15 @@ local function startRace()
 	local entrants = {}
 	for player in voters do
 		if player.Parent then
-			local c = choiceOf(player)
+			local kartId, look = kartOf(player)
 			PracticeService.stop(player)
 			table.insert(entrants, {
 				id = `u{player.UserId}`,
 				name = player.DisplayName,
 				isCpu = false,
 				player = player,
-				kartId = c.kart,
-				look = c.look,
+				kartId = kartId,
+				look = look,
 				profile = { lane = 0, skill = 1 },
 			})
 		end
@@ -365,20 +444,22 @@ local function step()
 		end
 	end
 
-	-- Hidden tokens in the lobby.
+	-- Hidden golden tokens in the lobby (saved, paid once each).
 	for _, player in Players:GetPlayers() do
 		local root = rootOf(player)
-		if root then
+		local data = DataService.get(player)
+		if root and data then
 			for _, token in handles.collectibles do
-				local id = token:GetAttribute("TokenId")
-				local found = foundTokens[player]
-				if found and not found[id] and (token.Position - root.Position).Magnitude < 7 then
-					found[id] = true
+				local id = tostring(token:GetAttribute("TokenId"))
+				if not data.tokens[id] and (token.Position - root.Position).Magnitude < 7 then
+					local coins, all = PlayerData.foundToken(data, id, #handles.collectibles)
 					local count = 0
-					for _ in found do
+					for _ in data.tokens do
 						count += 1
 					end
-					Net.Notify:FireClient(player, `Golden token found! {count}/{#handles.collectibles}`)
+					Net.Notify:FireClient(player, `Golden token! +{coins} 🪙 ({count}/{#handles.collectibles})` .. (if all then " All found!" else ""))
+					DataService.markDirty(player)
+					DataService.push(player)
 				end
 			end
 		end
@@ -415,9 +496,11 @@ function RoundService.start()
 
 	local function onPlayer(player: Player)
 		choiceOf(player)
-		foundTokens[player] = {}
 		dirty = true
-		refreshDisplays()
+		task.spawn(function()
+			DataService.waitFor(player)
+			refreshDisplays()
+		end)
 	end
 	Players.PlayerAdded:Connect(onPlayer)
 	for _, player in Players:GetPlayers() do
@@ -427,7 +510,6 @@ function RoundService.start()
 		choices[player] = nil
 		voters[player] = nil
 		votes[player.UserId] = nil
-		foundTokens[player] = nil
 		dirty = true
 		task.defer(refreshDisplays)
 	end)
@@ -444,19 +526,58 @@ function RoundService.start()
 			dirty = true
 		end
 	end)
-	Net.ChooseKart.OnServerEvent:Connect(function(player, kartId)
-		if not RaceService.isRacing(player) then
-			choiceOf(player).kart = Karts.get(tostring(kartId)).id
-			refreshDisplays()
-			dirty = true
+	-- Garage: everything is checked here; the client only asks.
+	local textCooldown: { [Player]: number } = {}
+	Net.GarageAction.OnServerEvent:Connect(function(player, action, kind, value)
+		local data = DataService.get(player)
+		if not data or type(action) ~= "string" or type(kind) ~= "string" then
+			return
 		end
+		local ok, err = false, nil
+		if action == "buy" then
+			ok, err = PlayerData.buy(data, kind, tostring(value))
+			if ok then
+				ok, err = PlayerData.equip(data, kind, tostring(value))
+			end
+		elseif action == "equip" then
+			if RaceService.isRacing(player) then
+				return
+			end
+			ok, err = PlayerData.equip(data, kind, value)
+		elseif action == "text" and (kind == "plate" or kind == "name") then
+			if os.clock() - (textCooldown[player] or 0) < 2 then
+				return
+			end
+			textCooldown[player] = os.clock()
+			local maxLength = if kind == "plate" then Cosmetics.PlateMaxLength else Cosmetics.NameMaxLength
+			local clean = Cosmetics.cleanText(value, maxLength)
+			data.equipped[kind] = DataService.filter(player, clean)
+			ok = true
+		elseif action == "setting" then
+			ok = PlayerData.setSetting(data, kind, value == true)
+		end
+		if ok then
+			DataService.markDirty(player)
+			refreshDisplays()
+		elseif err then
+			Net.Notify:FireClient(player, err)
+		end
+		DataService.push(player)
 	end)
-	Net.ChooseLook.OnServerEvent:Connect(function(player, look)
-		if not RaceService.isRacing(player) then
-			choiceOf(player).look = KartBodies.sanitize(look)
-			refreshDisplays()
-			dirty = true
+	Players.PlayerRemoving:Connect(function(player)
+		textCooldown[player] = nil
+	end)
+
+	-- Horns: anyone can honk; everyone nearby sees (and hears) it.
+	local honkCooldown: { [Player]: number } = {}
+	Net.HonkRequest.OnServerEvent:Connect(function(player)
+		if os.clock() - (honkCooldown[player] or 0) < 1.5 then
+			return
 		end
+		honkCooldown[player] = os.clock()
+		local data = DataService.get(player)
+		local horn = Cosmetics.find("horn", data and data.equipped.horn or "beep")
+		Net.Honk:FireAllClients(player.DisplayName, horn and horn.id or "beep", player.UserId)
 	end)
 	Net.UseItem.OnServerEvent:Connect(function(player, aimBack)
 		RaceService.useItem(player, aimBack == true)
@@ -477,8 +598,8 @@ function RoundService.start()
 		if RaceService.isRacing(player) then
 			return
 		end
-		local c = choiceOf(player)
-		PracticeService.start(player, c.kart, c.look)
+		local kartId, look = kartOf(player)
+		PracticeService.start(player, kartId, look)
 	end)
 
 	task.spawn(function()

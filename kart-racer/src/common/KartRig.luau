@@ -20,6 +20,7 @@ end
 
 local Shared = child(ReplicatedStorage, "Shared")
 local KartPhysics = require(child(Shared, "KartPhysics"))
+local Cosmetics = require(child(Shared, "Cosmetics"))
 local KartBodies = require(child(Shared, "KartBodies"))
 local Karts = require(child(Shared, "Karts"))
 
@@ -181,21 +182,26 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 
 	-- Wheels sit on the road: the body's center rides BODY_DROP below the ball's center.
 	local groundToBody = KartRig.BallRadius - BODY_DROP
-	local wheelY = body.wheelRadius - groundToBody
+	-- Wheel style (cosmetic): scales the body's own wheels.
+	local wheelStyle = Cosmetics.find("wheels", (chosen :: any).wheels) or Cosmetics.Wheels[1]
+	local wheelRadius = body.wheelRadius * wheelStyle.radius
+	local wheelWidth = body.wheelWidth * wheelStyle.width
+	local tyreColor = Color3.fromRGB(wheelStyle.color[1], wheelStyle.color[2], wheelStyle.color[3])
+	local wheelY = wheelRadius - groundToBody
 	local rearZ = -math.huge
 	for _, w in body.wheels do
 		rearZ = math.max(rearZ, w[2])
 	end
 	for i, w in body.wheels do
 		local name = if w[2] >= rearZ then (if w[1] < 0 then "WheelRL" else "WheelRR") else `Wheel{i}`
-		local d = body.wheelRadius * 2
+		local d = wheelRadius * 2
 		local wheelCf = drop * CFrame.new(w[1], wheelY, w[2])
 		local wheel = Instance.new("Part")
 		wheel.Name = name
 		wheel.Shape = Enum.PartType.Cylinder
-		wheel.Size = Vector3.new(body.wheelWidth, d, d)
+		wheel.Size = Vector3.new(wheelWidth, d, d)
 		wheel.CFrame = root.CFrame * wheelCf
-		wheel.Color = Color3.fromRGB(26, 26, 30)
+		wheel.Color = tyreColor
 		wheel.Material = Enum.Material.SmoothPlastic
 		wheel.CanCollide = false
 		wheel.CanQuery = false
@@ -205,9 +211,9 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 		-- Wheels turn on their own joint: front ones steer, all of them spin.
 		local joint = motor("WheelJoint", root, wheel, wheelCf)
 		joint:SetAttribute("Front", w[2] < rearZ)
-		visual(model, root, `{name}Hub`, Vector3.new(body.wheelWidth + 0.06, d * 0.55, d * 0.55), wheelCf, accent, Enum.Material.SmoothPlastic, "Cylinder", wheel)
+		visual(model, root, `{name}Hub`, Vector3.new(wheelWidth + 0.06, d * 0.55, d * 0.55), wheelCf, accent, if wheelStyle.glow then Enum.Material.Neon else Enum.Material.SmoothPlastic, "Cylinder", wheel)
 		-- A spoke so you can see the wheel turning.
-		visual(model, root, `{name}Spoke`, Vector3.new(body.wheelWidth + 0.08, d * 0.5, d * 0.14), wheelCf, Color3.fromRGB(240, 240, 245), Enum.Material.SmoothPlastic, nil, wheel)
+		visual(model, root, `{name}Spoke`, Vector3.new(wheelWidth + 0.08, d * 0.5, d * 0.14), wheelCf, Color3.fromRGB(240, 240, 245), Enum.Material.SmoothPlastic, nil, wheel)
 		if w[2] >= rearZ then
 			local sparks = Instance.new("ParticleEmitter")
 			sparks.Name = "DriftSparks"
@@ -222,6 +228,78 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 			sparks.Enabled = false
 			sparks.Parent = wheel
 		end
+	end
+
+	-- Stickers on both sides.
+	local sticker = Cosmetics.find("sticker", (chosen :: any).sticker)
+	if sticker and sticker.id ~= "none" then
+		for _, side in { -1, 1 } do
+			local panel = visual(model, root, "Sticker", Vector3.new(0.05, 1.8, 1.8), drop * CFrame.new(side * 2.45, 0.9, 0.2), Color3.new(1, 1, 1), nil, nil, bodyRoot)
+			panel.Transparency = 1
+			local gui = Instance.new("SurfaceGui")
+			gui.Face = if side < 0 then Enum.NormalId.Left else Enum.NormalId.Right
+			gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+			gui.PixelsPerStud = 40
+			gui.LightInfluence = 0.5
+			gui.Parent = panel
+			local label = Instance.new("TextLabel")
+			label.Size = UDim2.fromScale(1, 1)
+			label.BackgroundTransparency = 1
+			label.TextScaled = true
+			label.Text = sticker.icon
+			label.Parent = gui
+		end
+	end
+
+	-- Licence plate on the back.
+	local plateText = (chosen :: any).plate
+	if type(plateText) == "string" and plateText ~= "" then
+		local plate = visual(model, root, "Plate", Vector3.new(1.8, 0.6, 0.08), drop * CFrame.new(0, 0.2, 3.65), Color3.fromRGB(250, 250, 240), nil, nil, bodyRoot)
+		local gui = Instance.new("SurfaceGui")
+		gui.Face = Enum.NormalId.Back
+		gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+		gui.PixelsPerStud = 60
+		gui.Parent = plate
+		local label = Instance.new("TextLabel")
+		label.Size = UDim2.fromScale(1, 1)
+		label.BackgroundTransparency = 1
+		label.Font = Enum.Font.FredokaOne
+		label.TextScaled = true
+		label.TextColor3 = Color3.fromRGB(40, 40, 60)
+		label.Text = plateText
+		label.Parent = gui
+	end
+
+	-- Trail streaming from the back.
+	local trailStyle = Cosmetics.find("trail", (chosen :: any).trail)
+	if trailStyle and #trailStyle.colors > 0 then
+		local a0 = Instance.new("Attachment")
+		a0.Name = "TrailTop"
+		a0.Position = Vector3.new(0, 0.9, 3.4)
+		a0.Parent = bodyRoot
+		local a1 = Instance.new("Attachment")
+		a1.Name = "TrailBottom"
+		a1.Position = Vector3.new(0, -0.3, 3.4)
+		a1.Parent = bodyRoot
+		local keys = {}
+		for i, c in trailStyle.colors do
+			local t = if #trailStyle.colors == 1 then 0 else (i - 1) / (#trailStyle.colors - 1)
+			table.insert(keys, ColorSequenceKeypoint.new(t, Color3.fromRGB(c[1], c[2], c[3])))
+		end
+		if #keys == 1 then
+			table.insert(keys, ColorSequenceKeypoint.new(1, keys[1].Value))
+		end
+		local trail = Instance.new("Trail")
+		trail.Name = "KartTrail"
+		trail.Attachment0 = a0
+		trail.Attachment1 = a1
+		trail.Color = ColorSequence.new(keys)
+		trail.Transparency = NumberSequence.new(0.2, 1)
+		trail.Lifetime = 0.45
+		trail.MinLength = 0.2
+		trail.LightEmission = if trailStyle.id == "smoke" then 0 else 0.6
+		trail.FaceCamera = true
+		trail.Parent = bodyRoot
 	end
 
 	local seatPos = body.seat
@@ -254,7 +332,7 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 
 	model:SetAttribute("KartId", def.id)
 	model:SetAttribute("Body", body.id)
-	model:SetAttribute("WheelRadius", body.wheelRadius)
+	model:SetAttribute("WheelRadius", wheelRadius)
 	model.Parent = parent
 	return model
 end

@@ -32,6 +32,14 @@ local status = UI.panel(root, { AnchorPoint = Vector2.new(0.5, 0), Position = UD
 local statusTitle = UI.label(status, { Position = UDim2.new(0, 14, 0, 4), Size = UDim2.new(1, -28, 0, 36), Text = "KART CARNIVAL", TextColor3 = UI.Colors.yellow })
 local statusSub = UI.label(status, { Position = UDim2.new(0, 14, 0, 40), Size = UDim2.new(1, -28, 0, 24), Text = "", TextColor3 = UI.Colors.muted })
 
+-- Coins (top left) -----------------------------------------------------------
+local coinPanel = UI.panel(root, { Position = UDim2.new(0, 14, 0, 14), Size = UDim2.new(0, 150, 0, 50) })
+local coinLabel = UI.label(coinPanel, { Position = UDim2.new(0, 10, 0, 6), Size = UDim2.new(1, -20, 1, -12), Text = "🪙 0" })
+
+function LobbyUI.setCoins(coins: number)
+	coinLabel.Text = `🪙 {coins}`
+end
+
 -- Bottom buttons -------------------------------------------------------------
 local isReady = false
 local readyButton = UI.button(root, "READY UP", UI.Colors.green, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -18), Size = UDim2.new(0, 260, 0, 66) }, function()

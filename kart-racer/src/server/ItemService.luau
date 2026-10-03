@@ -147,6 +147,9 @@ function ItemService.explode(pos: Vector3, word: string?, color: Color3?)
 	label.Parent = tag
 	sound(flash, "pop")
 	task.delay(0.25, function()
+		if not flash.Parent then
+			return
+		end
 		sparks.Enabled = false
 		smoke.Enabled = false
 		flash.Transparency = 1

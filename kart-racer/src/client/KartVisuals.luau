@@ -10,6 +10,9 @@ local Workspace = game:GetService("Workspace")
 
 local KartVisuals = {}
 
+-- "Fewer effects" setting: quieter exhaust and no trails on other karts.
+KartVisuals.reduced = false
+
 type Anim = { spin: number, lastSpeed: number, lastVy: number, squash: number, lean: number, pitch: number, steer: number }
 local anims: { [Model]: Anim } = setmetatable({}, { __mode = "k" }) :: any
 
@@ -88,7 +91,11 @@ local function animate(kart: Model, dt: number, t: number)
 	local exhaust = kart:FindFirstChild("Exhaust")
 	local puff = exhaust and exhaust:FindFirstChild("ExhaustPuff") :: ParticleEmitter?
 	if puff then
-		puff.Rate = if accel > 5 then 22 elseif math.abs(speed) > 5 then 8 else 4
+		puff.Rate = if KartVisuals.reduced then 0 elseif accel > 5 then 22 elseif math.abs(speed) > 5 then 8 else 4
+	end
+	local trail = kart:FindFirstChild("KartTrail", true) :: Trail?
+	if trail then
+		trail.Enabled = not KartVisuals.reduced or isOwn
 	end
 end
 

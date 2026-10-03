@@ -71,6 +71,8 @@ load = function(module: any)
 		CFrame = roblox.CFrame,
 		Color3 = roblox.Color3,
 		ColorSequence = roblox.ColorSequence,
+		ColorSequenceKeypoint = roblox.ColorSequenceKeypoint,
+		NumberSequenceKeypoint = roblox.NumberSequenceKeypoint,
 		NumberSequence = roblox.NumberSequence,
 		NumberRange = roblox.NumberRange,
 		UDim = roblox.UDim,
@@ -122,7 +124,16 @@ check("KartRig builds every kart class and body design", function()
 	local KartRig = load(common.KartRig)
 	for i, body in KartBodies.List do
 		local def = Karts.List[(i - 1) % #Karts.List + 1]
-		local look = { body = body.id, main = i, accent = 13 - i }
+		local Cosmetics = load(shared.Cosmetics)
+		local look = {
+			body = body.id,
+			main = i,
+			accent = 13 - i,
+			wheels = Cosmetics.Wheels[(i - 1) % #Cosmetics.Wheels + 1].id,
+			sticker = Cosmetics.Stickers[(i - 1) % #Cosmetics.Stickers + 1].id,
+			trail = Cosmetics.Trails[(i - 1) % #Cosmetics.Trails + 1].id,
+			plate = "ZOOM",
+		}
 		local kart = KartRig.build(def.id, "Tester", roblox.CFrame.new(0, 0, 0), game:GetService("Workspace"), look)
 		assert(kart:GetAttribute("Body") == body.id, "body attribute")
 		assert(kart:FindFirstChild("WheelRL") and kart:FindFirstChild("WheelRR"), `{body.id}: rear wheels`)

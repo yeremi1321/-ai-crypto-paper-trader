@@ -67,12 +67,73 @@ end
 LobbyUI.onSpectateNext = Spectate.cycle
 LobbyUI.onStopSpectating = stopSpectating
 
-GarageUI.onChooseKart = function(kartId)
-	Remotes.ChooseKart:FireServer(kartId)
+GarageUI.onAction = function(action, kind, value)
+	Remotes.GarageAction:FireServer(action, kind, value)
 end
-GarageUI.onLook = function(look)
-	Remotes.ChooseLook:FireServer(look)
-end
+
+-- Your saved data: garage, settings, and which golden tokens you've found.
+local Cosmetics = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Cosmetics"))
+Remotes.Profile.OnClientEvent:Connect(function(data, canSave)
+	GarageUI.setData(data, canSave)
+	KartController.settings.autoAccelerate = data.settings.autoAccelerate
+	KartController.settings.cameraFar = data.settings.cameraFar
+	KartVisuals.reduced = data.settings.reducedEffects
+	LobbyUI.setCoins(data.coins)
+	local lobby = Workspace:FindFirstChild("Lobby")
+	local tokens = lobby and lobby:FindFirstChild("Tokens")
+	if tokens then
+		for _, token in tokens:GetChildren() do
+			local id = tostring(token:GetAttribute("TokenId"))
+			if data.tokens[id] and token:IsA("BasePart") then
+				token.LocalTransparencyModifier = 1
+			end
+		end
+	end
+end)
+
+-- Horns: a bubble over whoever honked (and their sound, if one is set).
+local Players = game:GetService("Players")
+Remotes.Honk.OnClientEvent:Connect(function(_name, hornId, userId)
+	local horn = Cosmetics.find("horn", hornId)
+	local who = Players:GetPlayerByUserId(userId)
+	local character = who and who.Character
+	local head = character and character:FindFirstChild("Head")
+	if not head or not horn then
+		return
+	end
+	local bubble = Instance.new("BillboardGui")
+	bubble.Size = UDim2.new(0, 160, 0, 50)
+	bubble.StudsOffset = Vector3.new(0, 4, 0)
+	bubble.AlwaysOnTop = true
+	bubble.MaxDistance = 150
+	bubble.Parent = head
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.FredokaOne
+	label.TextScaled = true
+	label.TextColor3 = Color3.fromRGB(255, 220, 60)
+	label.TextStrokeTransparency = 0
+	label.Text = `{horn.icon} {horn.text}`
+	label.Parent = bubble
+	if horn.soundId ~= "" then
+		local sound = Instance.new("Sound")
+		sound.SoundId = horn.soundId
+		sound.Parent = head
+		sound:Play()
+		task.delay(3, function()
+			sound:Destroy()
+		end)
+	end
+	task.delay(1.6, function()
+		bubble:Destroy()
+	end)
+end)
+UserInputService.InputBegan:Connect(function(input, processed)
+	if not processed and (input.KeyCode == Enum.KeyCode.H or input.KeyCode == Enum.KeyCode.DPadUp) then
+		Remotes.HonkRequest:FireServer()
+	end
+end)
 
 Remotes.Round.OnClientEvent:Connect(function(state)
 	roundState = state
@@ -123,6 +184,22 @@ Remotes.RaceState.OnClientEvent:Connect(function(s)
 end)
 Remotes.ItemState.OnClientEvent:Connect(Hud.setItem)
 Remotes.Results.OnClientEvent:Connect(function(info)
+	-- Awards for everyone, plus your own coins, badges and challenges.
+	local extra = {}
+	if info.awards and #info.awards > 0 then
+		table.insert(extra, "")
+		for _, a in info.awards do
+			table.insert(extra, `{a.icon} {a.name}: {a.winner}`)
+		end
+	end
+	if info.me then
+		table.insert(extra, "")
+		for _, line in info.me.lines do
+			table.insert(extra, line)
+		end
+		table.insert(extra, `<b>Total: +{info.me.coins} 🪙</b>`)
+	end
+	info.extra = extra
 	stopSpectating()
 	Hud.setDriving(false)
 	Hud.showResults(info)

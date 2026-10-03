@@ -64,6 +64,10 @@ export type Racer = {
 	hitsTaken: number,
 	shortcutsTaken: number,
 	onShortcut: boolean,
+	jumps: number,
+	airSince: number?, -- when the kart left the ground (server-measured)
+	lapStart: number?,
+	bestLap: number?,
 	-- Items (managed by ItemService)
 	item: string?,
 	uses: number,
@@ -84,6 +88,8 @@ export type ResultRow = {
 	worstPlace: number,
 	hitsTaken: number,
 	shortcutsTaken: number,
+	jumps: number,
+	bestLap: number?,
 }
 
 type Race = {
@@ -368,6 +374,8 @@ local function finishRace(r: Race)
 			worstPlace = racer.worstPlace,
 			hitsTaken = racer.hitsTaken,
 			shortcutsTaken = racer.shortcutsTaken,
+			jumps = racer.jumps,
+			bestLap = racer.bestLap,
 		})
 	end
 	ItemService.clear()
@@ -434,6 +442,10 @@ function RaceService.startRace(trackId: string, entrants: { Entrant }, onEnded: 
 			hitsTaken = 0,
 			shortcutsTaken = 0,
 			onShortcut = false,
+			jumps = 0,
+			airSince = nil,
+			lapStart = nil,
+			bestLap = nil,
 			item = nil,
 			uses = 0,
 			itemReadyAt = 0,
@@ -630,6 +642,12 @@ local function tickRace(r: Race)
 		if offTrack or root.Position.Y < roadY - FALL_DEPTH then
 			respawn(r, racer)
 		elseif Track.updateProgress(track, racer.progress, proj) then
+			-- Lap times, measured line to line.
+			if racer.lapStart and racer.progress.lap >= 2 then
+				local lapTime = t - racer.lapStart
+				racer.bestLap = math.min(racer.bestLap or math.huge, lapTime)
+			end
+			racer.lapStart = t
 			if racer.progress.lap > track.def.laps and not racer.finishTime then
 				racer.finishTime = t - r.goTime
 				if player then
@@ -647,6 +665,17 @@ local function tickRace(r: Race)
 			end
 		end
 		racer.score = Track.score(track, racer.progress)
+
+		-- Big jumps: well above the road for a while, then back down.
+		local height = root.Position.Y - roadY - KartRig.BallRadius
+		if height > 3 then
+			racer.airSince = racer.airSince or t
+		elseif racer.airSince then
+			if t - racer.airSince > 0.45 then
+				racer.jumps += 1
+			end
+			racer.airSince = nil
+		end
 
 		if player then
 			if not player.Parent then

@@ -152,13 +152,13 @@ end
 ---------------------------------------------------------------------------
 -- Results
 ---------------------------------------------------------------------------
-local results = UI.panel(UI.Screen, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 480, 0, 430), Visible = false })
+local results = UI.panel(UI.Screen, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 520, 0, 580), Visible = false })
 local resultsTitle = UI.label(results, { Position = UDim2.new(0, 20, 0, 12), Size = UDim2.new(1, -40, 0, 40), TextColor3 = UI.Colors.yellow, Text = "" })
 local resultsBody = UI.label(results, {
 	Position = UDim2.new(0, 24, 0, 62),
 	Size = UDim2.new(1, -48, 1, -130),
 	TextScaled = false,
-	TextSize = 19,
+	TextSize = 17,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	TextYAlignment = Enum.TextYAlignment.Top,
 	RichText = true,
@@ -183,7 +183,7 @@ function Hud.showResults(info: any)
 	resultsBody.Text = table.concat(lines, "\n")
 	results.Visible = true
 	UI.pop(results)
-	task.delay(10, function()
+	task.delay(14, function()
 		results.Visible = false
 	end)
 end

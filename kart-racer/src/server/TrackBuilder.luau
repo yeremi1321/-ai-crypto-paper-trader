@@ -11,7 +11,11 @@ local Scenery = require(Shared.Scenery)
 local Track = require(Shared.Track)
 local Tracks = require(Shared.Tracks)
 
+local Landmarks = require(script.Parent.Landmarks)
 local Props = require(script.Parent.Props)
+local Shapes = require(ReplicatedStorage.Common.Shapes)
+
+local BANK_MAX = math.rad(6) -- corners tilt inward a little
 
 local TrackBuilder = {}
 
@@ -86,21 +90,55 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 	local curbColors = { rgb(theme.curb[1]), rgb(theme.curb[2]) }
 	local lineColor = rgb(theme.line)
 
+	-- Banking: smoothed signed turn per segment (positive = turning left).
+	local signedTurn = {}
+	for i = 1, n do
+		local a, b, c = v3(pts[i]), v3(pts[i % n + 1]), v3(pts[(i + 1) % n + 1])
+		signedTurn[i] = ((flatAngle(b, c) - flatAngle(a, b)) + math.pi) % (2 * math.pi) - math.pi
+	end
+	local function bank(i: number): number
+		local sum = 0
+		for k = -3, 3 do
+			sum += signedTurn[(i - 1 + k) % n + 1]
+		end
+		return math.clamp(sum / 7 * 4, -BANK_MAX, BANK_MAX)
+	end
+
+	-- Wall openings where shortcuts leave and rejoin the road.
+	local openings = {}
+	for _, sc in def.shortcuts or {} do
+		table.insert(openings, { side = sc.side, at = sc.from * track.length, half = sc.width / 2 + 6 })
+		table.insert(openings, { side = sc.side, at = sc.to * track.length, half = sc.width / 2 + 6 })
+	end
+	local function wallOpen(side: number, distance: number, segLen: number): boolean
+		for _, o in openings do
+			local d = (distance - o.at + track.length / 2) % track.length - track.length / 2
+			if o.side == side and math.abs(d) < o.half + segLen / 2 then
+				return true
+			end
+		end
+		return false
+	end
+
 	for i = 1, n do
 		local a, b, c = v3(pts[i]), v3(pts[i % n + 1]), v3(pts[(i + 1) % n + 1])
 		local length = (b - a).Magnitude
 		-- Lengthen segments on the outside of bends so the edges have no gaps.
-		local turn = math.abs(((flatAngle(b, c) - flatAngle(a, b)) + math.pi) % (2 * math.pi) - math.pi)
+		local turn = math.abs(signedTurn[i])
 		local extra = 1 + (half + sw + 1) * turn
-		local cf = CFrame.lookAt((a + b) / 2, b)
+		local roll = if walled then bank(i) else 0
+		local cf = CFrame.lookAt((a + b) / 2, b) * CFrame.Angles(0, 0, roll)
 		local segLen = length + extra
+		local segDistance = track.cum[i] + length / 2
 
 		local road = part(folder, "Road", Vector3.new(def.width, 1, segLen), cf * CFrame.new(0, -0.5, 0), roadColor, Enum.Material.SmoothPlastic)
 		road:SetAttribute("Surface", "road")
 		for _, side in (if walled then { -1, 1 } else {}) :: { number } do
 			local shoulder = part(folder, "Shoulder", Vector3.new(sw, 1, segLen), cf * CFrame.new(side * (half + sw / 2), -0.52, 0), shoulderColor, Enum.Material.SmoothPlastic)
 			shoulder:SetAttribute("Surface", "offroad")
-			part(folder, "Wall", Vector3.new(1, 4, segLen), cf * CFrame.new(side * (half + sw + 0.5), 1.5, 0), wallColor, if def.theme == "neon" then Enum.Material.Neon else Enum.Material.SmoothPlastic)
+			if not wallOpen(side, segDistance, segLen) then
+				part(folder, "Wall", Vector3.new(1, 4, segLen), cf * CFrame.new(side * (half + sw + 0.5), 1.5, 0), wallColor, if def.theme == "neon" then Enum.Material.Neon else Enum.Material.SmoothPlastic)
+			end
 		end
 
 		-- Red-and-white curbs through corners, lane lines on the straights.
@@ -185,6 +223,87 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		part(folder, "BannerPost", Vector3.new(1.5, 18, 1.5), lineCf * CFrame.new(side * (half + 4), 9, 0), wallColor, Enum.Material.SmoothPlastic)
 	end
 	part(folder, "Banner", Vector3.new(def.width + 10, 3, 1), lineCf * CFrame.new(0, 17, 0), rgb(theme.accent), Enum.Material.Neon)
+
+	-- Surface patches: syrup, water, conveyor belts, launch pads.
+	local zoneStyle = {
+		sticky = { color = Color3.fromRGB(150, 85, 30), material = Enum.Material.Glass, transparency = 0.1 },
+		slippery = { color = Color3.fromRGB(120, 190, 255), material = Enum.Material.Glass, transparency = 0.35 },
+		conveyor = { color = Color3.fromRGB(70, 72, 82), material = Enum.Material.SmoothPlastic, transparency = 0 },
+		launch = { color = Color3.fromRGB(255, 80, 80), material = Enum.Material.Neon, transparency = 0 },
+	}
+	for zi, zone in def.zones or {} do
+		local style = zoneStyle[zone.kind]
+		if style then
+			local width = zone.width or def.width
+			local offset = (zone.offset or 0) * (half - width / 2)
+			local from = zone.t * track.length - zone.length / 2
+			local steps = math.max(1, math.ceil(zone.length / 10))
+			for k = 0, steps - 1 do
+				local d = from + (k + 0.5) * zone.length / steps
+				local p = v3(Track.spot(track, d, offset))
+				local _, tan = Track.at(track, d)
+				local zcf = CFrame.lookAt(p, p + v3(tan))
+				local patch = part(markings, "Zone", Vector3.new(width, 0.12, zone.length / steps + 0.4), zcf * CFrame.new(0, 0.07, 0), style.color, style.material)
+				patch.Transparency = style.transparency
+				patch.CanCollide = false
+				patch.CanQuery = false
+				patch:SetAttribute("ZoneIndex", zi)
+				if zone.kind == "conveyor" and k % 2 == 0 then
+					local arrow = part(markings, "ConveyorArrow", Vector3.new(width * 0.5, 0.15, 2), zcf * CFrame.new(0, 0.1, 0) * CFrame.Angles(0, math.rad(45), 0), Color3.fromRGB(255, 210, 60), Enum.Material.Neon)
+					arrow.CanCollide = false
+					arrow.CanQuery = false
+				end
+			end
+		end
+	end
+
+	-- Shortcut paths: a narrow road through the gap in the wall.
+	for _, sc in def.shortcuts or {} do
+		local sa, sb = Track.shortcutEnds(track, sc)
+		local pa, pb = v3(sa), v3(sb)
+		local length = (pb - pa).Magnitude + sc.width
+		local scCf = CFrame.lookAt((pa + pb) / 2, pb)
+		local road = part(folder, "ShortcutRoad", Vector3.new(sc.width, 1, length), scCf * CFrame.new(0, -0.5, 0), roadColor:Lerp(rgb(theme.accent), 0.25), Enum.Material.SmoothPlastic)
+		road:SetAttribute("Surface", sc.surface or "road")
+		-- Connect each end to the road edge across the grass shoulder.
+		for _, endpoint in { { at = sc.from, p = pa }, { at = sc.to, p = pb } } do
+			local edge = v3(Track.spot(track, endpoint.at * track.length, sc.side * half))
+			local link = (endpoint.p - edge)
+			part(folder, "ShortcutLink", Vector3.new(sc.width, 1, link.Magnitude + sc.width), CFrame.lookAt((edge + endpoint.p) / 2, endpoint.p) * CFrame.new(0, -0.49, 0), roadColor:Lerp(rgb(theme.accent), 0.25), Enum.Material.SmoothPlastic)
+		end
+		-- Little arrows hint the way in.
+		for _, side in { -1, 1 } do
+			Shapes.box(folder, Vector3.new(0.8, 6, 0.8), scCf * CFrame.new(side * (sc.width / 2 + 1), 3, -length / 2 + 2), { color = rgb(theme.accent), material = Enum.Material.Neon })
+		end
+		if def.theme == "backyard" then
+			-- The shortcut runs through a hollow log.
+			local logLen = math.min(length * 0.5, 60)
+			for z = -logLen / 2, logLen / 2, 4 do
+				Shapes.arch(folder, sc.width + 6, 3, 4.5, scCf * CFrame.new(0, -2, z), { color = Color3.fromRGB(130, 90, 55), collide = true }, 14)
+			end
+		end
+	end
+
+	-- Tunnels, landmarks and moving crossers.
+	local landmarks = Instance.new("Folder")
+	landmarks.Name = "Landmarks"
+	landmarks.Parent = folder
+	for _, tn in def.tunnels or {} do
+		Landmarks.tunnel(track, tn.style, tn.from, tn.to, theme, landmarks)
+	end
+	for _, spot in Scenery.setPieceSpots(track) do
+		Landmarks.setPiece(spot.kind, CFrame.new(spot.x, spot.y, spot.z) * CFrame.Angles(0, spot.yaw, 0), theme, landmarks)
+	end
+	local crossersFolder = Instance.new("Folder")
+	crossersFolder.Name = "Crossers"
+	crossersFolder.Parent = folder
+	for ci, cr in def.crossers or {} do
+		local p = Track.spot(track, cr.t * track.length, -(half + sw))
+		Landmarks.crosser(cr.kind, ci, crossersFolder, CFrame.new(p.x, p.y, p.z))
+	end
+	if theme.room then
+		Landmarks.room(theme, minX, maxX, minZ, maxZ, minY, landmarks)
+	end
 
 	-- Jump ramps. The low edge faces oncoming karts; the tall back edge launches them.
 	for _, ramp in def.ramps or {} do

@@ -178,6 +178,25 @@ local function miniature(parent: Instance, trackId: string, at: CFrame)
 			Shapes.box(folder, Vector3.new(1.6, h, 1.6), at * CFrame.new(x, 1 + h / 2, 0), { color = Color3.fromRGB(30, 26, 50) })
 			Shapes.box(folder, Vector3.new(1.7, 0.3, 1.7), at * CFrame.new(x, 1 + h * 0.7, 0), { color = c(theme.accent), material = Enum.Material.Neon })
 		end
+	elseif def.theme == "toyroom" then
+		-- A wobbly tower of toy blocks and a ball.
+		local colors = { Color3.fromRGB(240, 80, 80), Color3.fromRGB(80, 150, 240), Color3.fromRGB(255, 210, 60) }
+		for i = 0, 2 do
+			Shapes.box(folder, Vector3.new(2.6, 2.6, 2.6), at * CFrame.new(0.3 * i, 2.5 + i * 2.6, 0) * CFrame.Angles(0, i * 0.4, 0), { color = colors[i + 1] })
+		end
+		Shapes.ball(folder, 2.4, at * CFrame.new(3.5, 2.4, 1), { color = Color3.fromRGB(110, 210, 120) })
+	elseif def.theme == "kitchen" then
+		-- A little fridge with its door swung open.
+		Shapes.roundedBox(folder, Vector3.new(4, 8, 3.4), 0.6, at * CFrame.new(0, 5, 0), { color = Color3.fromRGB(240, 245, 250) })
+		Shapes.box(folder, Vector3.new(3.4, 7.4, 0.2), at * CFrame.new(0, 5, -1.75), { color = Color3.fromRGB(180, 230, 255), material = Enum.Material.Neon })
+		Shapes.box(folder, Vector3.new(0.3, 7.6, 3.4), at * CFrame.new(-3.7, 5, -2.6) * CFrame.Angles(0, math.rad(70), 0), { color = Color3.fromRGB(240, 245, 250) })
+		Shapes.ball(folder, 1.2, at * CFrame.new(0.8, 6.5, -1.2), { color = Color3.fromRGB(230, 60, 60) })
+	elseif def.theme == "backyard" then
+		-- A flowerpot with a ladybug on the rim.
+		Shapes.pillar(folder, 4, 3.5, at * CFrame.new(0, 2.8, 0), { color = Color3.fromRGB(210, 110, 70) })
+		Shapes.pillar(folder, 0.4, 4, at * CFrame.new(0, 6, 0), { color = Color3.fromRGB(80, 160, 70) })
+		Shapes.ball(folder, 2.2, at * CFrame.new(0, 8.3, 0), { color = Color3.fromRGB(255, 120, 170) })
+		Shapes.ellipsoid(folder, Vector3.new(1.4, 0.9, 1.8), at * CFrame.new(1.8, 4.8, 0), { color = Color3.fromRGB(230, 40, 40) })
 	else
 		Shapes.ball(folder, 4, at * CFrame.new(0, 3.5, 0), { color = c(theme.accent) })
 	end

@@ -15,6 +15,7 @@ local KartVisuals = require(script.Parent.KartVisuals)
 local KartController = require(script.Parent.KartController)
 local LobbyUI = require(script.Parent.LobbyUI)
 local Spectate = require(script.Parent.Spectate)
+local TrackAnimator = require(script.Parent.TrackAnimator)
 
 local roundState: any = nil
 
@@ -170,6 +171,7 @@ RunService.RenderStepped:Connect(function(dt)
 	LobbyUI.update()
 	Hud.update()
 	KartVisuals.step(dt)
+	TrackAnimator.step()
 	for i = #spinners, 1, -1 do
 		local inst = spinners[i]
 		if not inst.Parent then

@@ -4,6 +4,7 @@ local T = require("./TestLib")
 
 require("./KartPhysics.spec")
 require("./Track.spec")
+require("./TrackFeatures.spec")
 require("./Items.spec")
 require("./RaceRules.spec")
 require("./Voting.spec")

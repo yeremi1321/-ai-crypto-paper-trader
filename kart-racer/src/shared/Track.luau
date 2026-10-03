@@ -25,7 +25,24 @@ export type TrackDef = {
 	walls: boolean?,
 	-- Jump ramps: t along the lap, offset across (-1..1), ramp width in studs.
 	ramps: { { t: number, offset: number, width: number } }?,
+	-- Surface patches: "sticky" (syrup, mud: slow), "slippery" (water: less
+	-- grip), "conveyor" (pushes you along), "launch" (a big boost). Optional
+	-- period/duty make them switch on and off (sprinklers), in seconds.
+	zones: { Zone }?,
+	-- Moving hazards that cross the road (toy robot, beetles, train).
+	crossers: { Crosser }?,
+	-- Skill shortcuts: a narrow path leaving the road at `from` and rejoining
+	-- at `to` (both t values), on one side (-1 left, 1 right).
+	shortcuts: { Shortcut }?,
+	-- Covered stretches: "bed", "hose", "log", "box", "arch".
+	tunnels: { { from: number, to: number, style: string } }?,
+	-- Big themed landmarks placed beside the road.
+	setPieces: { { kind: string, t: number, side: number, gap: number? } }?,
 }
+
+export type Zone = { kind: string, t: number, length: number, offset: number?, width: number?, period: number?, duty: number? }
+export type Crosser = { kind: string, t: number, period: number, phase: number?, radius: number }
+export type Shortcut = { from: number, to: number, side: number, width: number, surface: string? }
 
 export type Built = {
 	def: TrackDef,
@@ -210,20 +227,106 @@ function Track.spot(track: Built, distance: number, lateral: number): Vec
 	return v(p.x - tan.z / tl * lateral, p.y, p.z + tan.x / tl * lateral)
 end
 
--- "road" | "boost" | "offroad" (the grass shoulder) | "wall" (past the barrier).
-function Track.surfaceAt(track: Built, proj: Projection): string
+-- Signed distance from b to a along the lap, wrapped into [-length/2, length/2).
+local function along(track: Built, a: number, b: number): number
+	return (a - b + track.length / 2) % track.length - track.length / 2
+end
+
+-- Is a timed zone switched on at `time`?
+function Track.zoneActive(zone: Zone, time: number): boolean
+	if not zone.period then
+		return true
+	end
+	local duty = zone.duty or 0.5
+	return (time % zone.period) < zone.period * duty
+end
+
+-- The zone (if any) covering a projected position at `time`.
+function Track.zoneAt(track: Built, proj: Projection, time: number): Zone?
+	for _, zone in track.def.zones or {} do
+		local center = zone.t * track.length
+		local a = along(track, proj.distance, center)
+		if a >= -zone.length / 2 and a <= zone.length / 2 then
+			local width = zone.width or track.def.width
+			local offset = (zone.offset or 0) * (track.def.width / 2 - width / 2)
+			if math.abs(proj.lateral - offset) <= width / 2 and Track.zoneActive(zone, time) then
+				return zone
+			end
+		end
+	end
+	return nil
+end
+
+-- Shortcut endpoints just outside the barrier on the chosen side.
+function Track.shortcutEnds(track: Built, sc: Shortcut): (Vec, Vec)
+	local lat = sc.side * (track.def.width / 2 + Track.ShoulderWidth + 2)
+	return Track.spot(track, sc.from * track.length, lat), Track.spot(track, sc.to * track.length, lat)
+end
+
+-- Index of the shortcut whose path contains `pos` (flat distance), if any.
+function Track.shortcutAt(track: Built, pos: Vec): number?
+	for i, sc in track.def.shortcuts or {} do
+		local a, b = Track.shortcutEnds(track, sc)
+		local abx, abz = b.x - a.x, b.z - a.z
+		local len2 = abx * abx + abz * abz
+		local t = math.clamp(((pos.x - a.x) * abx + (pos.z - a.z) * abz) / len2, -0.05, 1.05)
+		local cx, cz = a.x + abx * t, a.z + abz * t
+		local dx, dz = pos.x - cx, pos.z - cz
+		if dx * dx + dz * dz <= (sc.width / 2 + 1) ^ 2 then
+			return i
+		end
+	end
+	return nil
+end
+
+-- Where a crossing hazard is at `time`: distance along the lap, lateral
+-- offset, and whether it is out on the road. It walks from one side to the
+-- other, waits, and walks back.
+function Track.crosserAt(track: Built, c: Crosser, time: number): (number, number, boolean)
+	local reach = track.def.width / 2 + Track.ShoulderWidth
+	local phase = ((time + (c.phase or 0)) % c.period) / c.period -- 0..1
+	-- 0..0.35 cross, 0.35..0.5 wait, 0.5..0.85 cross back, 0.85..1 wait
+	local u: number
+	if phase < 0.35 then
+		u = phase / 0.35
+	elseif phase < 0.5 then
+		u = 1
+	elseif phase < 0.85 then
+		u = 1 - (phase - 0.5) / 0.35
+	else
+		u = 0
+	end
+	local lateral = -reach + u * reach * 2
+	return c.t * track.length, lateral, math.abs(lateral) < track.def.width / 2 + c.radius
+end
+
+-- "road" | "boost" | "offroad" (the grass shoulder) | "wall" (past the
+-- barrier) | a zone kind ("sticky", "slippery", "conveyor", "launch").
+-- Pass the world position to count shortcuts, and the server time for
+-- timed zones.
+function Track.surfaceAt(track: Built, proj: Projection, pos: Vec?, time: number?): string
 	local half = track.def.width / 2
 	local lat = math.abs(proj.lateral)
+	if lat > half and pos then
+		local sc = Track.shortcutAt(track, pos)
+		if sc then
+			return (track.def.shortcuts :: { Shortcut })[sc].surface or "road"
+		end
+	end
 	if lat > half + Track.ShoulderWidth then
 		return "wall"
 	elseif lat > half then
 		return "offroad"
 	end
 	for _, pad in Track.pads(track) do
-		local along = (proj.distance - pad.distance + track.length / 2) % track.length - track.length / 2
-		if math.abs(along) <= Track.PadLength / 2 and math.abs(proj.lateral - pad.lateral) <= Track.PadWidth / 2 then
+		local a = along(track, proj.distance, pad.distance)
+		if math.abs(a) <= Track.PadLength / 2 and math.abs(proj.lateral - pad.lateral) <= Track.PadWidth / 2 then
 			return "boost"
 		end
+	end
+	local zone = Track.zoneAt(track, proj, time or 0)
+	if zone then
+		return zone.kind
 	end
 	return "road"
 end

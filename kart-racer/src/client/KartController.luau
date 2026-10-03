@@ -313,7 +313,7 @@ local function step(dt: number)
 	local pos = Track.v(root.Position.X, root.Position.Y, root.Position.Z)
 	local proj = Track.project(s.track, pos, s.hint)
 	s.hint = proj.index
-	local surface = Track.surfaceAt(s.track, proj)
+	local surface = Track.surfaceAt(s.track, proj, pos, t)
 	if s.mode == "practice" and (surface == "offroad" or surface == "wall") then
 		surface = "road" -- the practice area is open tarmac
 	end

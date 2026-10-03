@@ -994,6 +994,9 @@ KartPhysics.BoostPadTime = 1.0
 KartPhysics.ChargeLevels = { 0.9, 1.8, 2.9 } -- charge needed for each mini-turbo
 KartPhysics.TurboTimes = { 0.6, 1.1, 1.7 } -- boost seconds each level gives
 KartPhysics.SlowFactor = 0.5
+KartPhysics.ConveyorFactor = 1.15
+KartPhysics.SlipperyGrip = 0.55 -- normal steering on wet ground
+KartPhysics.LaunchBoost = 1.2
 -- Slipstream: stay behind someone this long to get a boost.
 KartPhysics.DraftTime = 1.1
 KartPhysics.DraftBoost = 0.9
@@ -1033,6 +1036,11 @@ function KartPhysics.targetTop(stats: Karts.KartStats, s: State, surface: string
 		top *= KartPhysics.BoostFactor
 	elseif surface == "offroad" then
 		top *= KartPhysics.OffroadFactor
+	end
+	if surface == "sticky" then
+		top *= KartPhysics.OffroadFactor
+	elseif surface == "conveyor" then
+		top *= KartPhysics.ConveyorFactor
 	end
 	if s.slow > 0 then
 		top *= KartPhysics.SlowFactor
@@ -1155,6 +1163,8 @@ function KartPhysics.step(stats: Karts.KartStats, s: State, input: Input, dt: nu
 
 	if input.surface == "boost" then
 		KartPhysics.giveBoost(s, KartPhysics.BoostPadTime)
+	elseif input.surface == "launch" then
+		KartPhysics.giveBoost(s, KartPhysics.LaunchBoost)
 	end
 
 	if s.spin > 0 then
@@ -1212,6 +1222,9 @@ function KartPhysics.step(stats: Karts.KartStats, s: State, input: Input, dt: nu
 		end
 	else
 		local grip = math.clamp(math.abs(s.speed) / (stats.topSpeed * 0.25), 0, 1)
+		if input.surface == "slippery" then
+			grip *= KartPhysics.SlipperyGrip
+		end
 		turn = steer * stats.handling * grip * (if s.speed < 0 then -1 else 1)
 	end
 	if not input.grounded then
@@ -1565,6 +1578,26 @@ Scenery.Themes = {
 		{ kind = "rock", count = 110, near = 8, far = 200, minSize = 0.6, maxSize = 1.8, radius = 9 },
 		{ kind = "cactus", count = 70, near = 8, far = 160, minSize = 0.8, maxSize = 1.4, radius = 4 },
 	},
+	-- Tiny racers, oversized world: everything here is giant.
+	toyroom = {
+		{ kind = "toyBlock", count = 70, near = 10, far = 220, minSize = 0.8, maxSize = 1.6, radius = 10 },
+		{ kind = "toyBall", count = 30, near = 14, far = 240, minSize = 0.8, maxSize = 1.5, radius = 12 },
+		{ kind = "crayon", count = 40, near = 6, far = 160, minSize = 0.9, maxSize = 1.3, radius = 6 },
+		{ kind = "book", count = 24, near = 20, far = 240, minSize = 0.9, maxSize = 1.4, radius = 18 },
+	},
+	kitchen = {
+		{ kind = "fruit", count = 60, near = 8, far = 200, minSize = 0.8, maxSize = 1.5, radius = 9 },
+		{ kind = "jar", count = 26, near = 16, far = 220, minSize = 0.9, maxSize = 1.5, radius = 12 },
+		{ kind = "cookie", count = 40, near = 6, far = 160, minSize = 0.8, maxSize = 1.3, radius = 7 },
+		{ kind = "shaker", count = 20, near = 10, far = 180, minSize = 1, maxSize = 1.4, radius = 6 },
+	},
+	backyard = {
+		{ kind = "grassBlade", count = 170, near = 4, far = 200, minSize = 0.7, maxSize = 1.6, radius = 3 },
+		{ kind = "flower", count = 60, near = 8, far = 220, minSize = 0.8, maxSize = 1.5, radius = 7 },
+		{ kind = "pebble", count = 50, near = 4, far = 180, minSize = 0.6, maxSize = 1.6, radius = 7 },
+		{ kind = "mushroom", count = 26, near = 10, far = 200, minSize = 0.8, maxSize = 1.5, radius = 8 },
+		{ kind = "clover", count = 50, near = 2, far = 120, minSize = 0.8, maxSize = 1.3, radius = 4 },
+	},
 	neon = {
 		{ kind = "tower", count = 80, near = 30, far = 300, minSize = 0.7, maxSize = 2.2, radius = 24 },
 		{ kind = "lamp", count = 60, near = 3, far = 6, minSize = 1, maxSize = 1, radius = 2 },
@@ -1589,6 +1622,39 @@ function Scenery.barrier(track: Track.Built): number
 	return track.def.width / 2 + Track.ShoulderWidth + 1
 end
 
+Scenery.SetPieceRadius = 40
+
+-- Where each landmark from the track's setPieces goes, and which way it faces
+-- (toward the road). side 0 puts it over the road itself (e.g. an arch).
+function Scenery.setPieceSpots(track: Track.Built): { Prop }
+	local out = {}
+	local barrier = Scenery.barrier(track)
+	for _, sp in track.def.setPieces or {} do
+		local d = sp.t * track.length
+		local gap = sp.gap or 30
+		local lateral = if sp.side == 0 then 0 else sp.side * (barrier + gap)
+		local spot = Track.spot(track, d, lateral)
+		local _, tan = Track.at(track, d)
+		local faceRoad = math.atan2(tan.x, tan.z) + (if sp.side > 0 then math.pi / 2 else -math.pi / 2)
+		table.insert(out, { kind = sp.kind, x = spot.x, y = spot.y, z = spot.z, size = 1, yaw = faceRoad })
+	end
+	return out
+end
+
+-- Flat distance from a point to a shortcut's path.
+local function shortcutDistance(track: Track.Built, x: number, z: number): number
+	local best = math.huge
+	for _, sc in track.def.shortcuts or {} do
+		local a, b = Track.shortcutEnds(track, sc)
+		local abx, abz = b.x - a.x, b.z - a.z
+		local t = math.clamp(((x - a.x) * abx + (z - a.z) * abz) / (abx * abx + abz * abz), 0, 1)
+		local dx, dz = x - (a.x + abx * t), z - (a.z + abz * t)
+		best = math.min(best, math.sqrt(dx * dx + dz * dz) - sc.width / 2)
+	end
+	return best
+end
+Scenery.shortcutDistance = shortcutDistance
+
 function Scenery.place(track: Track.Built): { Prop }
 	local rules = Scenery.Themes[track.def.theme] or {}
 	local random = rng(track.def.id)
@@ -1600,6 +1666,7 @@ function Scenery.place(track: Track.Built): { Prop }
 
 	local props: { Prop } = {}
 	local placedRadius: { number } = {}
+	local reserved = Scenery.setPieceSpots(track)
 
 	local function clear(x: number, z: number, radius: number): boolean
 		-- Away from every part of the track (matters where the track loops back).
@@ -1613,6 +1680,17 @@ function Scenery.place(track: Track.Built): { Prop }
 		for i, other in props do
 			local dx, dz = other.x - x, other.z - z
 			local need = placedRadius[i] + radius
+			if dx * dx + dz * dz < need * need then
+				return false
+			end
+		end
+		-- Keep shortcut paths and landmark spots clear.
+		if shortcutDistance(track, x, z) < radius + 6 then
+			return false
+		end
+		for _, sp in reserved do
+			local dx, dz = sp.x - x, sp.z - z
+			local need = Scenery.SetPieceRadius + radius
 			if dx * dx + dz * dz < need * need then
 				return false
 			end
@@ -1693,7 +1771,24 @@ export type TrackDef = {
 	walls: boolean?,
 	-- Jump ramps: t along the lap, offset across (-1..1), ramp width in studs.
 	ramps: { { t: number, offset: number, width: number } }?,
+	-- Surface patches: "sticky" (syrup, mud: slow), "slippery" (water: less
+	-- grip), "conveyor" (pushes you along), "launch" (a big boost). Optional
+	-- period/duty make them switch on and off (sprinklers), in seconds.
+	zones: { Zone }?,
+	-- Moving hazards that cross the road (toy robot, beetles, train).
+	crossers: { Crosser }?,
+	-- Skill shortcuts: a narrow path leaving the road at `from` and rejoining
+	-- at `to` (both t values), on one side (-1 left, 1 right).
+	shortcuts: { Shortcut }?,
+	-- Covered stretches: "bed", "hose", "log", "box", "arch".
+	tunnels: { { from: number, to: number, style: string } }?,
+	-- Big themed landmarks placed beside the road.
+	setPieces: { { kind: string, t: number, side: number, gap: number? } }?,
 }
+
+export type Zone = { kind: string, t: number, length: number, offset: number?, width: number?, period: number?, duty: number? }
+export type Crosser = { kind: string, t: number, period: number, phase: number?, radius: number }
+export type Shortcut = { from: number, to: number, side: number, width: number, surface: string? }
 
 export type Built = {
 	def: TrackDef,
@@ -1878,20 +1973,106 @@ function Track.spot(track: Built, distance: number, lateral: number): Vec
 	return v(p.x - tan.z / tl * lateral, p.y, p.z + tan.x / tl * lateral)
 end
 
--- "road" | "boost" | "offroad" (the grass shoulder) | "wall" (past the barrier).
-function Track.surfaceAt(track: Built, proj: Projection): string
+-- Signed distance from b to a along the lap, wrapped into [-length/2, length/2).
+local function along(track: Built, a: number, b: number): number
+	return (a - b + track.length / 2) % track.length - track.length / 2
+end
+
+-- Is a timed zone switched on at `time`?
+function Track.zoneActive(zone: Zone, time: number): boolean
+	if not zone.period then
+		return true
+	end
+	local duty = zone.duty or 0.5
+	return (time % zone.period) < zone.period * duty
+end
+
+-- The zone (if any) covering a projected position at `time`.
+function Track.zoneAt(track: Built, proj: Projection, time: number): Zone?
+	for _, zone in track.def.zones or {} do
+		local center = zone.t * track.length
+		local a = along(track, proj.distance, center)
+		if a >= -zone.length / 2 and a <= zone.length / 2 then
+			local width = zone.width or track.def.width
+			local offset = (zone.offset or 0) * (track.def.width / 2 - width / 2)
+			if math.abs(proj.lateral - offset) <= width / 2 and Track.zoneActive(zone, time) then
+				return zone
+			end
+		end
+	end
+	return nil
+end
+
+-- Shortcut endpoints just outside the barrier on the chosen side.
+function Track.shortcutEnds(track: Built, sc: Shortcut): (Vec, Vec)
+	local lat = sc.side * (track.def.width / 2 + Track.ShoulderWidth + 2)
+	return Track.spot(track, sc.from * track.length, lat), Track.spot(track, sc.to * track.length, lat)
+end
+
+-- Index of the shortcut whose path contains `pos` (flat distance), if any.
+function Track.shortcutAt(track: Built, pos: Vec): number?
+	for i, sc in track.def.shortcuts or {} do
+		local a, b = Track.shortcutEnds(track, sc)
+		local abx, abz = b.x - a.x, b.z - a.z
+		local len2 = abx * abx + abz * abz
+		local t = math.clamp(((pos.x - a.x) * abx + (pos.z - a.z) * abz) / len2, -0.05, 1.05)
+		local cx, cz = a.x + abx * t, a.z + abz * t
+		local dx, dz = pos.x - cx, pos.z - cz
+		if dx * dx + dz * dz <= (sc.width / 2 + 1) ^ 2 then
+			return i
+		end
+	end
+	return nil
+end
+
+-- Where a crossing hazard is at `time`: distance along the lap, lateral
+-- offset, and whether it is out on the road. It walks from one side to the
+-- other, waits, and walks back.
+function Track.crosserAt(track: Built, c: Crosser, time: number): (number, number, boolean)
+	local reach = track.def.width / 2 + Track.ShoulderWidth
+	local phase = ((time + (c.phase or 0)) % c.period) / c.period -- 0..1
+	-- 0..0.35 cross, 0.35..0.5 wait, 0.5..0.85 cross back, 0.85..1 wait
+	local u: number
+	if phase < 0.35 then
+		u = phase / 0.35
+	elseif phase < 0.5 then
+		u = 1
+	elseif phase < 0.85 then
+		u = 1 - (phase - 0.5) / 0.35
+	else
+		u = 0
+	end
+	local lateral = -reach + u * reach * 2
+	return c.t * track.length, lateral, math.abs(lateral) < track.def.width / 2 + c.radius
+end
+
+-- "road" | "boost" | "offroad" (the grass shoulder) | "wall" (past the
+-- barrier) | a zone kind ("sticky", "slippery", "conveyor", "launch").
+-- Pass the world position to count shortcuts, and the server time for
+-- timed zones.
+function Track.surfaceAt(track: Built, proj: Projection, pos: Vec?, time: number?): string
 	local half = track.def.width / 2
 	local lat = math.abs(proj.lateral)
+	if lat > half and pos then
+		local sc = Track.shortcutAt(track, pos)
+		if sc then
+			return (track.def.shortcuts :: { Shortcut })[sc].surface or "road"
+		end
+	end
 	if lat > half + Track.ShoulderWidth then
 		return "wall"
 	elseif lat > half then
 		return "offroad"
 	end
 	for _, pad in Track.pads(track) do
-		local along = (proj.distance - pad.distance + track.length / 2) % track.length - track.length / 2
-		if math.abs(along) <= Track.PadLength / 2 and math.abs(proj.lateral - pad.lateral) <= Track.PadWidth / 2 then
+		local a = along(track, proj.distance, pad.distance)
+		if math.abs(a) <= Track.PadLength / 2 and math.abs(proj.lateral - pad.lateral) <= Track.PadWidth / 2 then
 			return "boost"
 		end
+	end
+	local zone = Track.zoneAt(track, proj, time or 0)
+	if zone then
+		return zone.kind
 	end
 	return "road"
 end
@@ -2021,6 +2202,59 @@ Tracks.Themes = {
 		tint = { 255, 235, 210 },
 		saturation = 0.2,
 	},
+	-- Midnight Toy Room: a giant bedroom at night, lit by a night light.
+	toyroom = {
+		road = { 70, 78, 120 },
+		shoulder = { 150, 105, 70 },
+		ground = { 160, 112, 74 }, -- wooden floorboards
+		wall = { 255, 220, 120 },
+		accent = { 120, 220, 255 },
+		curb = { { 255, 90, 90 }, { 255, 230, 120 } },
+		line = { 255, 240, 200 },
+		clock = 0.5,
+		ambient = { 90, 90, 150 },
+		brightness = 1.6,
+		atmosphere = { density = 0.32, haze = 1.2, glare = 0, color = { 90, 100, 170 }, decay = { 50, 50, 110 } },
+		bloom = 1.1,
+		tint = { 230, 230, 255 },
+		saturation = 0.25,
+		room = { wall = { 90, 110, 190 }, trim = { 255, 255, 255 }, height = 420 },
+	},
+	-- Kitchen Chaos: countertop racing in a bright kitchen.
+	kitchen = {
+		road = { 96, 100, 112 },
+		shoulder = { 235, 230, 220 },
+		ground = { 240, 236, 228 }, -- marble countertop
+		wall = { 230, 90, 80 },
+		accent = { 255, 200, 60 },
+		curb = { { 230, 90, 80 }, { 255, 255, 255 } },
+		line = { 255, 255, 255 },
+		clock = 11,
+		ambient = { 170, 165, 160 },
+		brightness = 3.2,
+		atmosphere = { density = 0.22, haze = 0.6, glare = 0.2, color = { 255, 245, 230 }, decay = { 220, 200, 170 } },
+		bloom = 0.5,
+		tint = { 255, 250, 240 },
+		saturation = 0.25,
+		room = { wall = { 130, 200, 210 }, trim = { 255, 255, 255 }, height = 380 },
+	},
+	-- Backyard Bug Rally: dirt paths through giant grass on a sunny day.
+	backyard = {
+		road = { 150, 110, 75 }, -- packed dirt
+		shoulder = { 110, 170, 70 },
+		ground = { 100, 165, 65 },
+		wall = { 160, 120, 80 },
+		accent = { 255, 210, 60 },
+		curb = { { 200, 150, 90 }, { 245, 230, 200 } },
+		line = { 245, 230, 200 },
+		clock = 15,
+		ambient = { 130, 140, 120 },
+		brightness = 3,
+		atmosphere = { density = 0.3, haze = 1.4, glare = 0.5, color = { 210, 235, 255 }, decay = { 140, 170, 120 } },
+		bloom = 0.6,
+		tint = { 255, 252, 235 },
+		saturation = 0.3,
+	},
 	-- The Kart Carnival lobby: bright, clear afternoon.
 	carnival = {
 		road = { 64, 66, 82 },
@@ -2147,10 +2381,147 @@ Tracks.List = {
 		boostPads = { { t = 0.12, offset = 0 }, { t = 0.36, offset = 0.35 }, { t = 0.6, offset = 0 }, { t = 0.86, offset = -0.35 } },
 		itemRows = { 0.3, 0.75 },
 	},
+	{
+		id = "toyroom",
+		name = "Midnight Toy Room",
+		theme = "toyroom",
+		difficulty = "Medium",
+		feature = "Ruler bridge, a toy robot and a dash under the bed",
+		icon = "🧸",
+		width = 50,
+		scale = 1.5,
+		laps = 3,
+		controls = {
+			v(0, 0, 0),
+			v(0, 0, -200),
+			v(50, 0, -300),
+			v(160, 0, -330),
+			v(280, 14, -320),
+			v(380, 20, -260),
+			v(420, 14, -150),
+			v(410, 0, -30),
+			v(360, 0, 60),
+			v(260, 0, 100),
+			v(130, 0, 100),
+			v(60, 0, 140),
+			v(-10, 0, 170),
+			v(-40, 0, 100),
+		},
+		boostPads = { { t = 0.08, offset = 0 }, { t = 0.71, offset = 0.3 }, { t = 0.9, offset = -0.3 } },
+		itemRows = { 0.18, 0.585 },
+		ramps = { { t = 0.255, offset = 0.45, width = 18 }, { t = 0.96, offset = -0.4, width = 18 } },
+		crossers = {
+			{ kind = "train", t = 0.3, period = 9, phase = 0, radius = 9 },
+			{ kind = "robot", t = 0.845, period = 6, phase = 2, radius = 6 },
+		},
+		tunnels = { { from = 0.69, to = 0.785, style = "bed" } },
+		shortcuts = { { from = 0.505, to = 0.66, side = 1, width = 16 } },
+		setPieces = {
+			{ kind = "trainSet", t = 0.3, side = -1 },
+			{ kind = "nightLamp", t = 0.12, side = 1 },
+			{ kind = "toyChest", t = 0.56, side = 1, gap = 120 },
+			{ kind = "bookStack", t = 0.42, side = -1 },
+		},
+	},
+	{
+		id = "kitchen",
+		name = "Kitchen Chaos",
+		theme = "kitchen",
+		difficulty = "Hard",
+		feature = "Toaster launch onto the shelf, conveyors and syrup",
+		icon = "🍳",
+		width = 50,
+		scale = 1.5,
+		laps = 3,
+		controls = {
+			v(0, 0, 0),
+			v(0, 0, -180),
+			v(-60, 0, -280),
+			v(-180, 0, -300),
+			v(-280, 0, -240),
+			v(-300, 0, -120),
+			v(-250, 0, -20),
+			v(-170, 15, 50),
+			v(-80, 30, 95),
+			v(30, 30, 105),
+			v(140, 30, 90),
+			v(220, 15, 140),
+			v(200, 0, 230),
+			v(80, 0, 250),
+			v(10, 0, 180),
+		},
+		boostPads = { { t = 0.12, offset = 0 }, { t = 0.65, offset = 0 }, { t = 0.87, offset = 0.3 } },
+		itemRows = { 0.22, 0.75 },
+		ramps = { { t = 0.06, offset = 0.4, width = 20 }, { t = 0.585, offset = -0.35, width = 18 } },
+		zones = {
+			{ kind = "launch", t = 0.43, length = 26 },
+			{ kind = "conveyor", t = 0.53, length = 110, width = 22, offset = 0.6 },
+			{ kind = "sticky", t = 0.175, length = 50, width = 20, offset = 0.55 },
+			{ kind = "sticky", t = 0.8, length = 50, width = 20, offset = -0.55 },
+		},
+		tunnels = { { from = 0.33, to = 0.37, style = "box" } },
+		shortcuts = { { from = 0.18, to = 0.28, side = -1, width = 16 } },
+		setPieces = {
+			{ kind = "toaster", t = 0.43, side = -1 },
+			{ kind = "cerealBowl", t = 0.26, side = 1 },
+			{ kind = "cerealBowl", t = 0.82, side = 1 },
+			{ kind = "mug", t = 0.1, side = -1 },
+			{ kind = "fruitBowl", t = 0.92, side = -1 },
+		},
+	},
+	{
+		id = "backyard",
+		name = "Backyard Bug Rally",
+		theme = "backyard",
+		difficulty = "Medium",
+		feature = "Hose tunnel, flowerpot jumps and wet sprinklers",
+		icon = "🐞",
+		width = 50,
+		scale = 1.5,
+		laps = 3,
+		controls = {
+			v(0, 0, 0),
+			v(0, 0, -160),
+			v(-40, 0, -260),
+			v(20, 0, -350),
+			v(140, 0, -360),
+			v(230, 0, -290),
+			v(220, 0, -180),
+			v(150, 0, -120),
+			v(170, 0, -20),
+			v(280, 0, 40),
+			v(320, 0, 160),
+			v(240, 0, 250),
+			v(110, 0, 250),
+			v(40, 0, 180),
+			v(0, 0, 100),
+		},
+		boostPads = { { t = 0.05, offset = 0 }, { t = 0.48, offset = 0 }, { t = 0.86, offset = 0.3 } },
+		itemRows = { 0.25, 0.66 },
+		ramps = { { t = 0.1, offset = 0.35, width = 18 }, { t = 0.72, offset = -0.35, width = 18 } },
+		zones = {
+			{ kind = "slippery", t = 0.6, length = 90, period = 6, duty = 0.5 },
+			{ kind = "slippery", t = 0.93, length = 60, period = 8, duty = 0.5 },
+		},
+		crossers = {
+			{ kind = "beetle", t = 0.31, period = 7, phase = 0, radius = 7 },
+			{ kind = "beetle", t = 0.79, period = 8, phase = 3, radius = 7 },
+		},
+		tunnels = { { from = 0.44, to = 0.52, style = "hose" } },
+		shortcuts = { { from = 0.12, to = 0.21, side = 1, width = 16 } },
+		setPieces = {
+			{ kind = "flowerpot", t = 0.1, side = 1 },
+			{ kind = "flowerpot", t = 0.72, side = -1 },
+			{ kind = "sprinkler", t = 0.6, side = 1 },
+			{ kind = "sprinkler", t = 0.93, side = -1 },
+			{ kind = "log", t = 0.165, side = 1, gap = 0 },
+			{ kind = "wateringCan", t = 0.36, side = -1 },
+		},
+	},
 } :: { Track.TrackDef }
 
 -- Tracks that can come up in map voting.
-Tracks.VotePool = { "sunny", "canyon", "neon" }
+Tracks.VotePool = { "toyroom", "kitchen", "backyard", "sunny", "canyon", "neon" }
 
 -- A Grand Prix is every track in order (kept for a future cup mode).
 Tracks.Cup = { name = "Starter Cup", tracks = { "sunny", "canyon", "neon" } }
@@ -2590,6 +2961,396 @@ return ItemService
       </Item>
       <Item class="ModuleScript" referent="22">
         <Properties>
+          <string name="Name">Landmarks</string>
+          <string name="Source"><![CDATA[-- Big themed pieces for the oversized-world tracks: tunnels (the bed, garden
+-- hose, cardboard box, hollow log), set pieces (toaster, cereal bowls, toy
+-- train set, night lamp, flowerpots, sprinklers...), the moving crossers
+-- (toy robot, toy train, beetles) and giant room walls for indoor tracks.
+--
+-- Built from rounded primitives (common/Shapes). Every one of these is a
+-- good candidate for a custom mesh later; see README "Assets to replace".
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Shared = ReplicatedStorage.Shared
+local Track = require(Shared.Track)
+local Shapes = require(ReplicatedStorage.Common.Shapes)
+
+local Landmarks = {}
+
+local function rgb(r: number, g: number, b: number): Color3
+	return Color3.fromRGB(r, g, b)
+end
+
+local function c3(t: { number }): Color3
+	return Color3.fromRGB(t[1], t[2], t[3])
+end
+
+local function at(track: Track.Built, distance: number, lateral: number, height: number?): CFrame
+	local p = Track.spot(track, distance, lateral)
+	local _, tan = Track.at(track, distance)
+	local pos = Vector3.new(p.x, p.y + (height or 0), p.z)
+	return CFrame.lookAt(pos, pos + Vector3.new(tan.x, 0, tan.z))
+end
+
+---------------------------------------------------------------------------
+-- Tunnels
+---------------------------------------------------------------------------
+local tunnelBuilders: { [string]: (Track.Built, number, number, any, Instance) -> () } = {}
+
+-- A giant bed the road passes under: legs outside the walls, a puffy
+-- mattress and blanket above, a pillow and a headboard at one end.
+tunnelBuilders.bed = function(track, from, to, _theme, parent)
+	local half = track.def.width / 2 + Track.ShoulderWidth + 6
+	local mid = (from + to) / 2
+	local length = to - from
+	local cf = at(track, mid, 0, 0)
+	local h = 34
+	for _, sx in { -1, 1 } do
+		for _, sz in { -1, 1 } do
+			Shapes.pillar(parent, 6, h, cf * CFrame.new(sx * half, h / 2, sz * length / 2), { color = rgb(120, 80, 50), collide = true })
+		end
+	end
+	Shapes.roundedBox(parent, Vector3.new(half * 2 + 10, 6, length + 10), 4, cf * CFrame.new(0, h + 3, 0), { color = rgb(120, 80, 50), collide = true })
+	Shapes.roundedBox(parent, Vector3.new(half * 2 + 8, 10, length + 6), 5, cf * CFrame.new(0, h + 11, 0), { color = rgb(245, 245, 255) })
+	Shapes.ellipsoid(parent, Vector3.new(half * 2 + 16, 12, length * 0.75), cf * CFrame.new(0, h + 18, length * 0.1), { color = rgb(90, 120, 220) })
+	Shapes.ellipsoid(parent, Vector3.new(half * 1.2, 10, 18), cf * CFrame.new(0, h + 20, -length / 2 + 10), { color = rgb(255, 255, 255) })
+	Shapes.roundedBox(parent, Vector3.new(half * 2 + 12, 40, 6), 6, cf * CFrame.new(0, h + 10, -length / 2 - 6), { color = rgb(140, 95, 60), collide = true })
+	-- Fairy lights under the bed so the tunnel isn't pitch black.
+	for z = -length / 2 + 6, length / 2 - 6, 10 do
+		local bulb = Shapes.ball(parent, 1.4, cf * CFrame.new(0, h - 1, z), { color = rgb(255, 220, 140), material = Enum.Material.Neon })
+		local light = Instance.new("PointLight")
+		light.Range = 22
+		light.Brightness = 1.4
+		light.Color = bulb.Color
+		light.Parent = bulb
+	end
+end
+
+-- Rings of a green garden hose with yellow stripes.
+tunnelBuilders.hose = function(track, from, to, _theme, parent)
+	local span = track.def.width + Track.ShoulderWidth * 2 + 10
+	local i = 0
+	for d = from, to, 7 do
+		i += 1
+		local cf = at(track, d, 0, -2)
+		Shapes.arch(parent, span, 4, 6, cf, { color = if i % 3 == 0 then rgb(255, 210, 60) else rgb(60, 170, 80), collide = true }, 16)
+	end
+	local endCf = at(track, to, 0, -2)
+	Shapes.tube(parent, 6, 40, endCf * CFrame.new(span / 2 + 18, 2, 6) * CFrame.Angles(0, math.rad(90), 0), { color = rgb(60, 170, 80) })
+end
+
+-- A cardboard box with the ends cut out.
+tunnelBuilders.box = function(track, from, to, _theme, parent)
+	local span = track.def.width + Track.ShoulderWidth * 2 + 6
+	local mid = (from + to) / 2
+	local length = to - from
+	local cf = at(track, mid, 0, 0)
+	local h = 30
+	local cardboard = rgb(200, 160, 110)
+	for _, sx in { -1, 1 } do
+		Shapes.box(parent, Vector3.new(3, h, length), cf * CFrame.new(sx * span / 2, h / 2, 0), { color = cardboard, collide = true })
+	end
+	Shapes.box(parent, Vector3.new(span + 3, 3, length), cf * CFrame.new(0, h, 0), { color = cardboard, collide = true })
+	Shapes.box(parent, Vector3.new(span * 0.3, 0.2, length + 0.2), cf * CFrame.new(0, h + 1.6, 0), { color = rgb(220, 200, 150) })
+	for _, sz in { -1, 1 } do
+		Shapes.box(parent, Vector3.new(span + 3, 8, 1), cf * CFrame.new(0, h - 4, sz * length / 2), { color = cardboard })
+	end
+end
+
+-- A hollow log (half-rings of bark).
+tunnelBuilders.log = function(track, from, to, _theme, parent)
+	local span = track.def.width + 10
+	for d = from, to, 4 do
+		Shapes.arch(parent, span, 5, 4.5, at(track, d, 0, -3), { color = rgb(130, 90, 55), collide = true }, 16)
+	end
+end
+
+tunnelBuilders.arch = function(track, from, to, theme, parent)
+	local span = track.def.width + Track.ShoulderWidth * 2 + 6
+	local i = 0
+	for d = from, to, 10 do
+		i += 1
+		Shapes.arch(parent, span, 3, 3, at(track, d, 0, 0), { color = if i % 2 == 0 then c3(theme.accent) else c3(theme.wall), material = Enum.Material.Neon }, 14)
+	end
+end
+
+function Landmarks.tunnel(track: Track.Built, style: string, from: number, to: number, theme: any, parent: Instance)
+	local builder = tunnelBuilders[style]
+	if builder then
+		builder(track, from * track.length, to * track.length, theme, parent)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Set pieces (placed by Scenery.setPieceSpots)
+---------------------------------------------------------------------------
+local pieces: { [string]: (CFrame, any, Instance) -> () } = {}
+
+pieces.toaster = function(cf, _theme, parent)
+	local body = rgb(220, 70, 60)
+	Shapes.roundedBox(parent, Vector3.new(70, 50, 44), 12, cf * CFrame.new(0, 25, 0), { color = body, collide = true, reflectance = 0.1 })
+	for _, x in { -14, 14 } do
+		Shapes.roundedBox(parent, Vector3.new(14, 2, 34), 4, cf * CFrame.new(x, 50.5, 0), { color = rgb(40, 40, 45) })
+		-- Toast popping out.
+		Shapes.roundedBox(parent, Vector3.new(12, 22, 30), 5, cf * CFrame.new(x, 58, 0), { color = rgb(225, 170, 90) })
+		Shapes.box(parent, Vector3.new(12.2, 18, 26), cf * CFrame.new(x, 58, 0), { color = rgb(245, 215, 150) })
+	end
+	Shapes.box(parent, Vector3.new(4, 4, 10), cf * CFrame.new(37, 30, 0), { color = rgb(40, 40, 45) })
+	Shapes.ball(parent, 6, cf * CFrame.new(37, 22, -8), { color = rgb(240, 240, 240) })
+end
+
+pieces.cerealBowl = function(cf, _theme, parent)
+	Shapes.pillar(parent, 50, 18, cf * CFrame.new(0, 9, 0), { color = rgb(255, 255, 255), collide = true })
+	Shapes.pillar(parent, 56, 4, cf * CFrame.new(0, 19, 0), { color = rgb(90, 150, 230), collide = true })
+	Shapes.pillar(parent, 48, 1, cf * CFrame.new(0, 19.6, 0), { color = rgb(250, 248, 240) })
+	local colors = { rgb(255, 120, 60), rgb(255, 210, 70), rgb(140, 200, 80), rgb(200, 100, 200) }
+	for i = 1, 22 do
+		local a = i * 2.4
+		local r = (i % 6) * 3.5
+		Shapes.tube(parent, 5, 2, cf * CFrame.new(math.cos(a) * r, 21, math.sin(a) * r) * CFrame.Angles(0, a, math.rad(90)), { color = colors[i % 4 + 1] })
+	end
+end
+
+pieces.mug = function(cf, _theme, parent)
+	Shapes.pillar(parent, 30, 40, cf * CFrame.new(0, 20, 0), { color = rgb(255, 230, 90), collide = true })
+	Shapes.pillar(parent, 26, 1, cf * CFrame.new(0, 39, 0), { color = rgb(110, 70, 40) })
+	Shapes.arch(parent, 18, 4, 4, cf * CFrame.new(15, 20, 0) * CFrame.Angles(0, 0, math.rad(-90)), { color = rgb(255, 230, 90) }, 10)
+end
+
+pieces.fruitBowl = function(cf, _theme, parent)
+	Shapes.ellipsoid(parent, Vector3.new(60, 22, 60), cf * CFrame.new(0, 8, 0), { color = rgb(170, 220, 255), material = Enum.Material.Glass, transparency = 0.3, collide = true })
+	local fruit = { rgb(230, 50, 50), rgb(255, 160, 40), rgb(250, 220, 60), rgb(120, 200, 60) }
+	for i = 1, 9 do
+		local a = i * 2.1
+		Shapes.ball(parent, 14, cf * CFrame.new(math.cos(a) * 12, 20 + (i % 3) * 5, math.sin(a) * 12), { color = fruit[i % 4 + 1] })
+	end
+end
+
+pieces.trainSet = function(cf, _theme, parent)
+	-- An oval of toy track with sleepers.
+	for i = 0, 47 do
+		local a = i / 48 * math.pi * 2
+		local p = Vector3.new(math.cos(a) * 60, 0.6, math.sin(a) * 36)
+		local tangent = Vector3.new(-math.sin(a) * 60, 0, math.cos(a) * 36).Unit
+		local seg = CFrame.lookAt(p, p + tangent)
+		Shapes.box(parent, Vector3.new(12, 1.2, 3), cf * seg, { color = rgb(160, 110, 70) })
+		for _, side in { -1, 1 } do
+			Shapes.box(parent, Vector3.new(1, 1.6, 9), cf * seg * CFrame.new(side * 4, 0.6, 0), { color = rgb(200, 200, 210) })
+		end
+	end
+	-- A little station.
+	Shapes.roundedBox(parent, Vector3.new(24, 16, 16), 3, cf * CFrame.new(0, 8, 0), { color = rgb(240, 90, 90), collide = true })
+	Shapes.box(parent, Vector3.new(28, 3, 20), cf * CFrame.new(0, 17, 0), { color = rgb(80, 120, 220) })
+end
+
+pieces.nightLamp = function(cf, _theme, parent)
+	Shapes.pillar(parent, 40, 6, cf * CFrame.new(0, 3, 0), { color = rgb(240, 240, 250), collide = true })
+	Shapes.pillar(parent, 6, 70, cf * CFrame.new(0, 40, 0), { color = rgb(240, 240, 250), collide = true })
+	local shade = Shapes.ellipsoid(parent, Vector3.new(56, 40, 56), cf * CFrame.new(0, 86, 0), { color = rgb(255, 220, 140), material = Enum.Material.Neon, transparency = 0.15 })
+	local light = Instance.new("PointLight")
+	light.Range = 120
+	light.Brightness = 2.2
+	light.Color = rgb(255, 210, 140)
+	light.Shadows = true
+	light.Parent = shade
+end
+
+pieces.toyChest = function(cf, _theme, parent)
+	Shapes.roundedBox(parent, Vector3.new(80, 40, 50), 8, cf * CFrame.new(0, 20, 0), { color = rgb(80, 150, 230), collide = true })
+	Shapes.ellipsoid(parent, Vector3.new(84, 20, 54), cf * CFrame.new(0, 42, 0), { color = rgb(255, 200, 60), collide = true })
+	for i, color in { rgb(255, 90, 90), rgb(110, 220, 120), rgb(255, 255, 255) } do
+		Shapes.ball(parent, 12, cf * CFrame.new((i - 2) * 20, 54, 0), { color = color })
+	end
+end
+
+pieces.bookStack = function(cf, _theme, parent)
+	local colors = { rgb(220, 70, 70), rgb(70, 130, 220), rgb(250, 200, 60), rgb(110, 190, 110) }
+	for i = 0, 4 do
+		Shapes.roundedBox(parent, Vector3.new(70 - i * 4, 9, 50 - i * 3), 3, cf * CFrame.new(i * 1.5, 4.5 + i * 9, 0) * CFrame.Angles(0, math.rad(i * 7), 0), { color = colors[i % 4 + 1], collide = true })
+	end
+end
+
+pieces.flowerpot = function(cf, _theme, parent)
+	Shapes.pillar(parent, 46, 34, cf * CFrame.new(0, 17, 0), { color = rgb(210, 110, 70), collide = true })
+	Shapes.pillar(parent, 52, 6, cf * CFrame.new(0, 34, 0), { color = rgb(220, 120, 80), collide = true })
+	Shapes.pillar(parent, 44, 1, cf * CFrame.new(0, 37, 0), { color = rgb(100, 70, 45) })
+	Shapes.pillar(parent, 3, 50, cf * CFrame.new(0, 60, 0), { color = rgb(80, 160, 70) })
+	for i = 0, 5 do
+		local a = i / 6 * math.pi * 2
+		Shapes.ellipsoid(parent, Vector3.new(16, 6, 9), cf * CFrame.new(math.cos(a) * 9, 86, math.sin(a) * 9) * CFrame.Angles(0, -a, 0), { color = rgb(255, 120, 170) })
+	end
+	Shapes.ball(parent, 10, cf * CFrame.new(0, 87, 0), { color = rgb(255, 220, 60) })
+end
+
+-- Sprinklers spray when their slippery zone is on (TrackAnimator toggles the water).
+pieces.sprinkler = function(cf, _theme, parent)
+	Shapes.pillar(parent, 10, 4, cf * CFrame.new(0, 2, 0), { color = rgb(70, 70, 80), collide = true })
+	Shapes.pillar(parent, 3, 10, cf * CFrame.new(0, 9, 0), { color = rgb(200, 200, 210) })
+	local head = Shapes.ellipsoid(parent, Vector3.new(6, 3, 6), cf * CFrame.new(0, 15, 0), { color = rgb(255, 210, 60) })
+	head.Name = "SprinklerHead"
+	local water = Instance.new("ParticleEmitter")
+	water.Name = "Water"
+	water.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+	water.Color = ColorSequence.new(rgb(170, 220, 255))
+	water.Size = NumberSequence.new(0.8, 0.3)
+	water.Transparency = NumberSequence.new(0.2, 1)
+	water.Lifetime = NumberRange.new(1.2, 1.6)
+	water.Speed = NumberRange.new(45, 60)
+	water.SpreadAngle = Vector2.new(25, 60)
+	water.Acceleration = Vector3.new(0, -60, 0)
+	water.Rate = 160
+	water.Enabled = false
+	water.Parent = head
+end
+
+pieces.log = function(_cf, _theme, _parent)
+	-- The hollow log shortcut is built with the shortcut itself (see TrackBuilder).
+end
+
+pieces.wateringCan = function(cf, _theme, parent)
+	Shapes.ellipsoid(parent, Vector3.new(50, 44, 40), cf * CFrame.new(0, 22, 0), { color = rgb(90, 180, 220), collide = true })
+	Shapes.tube(parent, 6, 46, cf * CFrame.new(-34, 34, 0) * CFrame.Angles(0, 0, math.rad(35)), { color = rgb(90, 180, 220) })
+	Shapes.pillar(parent, 10, 3, cf * CFrame.new(-52, 46, 0), { color = rgb(70, 150, 190) })
+	Shapes.arch(parent, 30, 4, 4, cf * CFrame.new(10, 44, 0), { color = rgb(70, 150, 190) }, 10)
+end
+
+function Landmarks.setPiece(kind: string, cf: CFrame, theme: any, parent: Instance)
+	local builder = pieces[kind]
+	if builder then
+		builder(cf, theme, parent)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Crossers (moved by client/TrackAnimator; hits are checked by the server)
+---------------------------------------------------------------------------
+local crossers: { [string]: (Model) -> () } = {}
+
+crossers.robot = function(m)
+	local base = CFrame.new()
+	local metal = rgb(180, 190, 210)
+	Shapes.roundedBox(m, Vector3.new(9, 9, 7), 2, base * CFrame.new(0, 9, 0), { color = metal, anchored = true })
+	Shapes.roundedBox(m, Vector3.new(7, 6, 6), 2, base * CFrame.new(0, 17, 0), { color = metal, anchored = true })
+	for _, x in { -1.6, 1.6 } do
+		Shapes.ball(m, 2.2, base * CFrame.new(x, 17.5, -3), { color = rgb(80, 220, 255), material = Enum.Material.Neon, anchored = true })
+		Shapes.pillar(m, 2.4, 5, base * CFrame.new(x * 1.4, 2.5, 0), { color = rgb(120, 130, 150), anchored = true })
+	end
+	Shapes.pillar(m, 0.5, 4, base * CFrame.new(0, 22, 0), { color = rgb(120, 130, 150), anchored = true })
+	Shapes.ball(m, 1.6, base * CFrame.new(0, 24.5, 0), { color = rgb(255, 80, 80), material = Enum.Material.Neon, anchored = true })
+	for _, x in { -6, 6 } do
+		Shapes.capsule(m, 2.4, 8, base * CFrame.new(x, 10, 0), { color = metal, anchored = true })
+	end
+end
+
+crossers.train = function(m)
+	local colors = { rgb(230, 60, 60), rgb(70, 130, 230), rgb(250, 200, 60) }
+	for i = 0, 2 do
+		local cf = CFrame.new(0, 0, (i - 1) * 13)
+		Shapes.roundedBox(m, Vector3.new(9, 9, 11), 2, cf * CFrame.new(0, 6, 0), { color = colors[i + 1], anchored = true })
+		for _, x in { -4.7, 4.7 } do
+			for _, z in { -3.5, 3.5 } do
+				Shapes.tube(m, 3.6, 1, cf * CFrame.new(x, 2, z), { color = rgb(40, 40, 45), anchored = true })
+			end
+		end
+	end
+	Shapes.pillar(m, 3, 5, CFrame.new(0, 12.5, -16), { color = rgb(40, 40, 45), anchored = true })
+end
+
+crossers.beetle = function(m)
+	local shell = rgb(220, 40, 40)
+	Shapes.ellipsoid(m, Vector3.new(12, 7, 15), CFrame.new(0, 5, 0), { color = shell, anchored = true, reflectance = 0.15 })
+	Shapes.ellipsoid(m, Vector3.new(7, 5, 5), CFrame.new(0, 4, -8), { color = rgb(30, 30, 35), anchored = true })
+	for _, x in { -2, 2 } do
+		Shapes.ball(m, 1.6, CFrame.new(x, 5, -10), { color = rgb(255, 255, 255), anchored = true })
+	end
+	for i = 0, 5 do
+		local a = i / 6 * math.pi * 2
+		Shapes.ball(m, 2.2, CFrame.new(math.cos(a) * 3.5, 8.4, math.sin(a) * 4.5), { color = rgb(30, 30, 35), anchored = true })
+	end
+	for _, side in { -1, 1 } do
+		for k = -1, 1 do
+			Shapes.box(m, Vector3.new(6, 0.6, 0.6), CFrame.new(side * 7, 2, k * 4) * CFrame.Angles(0, 0, side * 0.5), { color = rgb(30, 30, 35), anchored = true })
+		end
+	end
+end
+
+function Landmarks.crosser(kind: string, index: number, parent: Instance, start: CFrame): Model
+	local m = Instance.new("Model")
+	m.Name = `Crosser{index}`
+	local builder = crossers[kind]
+	if builder then
+		builder(m)
+	end
+	-- Pivot at the model's base so the animator can place it on the road.
+	local origin = Instance.new("Part")
+	origin.Name = "Origin"
+	origin.Anchored = true
+	origin.CanCollide = false
+	origin.CanQuery = false
+	origin.CanTouch = false
+	origin.Transparency = 1
+	origin.Size = Vector3.one
+	origin.CFrame = CFrame.new()
+	origin.Parent = m
+	m.PrimaryPart = origin
+	-- Built around the origin; move every part to the starting spot.
+	for _, d in m:GetDescendants() do
+		if d:IsA("BasePart") then
+			d.CFrame = start * d.CFrame
+		end
+	end
+	m:SetAttribute("CrosserIndex", index)
+	m.Parent = parent
+	return m
+end
+
+---------------------------------------------------------------------------
+-- Room walls for indoor tracks (the bedroom, the kitchen)
+---------------------------------------------------------------------------
+function Landmarks.room(theme: any, minX: number, maxX: number, minZ: number, maxZ: number, floorY: number, parent: Instance)
+	local room = theme.room
+	if not room then
+		return
+	end
+	local margin = 280
+	local x0, x1, z0, z1 = minX - margin, maxX + margin, minZ - margin, maxZ + margin
+	local h = room.height
+	local wallColor, trim = c3(room.wall), c3(room.trim)
+	local function wall(cx: number, cz: number, w: number, d: number)
+		Shapes.box(parent, Vector3.new(w, h, d), CFrame.new(cx, floorY + h / 2, cz), { color = wallColor, collide = true })
+		Shapes.box(parent, Vector3.new(w + 1, 14, d + 1), CFrame.new(cx, floorY + 7, cz), { color = trim })
+	end
+	wall((x0 + x1) / 2, z0, x1 - x0, 6)
+	wall((x0 + x1) / 2, z1, x1 - x0, 6)
+	wall(x0, (z0 + z1) / 2, 6, z1 - z0)
+	wall(x1, (z0 + z1) / 2, 6, z1 - z0)
+
+	-- A window in the far wall (moonlit for the bedroom, sunny for the kitchen).
+	local night = theme.clock < 6 or theme.clock > 19
+	local winCf = CFrame.new((x0 + x1) / 2, floorY + h * 0.55, z0 + 4)
+	Shapes.roundedBox(parent, Vector3.new(180, 140, 2), 10, winCf, { color = trim })
+	Shapes.box(parent, Vector3.new(164, 124, 2.2), winCf, { color = if night then rgb(30, 40, 90) else rgb(170, 220, 255), material = Enum.Material.Neon, transparency = if night then 0 else 0.3 })
+	Shapes.box(parent, Vector3.new(6, 124, 2.4), winCf, { color = trim })
+	Shapes.box(parent, Vector3.new(164, 6, 2.4), winCf, { color = trim })
+	if night then
+		Shapes.disc(parent, 34, 2.5, winCf * CFrame.new(40, 30, 0) * CFrame.Angles(math.rad(90), 0, 0), { color = rgb(255, 250, 220), material = Enum.Material.Neon })
+		for i = 1, 14 do
+			Shapes.ball(parent, 2.2, winCf * CFrame.new(-70 + (i * 37) % 140, -50 + (i * 23) % 100, 0.5), { color = rgb(255, 255, 230), material = Enum.Material.Neon })
+		end
+	end
+	-- A big door on a side wall.
+	local doorCf = CFrame.new(x1 - 4, floorY + 110, (z0 + z1) / 2) * CFrame.Angles(0, math.rad(90), 0)
+	Shapes.roundedBox(parent, Vector3.new(120, 220, 3), 6, doorCf, { color = trim })
+	Shapes.ball(parent, 10, doorCf * CFrame.new(42, -10, -3), { color = rgb(255, 210, 60), reflectance = 0.3 })
+end
+
+return Landmarks
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="23">
+        <Properties>
           <string name="Name">LobbyBuilder</string>
           <string name="Source"><![CDATA[-- Builds the Kart Carnival lobby from LobbyLayout: spawn plaza, status board,
 -- map voting pads with miniature track displays, ready arch, garage with kart
@@ -2771,6 +3532,25 @@ local function miniature(parent: Instance, trackId: string, at: CFrame)
 			Shapes.box(folder, Vector3.new(1.6, h, 1.6), at * CFrame.new(x, 1 + h / 2, 0), { color = Color3.fromRGB(30, 26, 50) })
 			Shapes.box(folder, Vector3.new(1.7, 0.3, 1.7), at * CFrame.new(x, 1 + h * 0.7, 0), { color = c(theme.accent), material = Enum.Material.Neon })
 		end
+	elseif def.theme == "toyroom" then
+		-- A wobbly tower of toy blocks and a ball.
+		local colors = { Color3.fromRGB(240, 80, 80), Color3.fromRGB(80, 150, 240), Color3.fromRGB(255, 210, 60) }
+		for i = 0, 2 do
+			Shapes.box(folder, Vector3.new(2.6, 2.6, 2.6), at * CFrame.new(0.3 * i, 2.5 + i * 2.6, 0) * CFrame.Angles(0, i * 0.4, 0), { color = colors[i + 1] })
+		end
+		Shapes.ball(folder, 2.4, at * CFrame.new(3.5, 2.4, 1), { color = Color3.fromRGB(110, 210, 120) })
+	elseif def.theme == "kitchen" then
+		-- A little fridge with its door swung open.
+		Shapes.roundedBox(folder, Vector3.new(4, 8, 3.4), 0.6, at * CFrame.new(0, 5, 0), { color = Color3.fromRGB(240, 245, 250) })
+		Shapes.box(folder, Vector3.new(3.4, 7.4, 0.2), at * CFrame.new(0, 5, -1.75), { color = Color3.fromRGB(180, 230, 255), material = Enum.Material.Neon })
+		Shapes.box(folder, Vector3.new(0.3, 7.6, 3.4), at * CFrame.new(-3.7, 5, -2.6) * CFrame.Angles(0, math.rad(70), 0), { color = Color3.fromRGB(240, 245, 250) })
+		Shapes.ball(folder, 1.2, at * CFrame.new(0.8, 6.5, -1.2), { color = Color3.fromRGB(230, 60, 60) })
+	elseif def.theme == "backyard" then
+		-- A flowerpot with a ladybug on the rim.
+		Shapes.pillar(folder, 4, 3.5, at * CFrame.new(0, 2.8, 0), { color = Color3.fromRGB(210, 110, 70) })
+		Shapes.pillar(folder, 0.4, 4, at * CFrame.new(0, 6, 0), { color = Color3.fromRGB(80, 160, 70) })
+		Shapes.ball(folder, 2.2, at * CFrame.new(0, 8.3, 0), { color = Color3.fromRGB(255, 120, 170) })
+		Shapes.ellipsoid(folder, Vector3.new(1.4, 0.9, 1.8), at * CFrame.new(1.8, 4.8, 0), { color = Color3.fromRGB(230, 40, 40) })
 	else
 		Shapes.ball(folder, 4, at * CFrame.new(0, 3.5, 0), { color = c(theme.accent) })
 	end
@@ -3077,7 +3857,7 @@ return LobbyBuilder
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Script" referent="23">
+      <Item class="Script" referent="24">
         <Properties>
           <string name="Name">Main</string>
           <token name="RunContext">0</token>
@@ -3093,7 +3873,7 @@ print("[KartRacer] server ready - walk under the READY arch (or press READY) to 
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="24">
+      <Item class="ModuleScript" referent="25">
         <Properties>
           <string name="Name">Net</string>
           <string name="Source"><![CDATA[-- Creates the RemoteEvents listed in Shared.RemoteNames under ReplicatedStorage.Remotes.
@@ -3118,7 +3898,7 @@ return Net
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="25">
+      <Item class="ModuleScript" referent="26">
         <Properties>
           <string name="Name">PracticeService</string>
           <string name="Source"><![CDATA[-- Practice karts on the lobby loop. Anyone not in a race can take one out to
@@ -3211,13 +3991,16 @@ return PracticeService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="26">
+      <Item class="ModuleScript" referent="27">
         <Properties>
           <string name="Name">Props</string>
           <string name="Source"><![CDATA[-- Scenery models built from parts. Scenery.luau decides where they go; this
 -- decides what they look like. Each builder gets the prop, the track theme
 -- and a parent, and makes anchored, non-colliding decoration (grandstands
 -- and towers collide so nobody drives through them).
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Shapes = require(ReplicatedStorage.Common.Shapes)
 
 local Props = {}
 
@@ -3380,6 +4163,150 @@ builders.lamp = function(prop, theme, parent)
 	light.Parent = head
 end
 
+---------------------------------------------------------------------------
+-- Oversized-world props (toy room, kitchen, backyard)
+---------------------------------------------------------------------------
+local function base(prop: any): CFrame
+	return CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
+end
+
+local function pick(list: { Color3 }, prop: any): Color3
+	return list[(math.floor(math.abs(prop.x * 3 + prop.z * 7)) % #list) + 1]
+end
+
+local TOY_COLORS = { Color3.fromRGB(240, 80, 80), Color3.fromRGB(80, 150, 240), Color3.fromRGB(255, 210, 60), Color3.fromRGB(110, 210, 120), Color3.fromRGB(190, 110, 230) }
+
+builders.toyBlock = function(prop, _theme, parent)
+	local s = prop.size * 14
+	local color = pick(TOY_COLORS, prop)
+	local parts = Shapes.roundedBox(parent, Vector3.new(s, s, s), s * 0.12, base(prop) * CFrame.new(0, s / 2, 0), { color = color, collide = true })
+	local _ = parts
+	-- A raised letter panel on the front.
+	local panel = Shapes.box(parent, Vector3.new(s * 0.7, s * 0.7, 0.4), base(prop) * CFrame.new(0, s / 2, -s / 2 - 0.2), { color = Color3.fromRGB(255, 255, 255) })
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 10
+	gui.Parent = panel
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.FredokaOne
+	label.TextScaled = true
+	label.TextColor3 = color
+	local letters = { "A", "B", "C", "K", "Z", "1", "2", "3" }
+	label.Text = letters[(math.floor(math.abs(prop.x + prop.z)) % #letters) + 1]
+	label.Parent = gui
+end
+
+builders.toyBall = function(prop, _theme, parent)
+	local d = prop.size * 20
+	local cf = base(prop) * CFrame.new(0, d / 2, 0)
+	Shapes.ball(parent, d, cf, { color = pick(TOY_COLORS, prop), collide = true })
+	Shapes.tube(parent, d * 1.01, d * 0.18, cf * CFrame.Angles(0, 0, math.rad(90)), { color = Color3.fromRGB(255, 255, 255) })
+end
+
+builders.crayon = function(prop, _theme, parent)
+	local s = prop.size
+	local color = pick(TOY_COLORS, prop)
+	local cf = base(prop) * CFrame.new(0, 2.5 * s, 0)
+	Shapes.tube(parent, 5 * s, 28 * s, cf, { color = color })
+	Shapes.tube(parent, 5.3 * s, 6 * s, cf * CFrame.new(4 * s, 0, 0), { color = Color3.fromRGB(255, 255, 255) })
+	Shapes.ellipsoid(parent, Vector3.new(7 * s, 4 * s, 4 * s), cf * CFrame.new(15 * s, 0, 0), { color = color })
+end
+
+builders.book = function(prop, _theme, parent)
+	local s = prop.size
+	local color = pick(TOY_COLORS, prop)
+	Shapes.roundedBox(parent, Vector3.new(50 * s, 7 * s, 36 * s), 2 * s, base(prop) * CFrame.new(0, 3.5 * s, 0), { color = color, collide = true })
+	Shapes.box(parent, Vector3.new(48 * s, 5.6 * s, 35 * s), base(prop) * CFrame.new(1 * s, 3.5 * s, 0), { color = Color3.fromRGB(250, 245, 230) })
+end
+
+local FRUIT = { Color3.fromRGB(230, 50, 50), Color3.fromRGB(255, 160, 40), Color3.fromRGB(250, 220, 60), Color3.fromRGB(120, 200, 60), Color3.fromRGB(150, 60, 160) }
+
+builders.fruit = function(prop, _theme, parent)
+	local d = prop.size * 16
+	local cf = base(prop) * CFrame.new(0, d / 2, 0)
+	Shapes.ellipsoid(parent, Vector3.new(d, d * 0.92, d), cf, { color = pick(FRUIT, prop), collide = true, reflectance = 0.08 })
+	Shapes.pillar(parent, 0.8 * prop.size, 3 * prop.size, cf * CFrame.new(0, d * 0.5, 0), { color = Color3.fromRGB(110, 75, 45) })
+	Shapes.ellipsoid(parent, Vector3.new(4, 1, 2.2) * prop.size, cf * CFrame.new(1.8 * prop.size, d * 0.5, 0), { color = Color3.fromRGB(90, 180, 70) })
+end
+
+builders.jar = function(prop, _theme, parent)
+	local s = prop.size
+	local cf = base(prop)
+	Shapes.pillar(parent, 20 * s, 26 * s, cf * CFrame.new(0, 13 * s, 0), { color = Color3.fromRGB(200, 230, 255), material = Enum.Material.Glass, transparency = 0.4, collide = true })
+	Shapes.pillar(parent, 18 * s, 18 * s, cf * CFrame.new(0, 10 * s, 0), { color = pick(FRUIT, prop) })
+	Shapes.pillar(parent, 21 * s, 4 * s, cf * CFrame.new(0, 27.5 * s, 0), { color = Color3.fromRGB(220, 60, 60) })
+end
+
+builders.cookie = function(prop, _theme, parent)
+	local s = prop.size
+	local cf = base(prop) * CFrame.new(0, 1.2 * s, 0)
+	Shapes.disc(parent, 16 * s, 2.4 * s, cf, { color = Color3.fromRGB(215, 160, 95) })
+	for i = 1, 5 do
+		local a = i * 1.3
+		Shapes.ball(parent, 2.2 * s, cf * CFrame.new(math.cos(a) * 4.5 * s, 1.3 * s, math.sin(a) * 4.5 * s), { color = Color3.fromRGB(90, 55, 35) })
+	end
+end
+
+builders.shaker = function(prop, _theme, parent)
+	local s = prop.size
+	local cf = base(prop)
+	Shapes.pillar(parent, 8 * s, 18 * s, cf * CFrame.new(0, 9 * s, 0), { color = Color3.fromRGB(245, 245, 250), material = Enum.Material.Glass, transparency = 0.2, collide = true })
+	Shapes.ellipsoid(parent, Vector3.new(8.4, 5, 8.4) * s, cf * CFrame.new(0, 18 * s, 0), { color = Color3.fromRGB(200, 205, 215), reflectance = 0.3 })
+end
+
+builders.grassBlade = function(prop, _theme, parent)
+	local s = prop.size
+	local green = Color3.fromRGB(80 + math.floor(prop.x) % 40, 170 + math.floor(prop.z) % 40, 60)
+	local cf = base(prop)
+	for k = 0, 2 do
+		local lean = CFrame.Angles(math.rad(8 + k * 6), math.rad(k * 120), 0)
+		Shapes.ellipsoid(parent, Vector3.new(2.4 * s, 30 * s, 1 * s), cf * lean * CFrame.new(0, 14 * s, 0), { color = green })
+	end
+end
+
+builders.flower = function(prop, _theme, parent)
+	local s = prop.size
+	local cf = base(prop)
+	Shapes.pillar(parent, 1.4 * s, 26 * s, cf * CFrame.new(0, 13 * s, 0), { color = Color3.fromRGB(80, 160, 70) })
+	local petal = pick({ Color3.fromRGB(255, 120, 170), Color3.fromRGB(255, 255, 255), Color3.fromRGB(255, 200, 60), Color3.fromRGB(170, 120, 255) }, prop)
+	for i = 0, 5 do
+		local a = i / 6 * math.pi * 2
+		Shapes.ellipsoid(parent, Vector3.new(7, 2, 4) * s, cf * CFrame.new(math.cos(a) * 4 * s, 27 * s, math.sin(a) * 4 * s) * CFrame.Angles(0, -a, 0), { color = petal })
+	end
+	Shapes.ball(parent, 4 * s, cf * CFrame.new(0, 27.5 * s, 0), { color = Color3.fromRGB(255, 210, 60) })
+	Shapes.ellipsoid(parent, Vector3.new(7, 1, 3) * s, cf * CFrame.new(2.5 * s, 9 * s, 0) * CFrame.Angles(0, 0, 0.5), { color = Color3.fromRGB(90, 170, 70) })
+end
+
+builders.pebble = function(prop, _theme, parent)
+	local s = prop.size
+	local grey = 150 + math.floor(math.abs(prop.x)) % 50
+	Shapes.ellipsoid(parent, Vector3.new(14, 7, 10) * s, base(prop) * CFrame.new(0, 2.5 * s, 0), { color = Color3.fromRGB(grey, grey - 5, grey - 15), collide = true })
+end
+
+builders.mushroom = function(prop, _theme, parent)
+	local s = prop.size
+	local cf = base(prop)
+	Shapes.pillar(parent, 5 * s, 10 * s, cf * CFrame.new(0, 5 * s, 0), { color = Color3.fromRGB(245, 235, 215) })
+	Shapes.ellipsoid(parent, Vector3.new(16, 9, 16) * s, cf * CFrame.new(0, 11 * s, 0), { color = Color3.fromRGB(230, 60, 60) })
+	for i = 1, 5 do
+		local a = i * 1.25
+		Shapes.ball(parent, 2.4 * s, cf * CFrame.new(math.cos(a) * 4.5 * s, 14.2 * s, math.sin(a) * 4.5 * s), { color = Color3.fromRGB(255, 255, 255) })
+	end
+end
+
+builders.clover = function(prop, _theme, parent)
+	local s = prop.size
+	local cf = base(prop)
+	Shapes.pillar(parent, 0.8 * s, 6 * s, cf * CFrame.new(0, 3 * s, 0), { color = Color3.fromRGB(80, 160, 70) })
+	for i = 0, 2 do
+		local a = i / 3 * math.pi * 2
+		Shapes.ellipsoid(parent, Vector3.new(5, 0.8, 5) * s, cf * CFrame.new(math.cos(a) * 2.4 * s, 6 * s, math.sin(a) * 2.4 * s), { color = Color3.fromRGB(90, 190, 80) })
+	end
+end
+
 function Props.build(prop: any, theme: any, parent: Instance)
 	local builder = builders[prop.kind]
 	if builder then
@@ -3393,7 +4320,7 @@ return Props
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="27">
+      <Item class="ModuleScript" referent="28">
         <Properties>
           <string name="Name">RaceService</string>
           <string name="Source"><![CDATA[-- Runs one race: builds the track, puts karts on the grid, counts down,
@@ -3458,6 +4385,8 @@ export type Racer = {
 	-- Stats for results and awards
 	worstPlace: number,
 	hitsTaken: number,
+	shortcutsTaken: number,
+	onShortcut: boolean,
 	-- Items (managed by ItemService)
 	item: string?,
 	uses: number,
@@ -3477,6 +4406,7 @@ export type ResultRow = {
 	look: KartBodies.Look,
 	worstPlace: number,
 	hitsTaken: number,
+	shortcutsTaken: number,
 }
 
 type Race = {
@@ -3712,6 +4642,7 @@ local function finishRace(r: Race)
 			look = racer.entrant.look,
 			worstPlace = racer.worstPlace,
 			hitsTaken = racer.hitsTaken,
+			shortcutsTaken = racer.shortcutsTaken,
 		})
 	end
 	ItemService.clear()
@@ -3775,6 +4706,8 @@ function RaceService.startRace(trackId: string, entrants: { Entrant }, onEnded: 
 			lastRespawn = 0,
 			worstPlace = slot,
 			hitsTaken = 0,
+			shortcutsTaken = 0,
+			onShortcut = false,
 			item = nil,
 			uses = 0,
 			itemReadyAt = 0,
@@ -3934,7 +4867,7 @@ local function stepCpus(dt: number)
 		local pos = vec(root.Position)
 		local proj = Track.project(r.track, pos, racer.progress.index)
 		local input = AIDriver.input(r.track, proj, pos, s, racer.stats, racer.entrant.profile)
-		local surface = Track.surfaceAt(r.track, proj)
+		local surface = Track.surfaceAt(r.track, proj, pos, now())
 		input.surface = if surface == "wall" then "offroad" else surface
 		input.grounded = sensed.grounded
 		input.drafting = KartPhysics.isDrafting(root.Position.X, root.Position.Z, s.yaw, others)
@@ -3962,7 +4895,13 @@ local function tickRace(r: Race)
 		local pos = vec(root.Position)
 		local proj = Track.project(track, pos, racer.progress.index)
 		local roadY = Track.spot(track, proj.distance, 0).y
-		if proj.gap > track.def.width + Track.ShoulderWidth * 2 or root.Position.Y < roadY - FALL_DEPTH then
+		local onShortcut = Track.shortcutAt(track, pos) ~= nil
+		if onShortcut and not racer.onShortcut then
+			racer.shortcutsTaken += 1
+		end
+		racer.onShortcut = onShortcut
+		local offTrack = proj.gap > track.def.width + Track.ShoulderWidth * 2 and not onShortcut
+		if offTrack or root.Position.Y < roadY - FALL_DEPTH then
 			respawn(r, racer)
 		elseif Track.updateProgress(track, racer.progress, proj) then
 			if racer.progress.lap > track.def.laps and not racer.finishTime then
@@ -4011,6 +4950,23 @@ local function tickRace(r: Race)
 		if racer.entrant.isCpu then
 			local lead = if bestHuman > -math.huge then racer.score - bestHuman else 0
 			racer.speedFactor = RaceRules.cpuSpeedFactor(leaderScore - racer.score, lead, racer.entrant.profile.skill)
+		end
+	end
+
+	-- Moving crossers (toy robot, train, beetles) bump anyone they touch.
+	for _, cr in track.def.crossers or {} do
+		local d, lat, active = Track.crosserAt(track, cr, t)
+		if active then
+			local p = Track.spot(track, d, lat)
+			local hazard = Vector3.new(p.x, p.y, p.z)
+			for _, racer in r.racers do
+				local root = racer.model.PrimaryPart
+				if root and (Vector3.new(root.Position.X, p.y, root.Position.Z) - hazard).Magnitude < cr.radius + 2.5 then
+					if Effects.hit(racer, "spin") then
+						Effects.warn(racer, "BONK!")
+					end
+				end
+			end
 		end
 	end
 
@@ -4071,7 +5027,7 @@ return RaceService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="28">
+      <Item class="ModuleScript" referent="29">
         <Properties>
           <string name="Name">RoundService</string>
           <string name="Source"><![CDATA[-- The round loop:
@@ -4582,7 +5538,7 @@ return RoundService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="29">
+      <Item class="ModuleScript" referent="30">
         <Properties>
           <string name="Name">TrackBuilder</string>
           <string name="Source"><![CDATA[-- Builds a track's parts from its centerline: road, curbs and lane lines,
@@ -4598,7 +5554,11 @@ local Scenery = require(Shared.Scenery)
 local Track = require(Shared.Track)
 local Tracks = require(Shared.Tracks)
 
+local Landmarks = require(script.Parent.Landmarks)
 local Props = require(script.Parent.Props)
+local Shapes = require(ReplicatedStorage.Common.Shapes)
+
+local BANK_MAX = math.rad(6) -- corners tilt inward a little
 
 local TrackBuilder = {}
 
@@ -4673,21 +5633,55 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 	local curbColors = { rgb(theme.curb[1]), rgb(theme.curb[2]) }
 	local lineColor = rgb(theme.line)
 
+	-- Banking: smoothed signed turn per segment (positive = turning left).
+	local signedTurn = {}
+	for i = 1, n do
+		local a, b, c = v3(pts[i]), v3(pts[i % n + 1]), v3(pts[(i + 1) % n + 1])
+		signedTurn[i] = ((flatAngle(b, c) - flatAngle(a, b)) + math.pi) % (2 * math.pi) - math.pi
+	end
+	local function bank(i: number): number
+		local sum = 0
+		for k = -3, 3 do
+			sum += signedTurn[(i - 1 + k) % n + 1]
+		end
+		return math.clamp(sum / 7 * 4, -BANK_MAX, BANK_MAX)
+	end
+
+	-- Wall openings where shortcuts leave and rejoin the road.
+	local openings = {}
+	for _, sc in def.shortcuts or {} do
+		table.insert(openings, { side = sc.side, at = sc.from * track.length, half = sc.width / 2 + 6 })
+		table.insert(openings, { side = sc.side, at = sc.to * track.length, half = sc.width / 2 + 6 })
+	end
+	local function wallOpen(side: number, distance: number, segLen: number): boolean
+		for _, o in openings do
+			local d = (distance - o.at + track.length / 2) % track.length - track.length / 2
+			if o.side == side and math.abs(d) < o.half + segLen / 2 then
+				return true
+			end
+		end
+		return false
+	end
+
 	for i = 1, n do
 		local a, b, c = v3(pts[i]), v3(pts[i % n + 1]), v3(pts[(i + 1) % n + 1])
 		local length = (b - a).Magnitude
 		-- Lengthen segments on the outside of bends so the edges have no gaps.
-		local turn = math.abs(((flatAngle(b, c) - flatAngle(a, b)) + math.pi) % (2 * math.pi) - math.pi)
+		local turn = math.abs(signedTurn[i])
 		local extra = 1 + (half + sw + 1) * turn
-		local cf = CFrame.lookAt((a + b) / 2, b)
+		local roll = if walled then bank(i) else 0
+		local cf = CFrame.lookAt((a + b) / 2, b) * CFrame.Angles(0, 0, roll)
 		local segLen = length + extra
+		local segDistance = track.cum[i] + length / 2
 
 		local road = part(folder, "Road", Vector3.new(def.width, 1, segLen), cf * CFrame.new(0, -0.5, 0), roadColor, Enum.Material.SmoothPlastic)
 		road:SetAttribute("Surface", "road")
 		for _, side in (if walled then { -1, 1 } else {}) :: { number } do
 			local shoulder = part(folder, "Shoulder", Vector3.new(sw, 1, segLen), cf * CFrame.new(side * (half + sw / 2), -0.52, 0), shoulderColor, Enum.Material.SmoothPlastic)
 			shoulder:SetAttribute("Surface", "offroad")
-			part(folder, "Wall", Vector3.new(1, 4, segLen), cf * CFrame.new(side * (half + sw + 0.5), 1.5, 0), wallColor, if def.theme == "neon" then Enum.Material.Neon else Enum.Material.SmoothPlastic)
+			if not wallOpen(side, segDistance, segLen) then
+				part(folder, "Wall", Vector3.new(1, 4, segLen), cf * CFrame.new(side * (half + sw + 0.5), 1.5, 0), wallColor, if def.theme == "neon" then Enum.Material.Neon else Enum.Material.SmoothPlastic)
+			end
 		end
 
 		-- Red-and-white curbs through corners, lane lines on the straights.
@@ -4773,6 +5767,87 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 	end
 	part(folder, "Banner", Vector3.new(def.width + 10, 3, 1), lineCf * CFrame.new(0, 17, 0), rgb(theme.accent), Enum.Material.Neon)
 
+	-- Surface patches: syrup, water, conveyor belts, launch pads.
+	local zoneStyle = {
+		sticky = { color = Color3.fromRGB(150, 85, 30), material = Enum.Material.Glass, transparency = 0.1 },
+		slippery = { color = Color3.fromRGB(120, 190, 255), material = Enum.Material.Glass, transparency = 0.35 },
+		conveyor = { color = Color3.fromRGB(70, 72, 82), material = Enum.Material.SmoothPlastic, transparency = 0 },
+		launch = { color = Color3.fromRGB(255, 80, 80), material = Enum.Material.Neon, transparency = 0 },
+	}
+	for zi, zone in def.zones or {} do
+		local style = zoneStyle[zone.kind]
+		if style then
+			local width = zone.width or def.width
+			local offset = (zone.offset or 0) * (half - width / 2)
+			local from = zone.t * track.length - zone.length / 2
+			local steps = math.max(1, math.ceil(zone.length / 10))
+			for k = 0, steps - 1 do
+				local d = from + (k + 0.5) * zone.length / steps
+				local p = v3(Track.spot(track, d, offset))
+				local _, tan = Track.at(track, d)
+				local zcf = CFrame.lookAt(p, p + v3(tan))
+				local patch = part(markings, "Zone", Vector3.new(width, 0.12, zone.length / steps + 0.4), zcf * CFrame.new(0, 0.07, 0), style.color, style.material)
+				patch.Transparency = style.transparency
+				patch.CanCollide = false
+				patch.CanQuery = false
+				patch:SetAttribute("ZoneIndex", zi)
+				if zone.kind == "conveyor" and k % 2 == 0 then
+					local arrow = part(markings, "ConveyorArrow", Vector3.new(width * 0.5, 0.15, 2), zcf * CFrame.new(0, 0.1, 0) * CFrame.Angles(0, math.rad(45), 0), Color3.fromRGB(255, 210, 60), Enum.Material.Neon)
+					arrow.CanCollide = false
+					arrow.CanQuery = false
+				end
+			end
+		end
+	end
+
+	-- Shortcut paths: a narrow road through the gap in the wall.
+	for _, sc in def.shortcuts or {} do
+		local sa, sb = Track.shortcutEnds(track, sc)
+		local pa, pb = v3(sa), v3(sb)
+		local length = (pb - pa).Magnitude + sc.width
+		local scCf = CFrame.lookAt((pa + pb) / 2, pb)
+		local road = part(folder, "ShortcutRoad", Vector3.new(sc.width, 1, length), scCf * CFrame.new(0, -0.5, 0), roadColor:Lerp(rgb(theme.accent), 0.25), Enum.Material.SmoothPlastic)
+		road:SetAttribute("Surface", sc.surface or "road")
+		-- Connect each end to the road edge across the grass shoulder.
+		for _, endpoint in { { at = sc.from, p = pa }, { at = sc.to, p = pb } } do
+			local edge = v3(Track.spot(track, endpoint.at * track.length, sc.side * half))
+			local link = (endpoint.p - edge)
+			part(folder, "ShortcutLink", Vector3.new(sc.width, 1, link.Magnitude + sc.width), CFrame.lookAt((edge + endpoint.p) / 2, endpoint.p) * CFrame.new(0, -0.49, 0), roadColor:Lerp(rgb(theme.accent), 0.25), Enum.Material.SmoothPlastic)
+		end
+		-- Little arrows hint the way in.
+		for _, side in { -1, 1 } do
+			Shapes.box(folder, Vector3.new(0.8, 6, 0.8), scCf * CFrame.new(side * (sc.width / 2 + 1), 3, -length / 2 + 2), { color = rgb(theme.accent), material = Enum.Material.Neon })
+		end
+		if def.theme == "backyard" then
+			-- The shortcut runs through a hollow log.
+			local logLen = math.min(length * 0.5, 60)
+			for z = -logLen / 2, logLen / 2, 4 do
+				Shapes.arch(folder, sc.width + 6, 3, 4.5, scCf * CFrame.new(0, -2, z), { color = Color3.fromRGB(130, 90, 55), collide = true }, 14)
+			end
+		end
+	end
+
+	-- Tunnels, landmarks and moving crossers.
+	local landmarks = Instance.new("Folder")
+	landmarks.Name = "Landmarks"
+	landmarks.Parent = folder
+	for _, tn in def.tunnels or {} do
+		Landmarks.tunnel(track, tn.style, tn.from, tn.to, theme, landmarks)
+	end
+	for _, spot in Scenery.setPieceSpots(track) do
+		Landmarks.setPiece(spot.kind, CFrame.new(spot.x, spot.y, spot.z) * CFrame.Angles(0, spot.yaw, 0), theme, landmarks)
+	end
+	local crossersFolder = Instance.new("Folder")
+	crossersFolder.Name = "Crossers"
+	crossersFolder.Parent = folder
+	for ci, cr in def.crossers or {} do
+		local p = Track.spot(track, cr.t * track.length, -(half + sw))
+		Landmarks.crosser(cr.kind, ci, crossersFolder, CFrame.new(p.x, p.y, p.z))
+	end
+	if theme.room then
+		Landmarks.room(theme, minX, maxX, minZ, maxZ, minY, landmarks)
+	end
+
 	-- Jump ramps. The low edge faces oncoming karts; the tall back edge launches them.
 	for _, ramp in def.ramps or {} do
 		local d = ramp.t * track.length
@@ -4816,19 +5891,19 @@ return TrackBuilder
       </Item>
     </Item>
   </Item>
-  <Item class="StarterPlayer" referent="30">
+  <Item class="StarterPlayer" referent="31">
     <Properties>
       <string name="Name">StarterPlayer</string>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="31">
+    <Item class="StarterPlayerScripts" referent="32">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="Folder" referent="32">
+      <Item class="Folder" referent="33">
         <Properties>
           <string name="Name">Client</string>
         </Properties>
-        <Item class="ModuleScript" referent="33">
+        <Item class="ModuleScript" referent="34">
           <Properties>
             <string name="Name">GarageUI</string>
             <string name="Source"><![CDATA[-- The garage: choose your kart type (stats), body design and paint. Opens
@@ -4974,7 +6049,7 @@ return GarageUI
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="34">
+        <Item class="ModuleScript" referent="35">
           <Properties>
             <string name="Name">Hud</string>
             <string name="Source"><![CDATA[-- In-race screens: place, lap, item slot with roulette, standings, countdown,
@@ -5202,7 +6277,7 @@ return Hud
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="35">
+        <Item class="ModuleScript" referent="36">
           <Properties>
             <string name="Name">KartController</string>
             <string name="Source"><![CDATA[-- Drives your kart: reads input, runs KartPhysics on this client (you own the
@@ -5520,7 +6595,7 @@ local function step(dt: number)
 	local pos = Track.v(root.Position.X, root.Position.Y, root.Position.Z)
 	local proj = Track.project(s.track, pos, s.hint)
 	s.hint = proj.index
-	local surface = Track.surfaceAt(s.track, proj)
+	local surface = Track.surfaceAt(s.track, proj, pos, t)
 	if s.mode == "practice" and (surface == "offroad" or surface == "wall") then
 		surface = "road" -- the practice area is open tarmac
 	end
@@ -5651,7 +6726,7 @@ return KartController
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="36">
+        <Item class="ModuleScript" referent="37">
           <Properties>
             <string name="Name">KartVisuals</string>
             <string name="Source"><![CDATA[-- Makes every nearby kart look alive, on this client only: the body leans into
@@ -5768,7 +6843,7 @@ return KartVisuals
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="37">
+        <Item class="ModuleScript" referent="38">
           <Properties>
             <string name="Name">LobbyUI</string>
             <string name="Source"><![CDATA[-- Lobby screens: the status bar (phase + countdown, always visible), the
@@ -6055,7 +7130,7 @@ return LobbyUI
 ]]></string>
           </Properties>
         </Item>
-        <Item class="LocalScript" referent="38">
+        <Item class="LocalScript" referent="39">
           <Properties>
             <string name="Name">Main</string>
             <string name="Source"><![CDATA[-- Client entry point: wires remotes to the lobby screens, garage, race HUD,
@@ -6075,6 +7150,7 @@ local KartVisuals = require(script.Parent.KartVisuals)
 local KartController = require(script.Parent.KartController)
 local LobbyUI = require(script.Parent.LobbyUI)
 local Spectate = require(script.Parent.Spectate)
+local TrackAnimator = require(script.Parent.TrackAnimator)
 
 local roundState: any = nil
 
@@ -6230,6 +7306,7 @@ RunService.RenderStepped:Connect(function(dt)
 	LobbyUI.update()
 	Hud.update()
 	KartVisuals.step(dt)
+	TrackAnimator.step()
 	for i = #spinners, 1, -1 do
 		local inst = spinners[i]
 		if not inst.Parent then
@@ -6255,7 +7332,7 @@ end)
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="39">
+        <Item class="ModuleScript" referent="40">
           <Properties>
             <string name="Name">Spectate</string>
             <string name="Source"><![CDATA[-- Spectator camera: follows a racer's kart from behind. Used by lobby players
@@ -6357,7 +7434,122 @@ return Spectate
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="40">
+        <Item class="ModuleScript" referent="41">
+          <Properties>
+            <string name="Name">TrackAnimator</string>
+            <string name="Source"><![CDATA[-- Animates the current track on this client: crossers (toy robot, toy train,
+-- beetles) walk across the road, sprinklers spray while their wet zone is
+-- on, and wet patches only show while they are slippery. Everything is
+-- computed from the shared server clock (Track.crosserAt / Track.zoneActive),
+-- so what you see matches what the server uses for hits.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Track = require(Shared:WaitForChild("Track"))
+local Tracks = require(Shared:WaitForChild("Tracks"))
+
+local TrackAnimator = {}
+
+local current: { folder: Instance, track: Track.Built, sprinklers: { { emitter: ParticleEmitter, zone: any } }, patches: { { part: BasePart, zone: any } } }? = nil
+
+local function setup(folder: Instance)
+	local id = folder:GetAttribute("TrackId")
+	if type(id) ~= "string" then
+		return nil
+	end
+	local ok, def = pcall(Tracks.get, id)
+	if not ok then
+		return nil
+	end
+	local track = Track.build(def)
+
+	-- Pair each sprinkler with the nearest slippery zone.
+	local zones = {}
+	for _, z in def.zones or {} do
+		if z.kind == "slippery" then
+			local p = Track.spot(track, z.t * track.length, 0)
+			table.insert(zones, { zone = z, pos = Vector3.new(p.x, p.y, p.z) })
+		end
+	end
+	local sprinklers = {}
+	for _, d in folder:GetDescendants() do
+		if d:IsA("ParticleEmitter") and d.Name == "Water" and d.Parent and d.Parent:IsA("BasePart") then
+			local best, bestDist = nil, math.huge
+			for _, z in zones do
+				local dist = ((d.Parent :: BasePart).Position - z.pos).Magnitude
+				if dist < bestDist then
+					best, bestDist = z.zone, dist
+				end
+			end
+			if best then
+				table.insert(sprinklers, { emitter = d, zone = best })
+			end
+		end
+	end
+	local patches = {}
+	for _, d in folder:GetDescendants() do
+		local zi = d:GetAttribute("ZoneIndex")
+		if zi and d:IsA("BasePart") then
+			local zone = (def.zones :: any)[zi]
+			if zone and zone.period then
+				table.insert(patches, { part = d, zone = zone })
+			end
+		end
+	end
+	return { folder = folder, track = track, sprinklers = sprinklers, patches = patches }
+end
+
+function TrackAnimator.step()
+	local folder = Workspace:FindFirstChild("Track")
+	if not folder then
+		current = nil
+		return
+	end
+	if not current or current.folder ~= folder then
+		current = setup(folder)
+		if not current then
+			return
+		end
+	end
+	local c = current :: any
+	local t = Workspace:GetServerTimeNow()
+	local def = c.track.def
+
+	local crossers = folder:FindFirstChild("Crossers")
+	if crossers then
+		for _, model in crossers:GetChildren() do
+			local index = model:GetAttribute("CrosserIndex")
+			local cr = index and (def.crossers :: any)[index]
+			if cr and model:IsA("Model") then
+				local d, lat = Track.crosserAt(c.track, cr, t)
+				local _, latAhead = Track.crosserAt(c.track, cr, t + 0.1)
+				local p = Track.spot(c.track, d, lat)
+				local _, tan = Track.at(c.track, d)
+				-- Face the way it is walking (across the road).
+				local right = Vector3.new(-tan.z, 0, tan.x).Unit
+				local facing = if latAhead >= lat then right else -right
+				local bob = math.abs(math.sin(t * 8)) * (if cr.kind == "beetle" then 0.6 else 0.3)
+				local pos = Vector3.new(p.x, p.y + bob, p.z)
+				model:PivotTo(CFrame.lookAt(pos, pos + facing))
+			end
+		end
+	end
+
+	for _, s in c.sprinklers do
+		s.emitter.Enabled = Track.zoneActive(s.zone, t)
+	end
+	for _, p in c.patches do
+		p.part.Transparency = if Track.zoneActive(p.zone, t) then 0.25 else 0.85
+	end
+end
+
+return TrackAnimator
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="42">
           <Properties>
             <string name="Name">UI</string>
             <string name="Source"><![CDATA[-- Shared look for every screen: rounded panels, chunky buttons sized for
@@ -6544,7 +7736,7 @@ return UI
       </Item>
     </Item>
   </Item>
-  <Item class="Workspace" referent="41">
+  <Item class="Workspace" referent="43">
     <Properties>
       <string name="Name">Workspace</string>
       <float name="Gravity">150</float>

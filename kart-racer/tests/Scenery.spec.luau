@@ -31,3 +31,22 @@ T.test("scenery is the same every time (all servers agree)", function()
 	T.eq(#a, #b)
 	T.eq(a[10].x, b[10].x)
 end)
+
+T.test("shortcut paths and landmarks stay clear of scenery", function()
+	for _, def in Tracks.List do
+		local track = Track.build(def)
+		local radii = {}
+		for _, rules in Scenery.Themes do
+			for _, r in rules do
+				radii[r.kind] = r.radius
+			end
+		end
+		for _, prop in Scenery.place(track) do
+			if prop.kind ~= "grandstand" then
+				local d = Scenery.shortcutDistance(track, prop.x, prop.z)
+				T.ok(d >= (radii[prop.kind] or 0) * prop.size + 5, `{def.id}: {prop.kind} blocks a shortcut`)
+			end
+		end
+		T.eq(#Scenery.setPieceSpots(track), #(def.setPieces or {}))
+	end
+end)

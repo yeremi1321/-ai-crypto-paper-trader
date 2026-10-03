@@ -3,6 +3,9 @@
 -- and a parent, and makes anchored, non-colliding decoration (grandstands
 -- and towers collide so nobody drives through them).
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Shapes = require(ReplicatedStorage.Common.Shapes)
+
 local Props = {}
 
 local function rgb(c: { number }): Color3
@@ -162,6 +165,150 @@ builders.lamp = function(prop, theme, parent)
 	light.Range = 30
 	light.Brightness = 2
 	light.Parent = head
+end
+
+---------------------------------------------------------------------------
+-- Oversized-world props (toy room, kitchen, backyard)
+---------------------------------------------------------------------------
+local function base(prop: any): CFrame
+	return CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
+end
+
+local function pick(list: { Color3 }, prop: any): Color3
+	return list[(math.floor(math.abs(prop.x * 3 + prop.z * 7)) % #list) + 1]
+end
+
+local TOY_COLORS = { Color3.fromRGB(240, 80, 80), Color3.fromRGB(80, 150, 240), Color3.fromRGB(255, 210, 60), Color3.fromRGB(110, 210, 120), Color3.fromRGB(190, 110, 230) }
+
+builders.toyBlock = function(prop, _theme, parent)
+	local s = prop.size * 14
+	local color = pick(TOY_COLORS, prop)
+	local parts = Shapes.roundedBox(parent, Vector3.new(s, s, s), s * 0.12, base(prop) * CFrame.new(0, s / 2, 0), { color = color, collide = true })
+	local _ = parts
+	-- A raised letter panel on the front.
+	local panel = Shapes.box(parent, Vector3.new(s * 0.7, s * 0.7, 0.4), base(prop) * CFrame.new(0, s / 2, -s / 2 - 0.2), { color = Color3.fromRGB(255, 255, 255) })
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 10
+	gui.Parent = panel
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.FredokaOne
+	label.TextScaled = true
+	label.TextColor3 = color
+	local letters = { "A", "B", "C", "K", "Z", "1", "2", "3" }
+	label.Text = letters[(math.floor(math.abs(prop.x + prop.z)) % #letters) + 1]
+	label.Parent = gui
+end
+
+builders.toyBall = function(prop, _theme, parent)
+	local d = prop.size * 20
+	local cf = base(prop) * CFrame.new(0, d / 2, 0)
+	Shapes.ball(parent, d, cf, { color = pick(TOY_COLORS, prop), collide = true })
+	Shapes.tube(parent, d * 1.01, d * 0.18, cf * CFrame.Angles(0, 0, math.rad(90)), { color = Color3.fromRGB(255, 255, 255) })
+end
+
+builders.crayon = function(prop, _theme, parent)
+	local s = prop.size
+	local color = pick(TOY_COLORS, prop)
+	local cf = base(prop) * CFrame.new(0, 2.5 * s, 0)
+	Shapes.tube(parent, 5 * s, 28 * s, cf, { color = color })
+	Shapes.tube(parent, 5.3 * s, 6 * s, cf * CFrame.new(4 * s, 0, 0), { color = Color3.fromRGB(255, 255, 255) })
+	Shapes.ellipsoid(parent, Vector3.new(7 * s, 4 * s, 4 * s), cf * CFrame.new(15 * s, 0, 0), { color = color })
+end
+
+builders.book = function(prop, _theme, parent)
+	local s = prop.size
+	local color = pick(TOY_COLORS, prop)
+	Shapes.roundedBox(parent, Vector3.new(50 * s, 7 * s, 36 * s), 2 * s, base(prop) * CFrame.new(0, 3.5 * s, 0), { color = color, collide = true })
+	Shapes.box(parent, Vector3.new(48 * s, 5.6 * s, 35 * s), base(prop) * CFrame.new(1 * s, 3.5 * s, 0), { color = Color3.fromRGB(250, 245, 230) })
+end
+
+local FRUIT = { Color3.fromRGB(230, 50, 50), Color3.fromRGB(255, 160, 40), Color3.fromRGB(250, 220, 60), Color3.fromRGB(120, 200, 60), Color3.fromRGB(150, 60, 160) }
+
+builders.fruit = function(prop, _theme, parent)
+	local d = prop.size * 16
+	local cf = base(prop) * CFrame.new(0, d / 2, 0)
+	Shapes.ellipsoid(parent, Vector3.new(d, d * 0.92, d), cf, { color = pick(FRUIT, prop), collide = true, reflectance = 0.08 })
+	Shapes.pillar(parent, 0.8 * prop.size, 3 * prop.size, cf * CFrame.new(0, d * 0.5, 0), { color = Color3.fromRGB(110, 75, 45) })
+	Shapes.ellipsoid(parent, Vector3.new(4, 1, 2.2) * prop.size, cf * CFrame.new(1.8 * prop.size, d * 0.5, 0), { color = Color3.fromRGB(90, 180, 70) })
+end
+
+builders.jar = function(prop, _theme, parent)
+	local s = prop.size
+	local cf = base(prop)
+	Shapes.pillar(parent, 20 * s, 26 * s, cf * CFrame.new(0, 13 * s, 0), { color = Color3.fromRGB(200, 230, 255), material = Enum.Material.Glass, transparency = 0.4, collide = true })
+	Shapes.pillar(parent, 18 * s, 18 * s, cf * CFrame.new(0, 10 * s, 0), { color = pick(FRUIT, prop) })
+	Shapes.pillar(parent, 21 * s, 4 * s, cf * CFrame.new(0, 27.5 * s, 0), { color = Color3.fromRGB(220, 60, 60) })
+end
+
+builders.cookie = function(prop, _theme, parent)
+	local s = prop.size
+	local cf = base(prop) * CFrame.new(0, 1.2 * s, 0)
+	Shapes.disc(parent, 16 * s, 2.4 * s, cf, { color = Color3.fromRGB(215, 160, 95) })
+	for i = 1, 5 do
+		local a = i * 1.3
+		Shapes.ball(parent, 2.2 * s, cf * CFrame.new(math.cos(a) * 4.5 * s, 1.3 * s, math.sin(a) * 4.5 * s), { color = Color3.fromRGB(90, 55, 35) })
+	end
+end
+
+builders.shaker = function(prop, _theme, parent)
+	local s = prop.size
+	local cf = base(prop)
+	Shapes.pillar(parent, 8 * s, 18 * s, cf * CFrame.new(0, 9 * s, 0), { color = Color3.fromRGB(245, 245, 250), material = Enum.Material.Glass, transparency = 0.2, collide = true })
+	Shapes.ellipsoid(parent, Vector3.new(8.4, 5, 8.4) * s, cf * CFrame.new(0, 18 * s, 0), { color = Color3.fromRGB(200, 205, 215), reflectance = 0.3 })
+end
+
+builders.grassBlade = function(prop, _theme, parent)
+	local s = prop.size
+	local green = Color3.fromRGB(80 + math.floor(prop.x) % 40, 170 + math.floor(prop.z) % 40, 60)
+	local cf = base(prop)
+	for k = 0, 2 do
+		local lean = CFrame.Angles(math.rad(8 + k * 6), math.rad(k * 120), 0)
+		Shapes.ellipsoid(parent, Vector3.new(2.4 * s, 30 * s, 1 * s), cf * lean * CFrame.new(0, 14 * s, 0), { color = green })
+	end
+end
+
+builders.flower = function(prop, _theme, parent)
+	local s = prop.size
+	local cf = base(prop)
+	Shapes.pillar(parent, 1.4 * s, 26 * s, cf * CFrame.new(0, 13 * s, 0), { color = Color3.fromRGB(80, 160, 70) })
+	local petal = pick({ Color3.fromRGB(255, 120, 170), Color3.fromRGB(255, 255, 255), Color3.fromRGB(255, 200, 60), Color3.fromRGB(170, 120, 255) }, prop)
+	for i = 0, 5 do
+		local a = i / 6 * math.pi * 2
+		Shapes.ellipsoid(parent, Vector3.new(7, 2, 4) * s, cf * CFrame.new(math.cos(a) * 4 * s, 27 * s, math.sin(a) * 4 * s) * CFrame.Angles(0, -a, 0), { color = petal })
+	end
+	Shapes.ball(parent, 4 * s, cf * CFrame.new(0, 27.5 * s, 0), { color = Color3.fromRGB(255, 210, 60) })
+	Shapes.ellipsoid(parent, Vector3.new(7, 1, 3) * s, cf * CFrame.new(2.5 * s, 9 * s, 0) * CFrame.Angles(0, 0, 0.5), { color = Color3.fromRGB(90, 170, 70) })
+end
+
+builders.pebble = function(prop, _theme, parent)
+	local s = prop.size
+	local grey = 150 + math.floor(math.abs(prop.x)) % 50
+	Shapes.ellipsoid(parent, Vector3.new(14, 7, 10) * s, base(prop) * CFrame.new(0, 2.5 * s, 0), { color = Color3.fromRGB(grey, grey - 5, grey - 15), collide = true })
+end
+
+builders.mushroom = function(prop, _theme, parent)
+	local s = prop.size
+	local cf = base(prop)
+	Shapes.pillar(parent, 5 * s, 10 * s, cf * CFrame.new(0, 5 * s, 0), { color = Color3.fromRGB(245, 235, 215) })
+	Shapes.ellipsoid(parent, Vector3.new(16, 9, 16) * s, cf * CFrame.new(0, 11 * s, 0), { color = Color3.fromRGB(230, 60, 60) })
+	for i = 1, 5 do
+		local a = i * 1.25
+		Shapes.ball(parent, 2.4 * s, cf * CFrame.new(math.cos(a) * 4.5 * s, 14.2 * s, math.sin(a) * 4.5 * s), { color = Color3.fromRGB(255, 255, 255) })
+	end
+end
+
+builders.clover = function(prop, _theme, parent)
+	local s = prop.size
+	local cf = base(prop)
+	Shapes.pillar(parent, 0.8 * s, 6 * s, cf * CFrame.new(0, 3 * s, 0), { color = Color3.fromRGB(80, 160, 70) })
+	for i = 0, 2 do
+		local a = i / 3 * math.pi * 2
+		Shapes.ellipsoid(parent, Vector3.new(5, 0.8, 5) * s, cf * CFrame.new(math.cos(a) * 2.4 * s, 6 * s, math.sin(a) * 2.4 * s), { color = Color3.fromRGB(90, 190, 80) })
+	end
 end
 
 function Props.build(prop: any, theme: any, parent: Instance)

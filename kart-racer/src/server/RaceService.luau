@@ -60,6 +60,8 @@ export type Racer = {
 	-- Stats for results and awards
 	worstPlace: number,
 	hitsTaken: number,
+	shortcutsTaken: number,
+	onShortcut: boolean,
 	-- Items (managed by ItemService)
 	item: string?,
 	uses: number,
@@ -79,6 +81,7 @@ export type ResultRow = {
 	look: KartBodies.Look,
 	worstPlace: number,
 	hitsTaken: number,
+	shortcutsTaken: number,
 }
 
 type Race = {
@@ -314,6 +317,7 @@ local function finishRace(r: Race)
 			look = racer.entrant.look,
 			worstPlace = racer.worstPlace,
 			hitsTaken = racer.hitsTaken,
+			shortcutsTaken = racer.shortcutsTaken,
 		})
 	end
 	ItemService.clear()
@@ -377,6 +381,8 @@ function RaceService.startRace(trackId: string, entrants: { Entrant }, onEnded: 
 			lastRespawn = 0,
 			worstPlace = slot,
 			hitsTaken = 0,
+			shortcutsTaken = 0,
+			onShortcut = false,
 			item = nil,
 			uses = 0,
 			itemReadyAt = 0,
@@ -536,7 +542,7 @@ local function stepCpus(dt: number)
 		local pos = vec(root.Position)
 		local proj = Track.project(r.track, pos, racer.progress.index)
 		local input = AIDriver.input(r.track, proj, pos, s, racer.stats, racer.entrant.profile)
-		local surface = Track.surfaceAt(r.track, proj)
+		local surface = Track.surfaceAt(r.track, proj, pos, now())
 		input.surface = if surface == "wall" then "offroad" else surface
 		input.grounded = sensed.grounded
 		input.drafting = KartPhysics.isDrafting(root.Position.X, root.Position.Z, s.yaw, others)
@@ -564,7 +570,13 @@ local function tickRace(r: Race)
 		local pos = vec(root.Position)
 		local proj = Track.project(track, pos, racer.progress.index)
 		local roadY = Track.spot(track, proj.distance, 0).y
-		if proj.gap > track.def.width + Track.ShoulderWidth * 2 or root.Position.Y < roadY - FALL_DEPTH then
+		local onShortcut = Track.shortcutAt(track, pos) ~= nil
+		if onShortcut and not racer.onShortcut then
+			racer.shortcutsTaken += 1
+		end
+		racer.onShortcut = onShortcut
+		local offTrack = proj.gap > track.def.width + Track.ShoulderWidth * 2 and not onShortcut
+		if offTrack or root.Position.Y < roadY - FALL_DEPTH then
 			respawn(r, racer)
 		elseif Track.updateProgress(track, racer.progress, proj) then
 			if racer.progress.lap > track.def.laps and not racer.finishTime then
@@ -613,6 +625,23 @@ local function tickRace(r: Race)
 		if racer.entrant.isCpu then
 			local lead = if bestHuman > -math.huge then racer.score - bestHuman else 0
 			racer.speedFactor = RaceRules.cpuSpeedFactor(leaderScore - racer.score, lead, racer.entrant.profile.skill)
+		end
+	end
+
+	-- Moving crossers (toy robot, train, beetles) bump anyone they touch.
+	for _, cr in track.def.crossers or {} do
+		local d, lat, active = Track.crosserAt(track, cr, t)
+		if active then
+			local p = Track.spot(track, d, lat)
+			local hazard = Vector3.new(p.x, p.y, p.z)
+			for _, racer in r.racers do
+				local root = racer.model.PrimaryPart
+				if root and (Vector3.new(root.Position.X, p.y, root.Position.Z) - hazard).Magnitude < cr.radius + 2.5 then
+					if Effects.hit(racer, "spin") then
+						Effects.warn(racer, "BONK!")
+					end
+				end
+			end
 		end
 	end
 

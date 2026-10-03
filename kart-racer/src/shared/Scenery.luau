@@ -34,6 +34,26 @@ Scenery.Themes = {
 		{ kind = "rock", count = 110, near = 8, far = 200, minSize = 0.6, maxSize = 1.8, radius = 9 },
 		{ kind = "cactus", count = 70, near = 8, far = 160, minSize = 0.8, maxSize = 1.4, radius = 4 },
 	},
+	-- Tiny racers, oversized world: everything here is giant.
+	toyroom = {
+		{ kind = "toyBlock", count = 70, near = 10, far = 220, minSize = 0.8, maxSize = 1.6, radius = 10 },
+		{ kind = "toyBall", count = 30, near = 14, far = 240, minSize = 0.8, maxSize = 1.5, radius = 12 },
+		{ kind = "crayon", count = 40, near = 6, far = 160, minSize = 0.9, maxSize = 1.3, radius = 6 },
+		{ kind = "book", count = 24, near = 20, far = 240, minSize = 0.9, maxSize = 1.4, radius = 18 },
+	},
+	kitchen = {
+		{ kind = "fruit", count = 60, near = 8, far = 200, minSize = 0.8, maxSize = 1.5, radius = 9 },
+		{ kind = "jar", count = 26, near = 16, far = 220, minSize = 0.9, maxSize = 1.5, radius = 12 },
+		{ kind = "cookie", count = 40, near = 6, far = 160, minSize = 0.8, maxSize = 1.3, radius = 7 },
+		{ kind = "shaker", count = 20, near = 10, far = 180, minSize = 1, maxSize = 1.4, radius = 6 },
+	},
+	backyard = {
+		{ kind = "grassBlade", count = 170, near = 4, far = 200, minSize = 0.7, maxSize = 1.6, radius = 3 },
+		{ kind = "flower", count = 60, near = 8, far = 220, minSize = 0.8, maxSize = 1.5, radius = 7 },
+		{ kind = "pebble", count = 50, near = 4, far = 180, minSize = 0.6, maxSize = 1.6, radius = 7 },
+		{ kind = "mushroom", count = 26, near = 10, far = 200, minSize = 0.8, maxSize = 1.5, radius = 8 },
+		{ kind = "clover", count = 50, near = 2, far = 120, minSize = 0.8, maxSize = 1.3, radius = 4 },
+	},
 	neon = {
 		{ kind = "tower", count = 80, near = 30, far = 300, minSize = 0.7, maxSize = 2.2, radius = 24 },
 		{ kind = "lamp", count = 60, near = 3, far = 6, minSize = 1, maxSize = 1, radius = 2 },
@@ -58,6 +78,39 @@ function Scenery.barrier(track: Track.Built): number
 	return track.def.width / 2 + Track.ShoulderWidth + 1
 end
 
+Scenery.SetPieceRadius = 40
+
+-- Where each landmark from the track's setPieces goes, and which way it faces
+-- (toward the road). side 0 puts it over the road itself (e.g. an arch).
+function Scenery.setPieceSpots(track: Track.Built): { Prop }
+	local out = {}
+	local barrier = Scenery.barrier(track)
+	for _, sp in track.def.setPieces or {} do
+		local d = sp.t * track.length
+		local gap = sp.gap or 30
+		local lateral = if sp.side == 0 then 0 else sp.side * (barrier + gap)
+		local spot = Track.spot(track, d, lateral)
+		local _, tan = Track.at(track, d)
+		local faceRoad = math.atan2(tan.x, tan.z) + (if sp.side > 0 then math.pi / 2 else -math.pi / 2)
+		table.insert(out, { kind = sp.kind, x = spot.x, y = spot.y, z = spot.z, size = 1, yaw = faceRoad })
+	end
+	return out
+end
+
+-- Flat distance from a point to a shortcut's path.
+local function shortcutDistance(track: Track.Built, x: number, z: number): number
+	local best = math.huge
+	for _, sc in track.def.shortcuts or {} do
+		local a, b = Track.shortcutEnds(track, sc)
+		local abx, abz = b.x - a.x, b.z - a.z
+		local t = math.clamp(((x - a.x) * abx + (z - a.z) * abz) / (abx * abx + abz * abz), 0, 1)
+		local dx, dz = x - (a.x + abx * t), z - (a.z + abz * t)
+		best = math.min(best, math.sqrt(dx * dx + dz * dz) - sc.width / 2)
+	end
+	return best
+end
+Scenery.shortcutDistance = shortcutDistance
+
 function Scenery.place(track: Track.Built): { Prop }
 	local rules = Scenery.Themes[track.def.theme] or {}
 	local random = rng(track.def.id)
@@ -69,6 +122,7 @@ function Scenery.place(track: Track.Built): { Prop }
 
 	local props: { Prop } = {}
 	local placedRadius: { number } = {}
+	local reserved = Scenery.setPieceSpots(track)
 
 	local function clear(x: number, z: number, radius: number): boolean
 		-- Away from every part of the track (matters where the track loops back).
@@ -82,6 +136,17 @@ function Scenery.place(track: Track.Built): { Prop }
 		for i, other in props do
 			local dx, dz = other.x - x, other.z - z
 			local need = placedRadius[i] + radius
+			if dx * dx + dz * dz < need * need then
+				return false
+			end
+		end
+		-- Keep shortcut paths and landmark spots clear.
+		if shortcutDistance(track, x, z) < radius + 6 then
+			return false
+		end
+		for _, sp in reserved do
+			local dx, dz = sp.x - x, sp.z - z
+			local need = Scenery.SetPieceRadius + radius
 			if dx * dx + dz * dz < need * need then
 				return false
 			end

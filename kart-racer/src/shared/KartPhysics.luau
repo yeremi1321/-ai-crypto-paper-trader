@@ -41,6 +41,9 @@ KartPhysics.BoostPadTime = 1.0
 KartPhysics.ChargeLevels = { 0.9, 1.8, 2.9 } -- charge needed for each mini-turbo
 KartPhysics.TurboTimes = { 0.6, 1.1, 1.7 } -- boost seconds each level gives
 KartPhysics.SlowFactor = 0.5
+KartPhysics.ConveyorFactor = 1.15
+KartPhysics.SlipperyGrip = 0.55 -- normal steering on wet ground
+KartPhysics.LaunchBoost = 1.2
 -- Slipstream: stay behind someone this long to get a boost.
 KartPhysics.DraftTime = 1.1
 KartPhysics.DraftBoost = 0.9
@@ -80,6 +83,11 @@ function KartPhysics.targetTop(stats: Karts.KartStats, s: State, surface: string
 		top *= KartPhysics.BoostFactor
 	elseif surface == "offroad" then
 		top *= KartPhysics.OffroadFactor
+	end
+	if surface == "sticky" then
+		top *= KartPhysics.OffroadFactor
+	elseif surface == "conveyor" then
+		top *= KartPhysics.ConveyorFactor
 	end
 	if s.slow > 0 then
 		top *= KartPhysics.SlowFactor
@@ -202,6 +210,8 @@ function KartPhysics.step(stats: Karts.KartStats, s: State, input: Input, dt: nu
 
 	if input.surface == "boost" then
 		KartPhysics.giveBoost(s, KartPhysics.BoostPadTime)
+	elseif input.surface == "launch" then
+		KartPhysics.giveBoost(s, KartPhysics.LaunchBoost)
 	end
 
 	if s.spin > 0 then
@@ -259,6 +269,9 @@ function KartPhysics.step(stats: Karts.KartStats, s: State, input: Input, dt: nu
 		end
 	else
 		local grip = math.clamp(math.abs(s.speed) / (stats.topSpeed * 0.25), 0, 1)
+		if input.surface == "slippery" then
+			grip *= KartPhysics.SlipperyGrip
+		end
 		turn = steer * stats.handling * grip * (if s.speed < 0 then -1 else 1)
 	end
 	if not input.grounded then

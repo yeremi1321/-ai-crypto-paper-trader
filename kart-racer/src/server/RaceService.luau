@@ -20,6 +20,7 @@ local Karts = require(Shared.Karts)
 local RaceRules = require(Shared.RaceRules)
 local Track = require(Shared.Track)
 local KartRig = require(ReplicatedStorage.Common.KartRig)
+local Shapes = require(ReplicatedStorage.Common.Shapes)
 
 local ItemService = require(script.Parent.ItemService)
 local Net = require(script.Parent.Net)
@@ -55,6 +56,7 @@ export type Racer = {
 	finishTime: number?,
 	invincibleUntil: number,
 	protectUntil: number, -- brief immunity after any hit, so nobody gets juggled
+	shieldUntil: number, -- Bubble Shield: blocks the next attack
 	speedFactor: number,
 	lastRespawn: number,
 	-- Stats for results and awards
@@ -137,10 +139,58 @@ RaceService.Effects = Effects
 
 local HIT_PROTECTION = 2.5
 
--- Returns true if the hit landed. Overdrive and the post-hit grace period block it.
+local function removeBubble(racer: Racer)
+	local bubble = racer.model:FindFirstChild("ShieldBubble")
+	if bubble then
+		bubble:Destroy()
+	end
+end
+
+-- Bubble Shield: a see-through bubble around the kart that blocks one attack.
+function Effects.shield(racer: Racer, seconds: number)
+	local root = racer.model.PrimaryPart
+	if not root then
+		return
+	end
+	racer.shieldUntil = now() + seconds
+	removeBubble(racer)
+	local bubble = Shapes.ball(racer.model, 10, root.CFrame, {
+		color = Color3.fromRGB(170, 220, 255),
+		material = Enum.Material.Glass,
+		transparency = 0.55,
+		reflectance = 0.2,
+		anchored = false,
+		name = "ShieldBubble",
+	})
+	bubble.Massless = true
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = root
+	weld.Part1 = bubble
+	weld.Parent = bubble
+	task.delay(seconds, function()
+		if now() >= racer.shieldUntil then
+			removeBubble(racer)
+		end
+	end)
+	Effects.warn(racer, "🫧 Shield up!")
+end
+
+-- Returns true if the hit landed. A Bubble Shield, Overdrive and the
+-- post-hit grace period all block it.
 function Effects.hit(racer: Racer, kind: string?): boolean
 	local t = now()
 	if t < racer.invincibleUntil or t < racer.protectUntil then
+		return false
+	end
+	if t < racer.shieldUntil then
+		racer.shieldUntil = 0
+		racer.protectUntil = t + 0.8
+		removeBubble(racer)
+		local root = racer.model.PrimaryPart
+		if root then
+			ItemService.explode(root.Position + Vector3.new(0, 3, 0), "BLOCKED!", Color3.fromRGB(170, 220, 255))
+		end
+		Effects.warn(racer, "🫧 Shield blocked it!")
 		return false
 	end
 	racer.protectUntil = t + HIT_PROTECTION
@@ -377,6 +427,7 @@ function RaceService.startRace(trackId: string, entrants: { Entrant }, onEnded: 
 			finishTime = nil,
 			invincibleUntil = 0,
 			protectUntil = 0,
+			shieldUntil = 0,
 			speedFactor = 1,
 			lastRespawn = 0,
 			worstPlace = slot,

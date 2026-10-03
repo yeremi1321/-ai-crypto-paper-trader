@@ -135,15 +135,69 @@ check("KartRig builds every kart class and body design", function()
 	end
 end)
 
-check("ItemService places item boxes", function()
+check("ItemService: boxes, and every item used in a fake race", function()
 	local Track = load(shared.Track)
 	local Tracks = load(shared.Tracks)
+	local Items = load(shared.Items)
+	local KartPhysics = load(shared.KartPhysics)
+	local KartRig = load(common.KartRig)
 	local ItemService = load(server.ItemService)
-	local track = Track.build(Tracks.List[1])
+	local fakeTime = 0
+	ItemService.clock = function()
+		return fakeTime
+	end
+	local track = Track.build(Tracks.get("toyroom"))
 	ItemService.setup(track)
 	local items = game:GetService("Workspace"):FindFirstChild("Items")
-	assert(items and #items:GetChildren() == #Track.itemBoxes(track), "item boxes")
+	local boxes = 0
+	for _, child in items:GetChildren() do
+		if child:GetAttribute("ItemBox") then
+			boxes += 1
+		end
+	end
+	assert(boxes == #Track.itemBoxes(track), `item boxes: {boxes}`)
+
+	-- Two karts driving the lap, one behind the other.
+	local racers = {}
+	for i = 1, 2 do
+		local d = 200 + i * 20
+		local p = Track.spot(track, d, 0)
+		local _, tan = Track.at(track, d)
+		local yaw = math.atan2(-tan.x, -tan.z)
+		local model = KartRig.build("classic", `R{i}`, roblox.CFrame.new(p.x, p.y, p.z) * roblox.CFrame.Angles(0, yaw, 0), game:GetService("Workspace"))
+		local progress = Track.newProgress(track, d)
+		table.insert(racers, {
+			model = model, state = KartPhysics.newState(yaw), progress = progress,
+			score = d, place = 3 - i, item = nil, uses = 0, itemReadyAt = 0, cpuUseAt = math.huge,
+		})
+	end
+	local log = { hit = 0, warn = 0, boost = 0, shield = 0 }
+	local effects = {
+		hit = function() log.hit += 1 return true end,
+		warn = function() log.warn += 1 end,
+		boost = function() log.boost += 1 end,
+		shield = function() log.shield += 1 end,
+		itemChanged = function() end,
+	}
+	-- racers[1] is behind racers[2]; fire everything from the back.
+	for _, id in Items.Order do
+		local r = racers[1]
+		r.item, r.uses, r.itemReadyAt = id, 1, 0
+		ItemService.use(track, racers, r, effects, false)
+		assert(r.item == nil, `{id} not consumed`)
+		for _ = 1, 50 do
+			fakeTime += 0.05
+			ItemService.tick(track, racers, 0.05, effects)
+		end
+	end
+	assert(log.boost >= 1 and log.shield >= 1, "soda/shield effects")
+	assert(log.hit >= 1, "the rocket should hit the kart ahead")
+	assert(log.warn >= 1, "the kart ahead should be warned about the rocket")
+	print(`     items: {log.hit} hits, {log.warn} warnings`)
 	ItemService.clear()
+	for _, r in racers do
+		r.model:Destroy()
+	end
 end)
 
 check("LobbyBuilder builds the Kart Carnival", function()

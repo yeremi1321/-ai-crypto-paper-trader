@@ -653,47 +653,61 @@ return AIDriver
         <Properties>
           <string name="Name">Items</string>
           <string name="Source"><![CDATA[--!strict
--- Item definitions and the item box roll. Drivers near the back get stronger
--- catch-up items; the leader mostly gets defensive ones.
+-- Item definitions and the item box roll. Front runners mostly get defensive
+-- items and modest traps; the middle gets a mix; the back gets more recovery
+-- boosts and stronger attacks.
+--
+-- Every attack has a warning and a counter: rockets can be blocked with a
+-- Bubble Shield or dodged sideways, bombs show a fuse, traps sit still where
+-- you can see them, and a hit gives a few seconds of protection so nobody
+-- gets juggled.
 
 export type ItemDef = {
 	id: string,
 	name: string,
+	icon: string,
 	description: string,
 	uses: number,
-	front: number, -- roll weight when in 1st
-	back: number, -- roll weight when in last
+	front: number, -- roll weight in 1st
+	back: number, -- roll weight in last
 }
 
 local Items = {}
 
 Items.RouletteTime = 1.5 -- seconds of spinning before an item can be used
 Items.BoxRespawn = 3
+Items.MaxActiveHazards = 16 -- traps and projectiles on the track at once
+Items.MaxTrapsPerRacer = 3
+
+-- Tuning shared by server effects and tests.
+Items.SodaBoost = 1.4
+Items.ShieldTime = 12
+Items.RocketSpeed = 170
+Items.RocketLife = 6
+Items.BombThrow = 45 -- studs ahead it lands
+Items.BombFuse = 1.6
+Items.BombRadius = 14
+Items.JellyLife = 20
+Items.JellyHits = 2
+Items.JellySlow = 2
+Items.MineLife = 25
 
 Items.Defs = {
-	nitro = { id = "nitro", name = "Nitro", description = "A quick speed boost.", uses = 1, front = 10, back = 22 },
-	tripleNitro = { id = "tripleNitro", name = "Triple Nitro", description = "Three boosts.", uses = 3, front = 0, back = 18 },
-	oil = { id = "oil", name = "Oil Slick", description = "Drop it behind you. Anyone who drives over it spins out.", uses = 1, front = 35, back = 4 },
-	bouncer = { id = "bouncer", name = "Bouncer", description = "Fires straight ahead and bounces off walls.", uses = 1, front = 35, back = 10 },
-	homing = { id = "homing", name = "Homing Rocket", description = "Chases the racer just ahead of you.", uses = 1, front = 0, back = 24 },
-	leaderBolt = { id = "leaderBolt", name = "Leader Bolt", description = "Flies over everyone and strikes 1st place.", uses = 1, front = 0, back = 7 },
-	overdrive = { id = "overdrive", name = "Overdrive", description = "Six seconds of speed. Nothing can hit you.", uses = 1, front = 0, back = 15 },
+	turboSoda = { id = "turboSoda", name = "Turbo Soda", icon = "🥤", description = "A fizzy speed boost.", uses = 1, front = 8, back = 30 },
+	windupRocket = { id = "windupRocket", name = "Wind-up Rocket", icon = "🚀", description = "Zooms along the road and pops on the first kart it meets. Hold back to fire it behind you.", uses = 1, front = 10, back = 26 },
+	popcornBomb = { id = "popcornBomb", name = "Popcorn Bomb", icon = "🍿", description = "Throw it ahead (or drop it behind). Pops after a short fuse.", uses = 1, front = 14, back = 20 },
+	jellyPuddle = { id = "jellyPuddle", name = "Jelly Puddle", icon = "🍮", description = "A sticky wobbly trap dropped behind you. Slows whoever drives in.", uses = 1, front = 26, back = 8 },
+	bubbleShield = { id = "bubbleShield", name = "Bubble Shield", icon = "🫧", description = "Blocks one attack, then pops.", uses = 1, front = 24, back = 10 },
+	springMine = { id = "springMine", name = "Spring Mine", icon = "🌀", description = "A springy trap dropped behind you. Boings karts into the air.", uses = 1, front = 18, back = 6 },
 } :: { [string]: ItemDef }
 
-Items.Order = { "nitro", "tripleNitro", "oil", "bouncer", "homing", "leaderBolt", "overdrive" }
+Items.Order = { "turboSoda", "windupRocket", "popcornBomb", "jellyPuddle", "bubbleShield", "springMine" }
 
 -- Weight of one item for a racer at `place` of `field`.
 function Items.weight(id: string, place: number, field: number): number
 	local def = Items.Defs[id]
 	local f = if field > 1 then (place - 1) / (field - 1) else 0.5
-	local w = def.front + (def.back - def.front) * f
-	if place == 1 and (id == "homing" or id == "leaderBolt") then
-		return 0 -- nobody ahead to hit
-	end
-	if id == "leaderBolt" and f < 0.5 then
-		return 0
-	end
-	return math.max(w, 0)
+	return math.max(def.front + (def.back - def.front) * f, 0)
 end
 
 -- r is a random number in [0, 1).
@@ -709,10 +723,10 @@ function Items.roll(place: number, field: number, r: number): string
 			return id
 		end
 	end
-	return "nitro"
+	return Items.Order[1]
 end
 
--- Odds (0..1) of each item, for tests and a future "item odds" screen.
+-- Odds (0..1) of each item, for tests and an "item odds" screen.
 function Items.odds(place: number, field: number): { [string]: number }
 	local total = 0
 	for _, id in Items.Order do
@@ -724,6 +738,10 @@ function Items.odds(place: number, field: number): { [string]: number }
 	end
 	return out
 end
+
+-- Defensive = shield or trap; used to check the front gets more of them.
+Items.Defensive = { bubbleShield = true, jellyPuddle = true, springMine = true }
+Items.Recovery = { turboSoda = true, windupRocket = true }
 
 return Items
 ]]></string>
@@ -2636,9 +2654,17 @@ return Voting
       <Item class="ModuleScript" referent="21">
         <Properties>
           <string name="Name">ItemService</string>
-          <string name="Source"><![CDATA[-- Item boxes, rolling items, and everything items do on the track: oil
--- slicks, bouncers, homing rockets and the leader bolt. All hits are decided
--- here on the server.
+          <string name="Source"><![CDATA[-- Item boxes, rolling items and everything the six items do on the track.
+-- All hits are decided here on the server, and every attack is readable:
+--   Wind-up Rocket  rolls along the road, pops on the first kart it meets
+--                   (racers ahead get a warning)
+--   Popcorn Bomb    lobbed ahead (or dropped behind), blinks, then pops
+--   Jelly Puddle    a sticky trap that slows whoever drives in
+--   Bubble Shield   blocks one attack
+--   Turbo Soda      a speed boost
+--   Spring Mine     a trap that boings karts into the air
+-- Traps expire, each racer has a trap limit, and the track has a cap on
+-- active hazards so things never pile up.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
@@ -2647,61 +2673,141 @@ local Shared = ReplicatedStorage.Shared
 local Items = require(Shared.Items)
 local KartPhysics = require(Shared.KartPhysics)
 local Track = require(Shared.Track)
+local Shapes = require(ReplicatedStorage.Common.Shapes)
 
 local ItemService = {}
 
 local PICKUP_RADIUS = 7
 local HIT_RADIUS = 5
-local NITRO_TIME = 1.3
-local OVERDRIVE_TIME = 6
-local BOUNCER_SPEED = 150
-local ROCKET_SPEED = 185
-local BOLT_SPEED = 260
-local BOLT_SPLASH = 16
+local WARN_RANGE = 110
 
-type Box = { part: Part, pos: Vector3, respawnAt: number? }
+-- Optional sound ids (rbxassetid://...). Empty = silent. See README "Assets to replace".
+ItemService.Sounds = { pop = "", boing = "", splat = "", fizz = "", whoosh = "" }
+
 type Hazard = {
 	kind: string,
-	part: Part,
+	model: Model,
 	owner: any, -- Racer
 	born: number,
 	life: number,
-	-- bouncers
-	pos: Vector3?,
-	dir: Vector3?,
-	-- rockets / bolt: travel along the lap
+	pos: Vector3,
+	-- rocket: travels along the lap
 	score: number?,
+	direction: number?,
 	lateral: number?,
-	target: any?,
+	-- bomb: lands, then pops after a fuse
+	from: Vector3?,
+	landAt: number?,
+	popAt: number?,
+	hitsLeft: number?,
 }
+
+type Box = { part: BasePart, pos: Vector3, respawnAt: number? }
 
 local boxes: { Box } = {}
 local hazards: { Hazard } = {}
 local folder: Folder? = nil
 
-local function now(): number
+-- The clock is swappable so the smoke test can run items outside Roblox.
+ItemService.clock = function(): number
 	return Workspace:GetServerTimeNow()
+end
+
+local function now(): number
+	return ItemService.clock()
+end
+
+local function cleanupLater(inst: Instance, seconds: number)
+	task.delay(seconds, function()
+		if inst.Parent then
+			inst:Destroy()
+		end
+	end)
 end
 
 local function v3(p: Track.Vec): Vector3
 	return Vector3.new(p.x, p.y, p.z)
 end
 
-local function newPart(name: string, size: Vector3, color: Color3, shape: Enum.PartType?): Part
-	local p = Instance.new("Part")
-	p.Name = name
-	p.Anchored = true
-	p.CanCollide = false
-	p.CanQuery = false
-	p.CanTouch = false
-	p.Size = size
-	p.Color = color
-	p.Material = Enum.Material.Neon
-	if shape then
-		p.Shape = shape
+local function rootOf(racer: any): BasePart?
+	return racer.model and racer.model.PrimaryPart
+end
+
+local function forwardOf(racer: any): Vector3
+	local yaw
+	if racer.state then
+		yaw = racer.state.yaw
+	else
+		local root = rootOf(racer)
+		local look = if root then root.CFrame.LookVector else Vector3.new(0, 0, -1)
+		yaw = math.atan2(-look.X, -look.Z)
 	end
-	p.Parent = folder
-	return p
+	local fx, fz = KartPhysics.forward(yaw)
+	return Vector3.new(fx, 0, fz)
+end
+
+local function sound(parent: Instance, key: string)
+	local id = ItemService.Sounds[key]
+	if id and id ~= "" then
+		local s = Instance.new("Sound")
+		s.SoundId = id
+		s.Volume = 0.8
+		s.Parent = parent
+		s:Play()
+		cleanupLater(s, 3)
+	end
+end
+
+-- A cartoon pop: a flash ball, sparks, a puff of smoke and a "POP!" word.
+function ItemService.explode(pos: Vector3, word: string?, color: Color3?)
+	local f = folder
+	if not f then
+		return
+	end
+	local flash = Shapes.ball(f, 6, CFrame.new(pos), { color = color or Color3.fromRGB(255, 220, 90), material = Enum.Material.Neon, transparency = 0.2 })
+	flash.Name = "Pop"
+	local sparks = Instance.new("ParticleEmitter")
+	sparks.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+	sparks.Color = ColorSequence.new(Color3.fromRGB(255, 240, 120), Color3.fromRGB(255, 120, 60))
+	sparks.Size = NumberSequence.new(1.2, 0)
+	sparks.Lifetime = NumberRange.new(0.3, 0.6)
+	sparks.Speed = NumberRange.new(25, 45)
+	sparks.SpreadAngle = Vector2.new(180, 180)
+	sparks.Rate = 400
+	sparks.LightEmission = 1
+	sparks.Parent = flash
+	local smoke = Instance.new("ParticleEmitter")
+	smoke.Texture = "rbxasset://textures/particles/smoke_main.dds"
+	smoke.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
+	smoke.Size = NumberSequence.new(3, 7)
+	smoke.Transparency = NumberSequence.new(0.3, 1)
+	smoke.Lifetime = NumberRange.new(0.6, 0.9)
+	smoke.Speed = NumberRange.new(4, 9)
+	smoke.SpreadAngle = Vector2.new(180, 180)
+	smoke.Rate = 60
+	smoke.Parent = flash
+	local tag = Instance.new("BillboardGui")
+	tag.Size = UDim2.new(0, 120, 0, 50)
+	tag.StudsOffset = Vector3.new(0, 6, 0)
+	tag.AlwaysOnTop = true
+	tag.MaxDistance = 220
+	tag.Parent = flash
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.FredokaOne
+	label.TextScaled = true
+	label.TextColor3 = Color3.fromRGB(255, 230, 80)
+	label.TextStrokeTransparency = 0
+	label.Text = word or "POP!"
+	label.Parent = tag
+	sound(flash, "pop")
+	task.delay(0.25, function()
+		sparks.Enabled = false
+		smoke.Enabled = false
+		flash.Transparency = 1
+	end)
+	cleanupLater(flash, 1.4)
 end
 
 function ItemService.clear()
@@ -2720,57 +2826,31 @@ function ItemService.setup(track: Track.Built)
 	f.Parent = Workspace
 	folder = f
 	for _, spot in Track.itemBoxes(track) do
-		local pos = v3(Track.spot(track, spot.distance, spot.lateral)) + Vector3.new(0, 3, 0)
-		local part = newPart("ItemBox", Vector3.new(4, 4, 4), Color3.fromRGB(120, 200, 255))
-		part.Material = Enum.Material.Glass
-		part.Transparency = 0.25
-		part.CFrame = CFrame.new(pos) * CFrame.Angles(math.rad(45), math.rad(45), 0)
+		local pos = v3(Track.spot(track, spot.distance, spot.lateral)) + Vector3.new(0, 3.5, 0)
+		local part = Shapes.box(f, Vector3.new(4.5, 4.5, 4.5), CFrame.new(pos) * CFrame.Angles(math.rad(45), math.rad(45), 0), {
+			color = Color3.fromRGB(150, 210, 255),
+			material = Enum.Material.Glass,
+			transparency = 0.2,
+			name = "ItemBox",
+		})
 		part:SetAttribute("ItemBox", true)
+		local core = Shapes.ball(f, 2.4, CFrame.new(pos), { color = Color3.fromRGB(255, 230, 120), material = Enum.Material.Neon, name = "ItemCore" })
 		local gui = Instance.new("BillboardGui")
-		gui.Size = UDim2.new(0, 40, 0, 40)
-		gui.AlwaysOnTop = false
+		gui.Size = UDim2.new(0, 44, 0, 44)
+		gui.MaxDistance = 260
 		gui.Parent = part
 		local q = Instance.new("TextLabel")
 		q.Size = UDim2.fromScale(1, 1)
 		q.BackgroundTransparency = 1
-		q.Font = Enum.Font.GothamBlack
+		q.Font = Enum.Font.FredokaOne
 		q.TextScaled = true
 		q.TextColor3 = Color3.new(1, 1, 1)
 		q.TextStrokeTransparency = 0
 		q.Text = "?"
 		q.Parent = gui
-		table.insert(boxes, { part = part, pos = pos })
+		part:SetAttribute("CoreName", core.Name)
+		table.insert(boxes, { part = part, pos = pos, core = core } :: any)
 	end
-end
-
-local function rootOf(racer: any): BasePart?
-	return racer.model and racer.model.PrimaryPart
-end
-
-local function yawOf(racer: any): number
-	if racer.state then
-		return racer.state.yaw
-	end
-	local root = rootOf(racer)
-	if not root then
-		return 0
-	end
-	local look = root.CFrame.LookVector
-	return math.atan2(-look.X, -look.Z)
-end
-
-local function forwardOf(racer: any): Vector3
-	local fx, fz = KartPhysics.forward(yawOf(racer))
-	return Vector3.new(fx, 0, fz)
-end
-
-local function giveItem(racer: any, field: number, effects: any)
-	local id = Items.roll(racer.place, field, math.random())
-	racer.item = id
-	racer.uses = Items.Defs[id].uses
-	racer.itemReadyAt = now() + Items.RouletteTime
-	racer.cpuUseAt = racer.itemReadyAt + 0.5 + math.random() * 3
-	effects.itemChanged(racer)
 end
 
 local function racerAtPlace(racers: { any }, place: number): any?
@@ -2782,20 +2862,81 @@ local function racerAtPlace(racers: { any }, place: number): any?
 	return nil
 end
 
-local function hitNear(racers: { any }, pos: Vector3, radius: number, except: any?, effects: any): boolean
-	local any = false
+local function giveItem(racer: any, field: number, effects: any)
+	local id = Items.roll(racer.place, field, math.random())
+	racer.item = id
+	racer.uses = Items.Defs[id].uses
+	racer.itemReadyAt = now() + Items.RouletteTime
+	racer.cpuUseAt = racer.itemReadyAt + 0.5 + math.random() * 3
+	effects.itemChanged(racer)
+end
+
+-- Removes the oldest hazards when there are too many (per racer and overall).
+local function makeRoom(owner: any, isTrap: boolean)
+	if isTrap then
+		local mine = {}
+		for i, h in hazards do
+			if h.owner == owner and (h.kind == "jellyPuddle" or h.kind == "springMine") then
+				table.insert(mine, i)
+			end
+		end
+		if #mine >= Items.MaxTrapsPerRacer then
+			local h = table.remove(hazards, mine[1]) :: Hazard
+			h.model:Destroy()
+		end
+	end
+	while #hazards >= Items.MaxActiveHazards do
+		local h = table.remove(hazards, 1) :: Hazard
+		h.model:Destroy()
+	end
+end
+
+local function newModel(name: string): Model
+	local m = Instance.new("Model")
+	m.Name = name
+	m.Parent = folder
+	return m
+end
+
+local function place(model: Model, cf: CFrame)
+	for _, d in model:GetDescendants() do
+		if d:IsA("BasePart") then
+			local offset = d:GetAttribute("Offset") :: CFrame?
+			d.CFrame = cf * (offset or CFrame.new())
+		end
+	end
+end
+
+-- Builds a hazard model whose parts keep their offset from the hazard's centre.
+local function part(model: Model, kind: string, size: Vector3, offset: CFrame, color: Color3, material: Enum.Material?, transparency: number?): BasePart
+	local p: BasePart
+	if kind == "ball" then
+		p = Shapes.ball(model, size.X, offset, { color = color, material = material, transparency = transparency })
+	elseif kind == "ellipsoid" then
+		p = Shapes.ellipsoid(model, size, offset, { color = color, material = material, transparency = transparency })
+	elseif kind == "disc" then
+		p = Shapes.disc(model, size.X, size.Y, offset, { color = color, material = material, transparency = transparency })
+	else
+		p = Shapes.box(model, size, offset, { color = color, material = material, transparency = transparency })
+	end
+	p:SetAttribute("Offset", p.CFrame)
+	return p
+end
+
+-- Tells racers a rocket is coming up behind them (at most every 1.5s).
+local function warnAhead(racers: { any }, h: Hazard, effects: any)
 	for _, r in racers do
-		local root = rootOf(r)
-		if r ~= except and root and (root.Position - pos).Magnitude <= radius then
-			if effects.hit(r) then
-				any = true
+		if r ~= h.owner then
+			local gap = (r.score - (h.score :: number)) * (h.direction :: number)
+			if gap > 0 and gap < WARN_RANGE and now() - (r.lastRocketWarn or 0) > 1.5 then
+				r.lastRocketWarn = now()
+				effects.warn(r, "🚀 Rocket incoming!")
 			end
 		end
 	end
-	return any
 end
 
-function ItemService.use(track: Track.Built, racers: { any }, racer: any, effects: any)
+function ItemService.use(track: Track.Built, racers: { any }, racer: any, effects: any, aimBack: boolean?)
 	local id = racer.item
 	local root = rootOf(racer)
 	if not id or not root or now() < racer.itemReadyAt or racer.finishTime then
@@ -2808,109 +2949,179 @@ function ItemService.use(track: Track.Built, racers: { any }, racer: any, effect
 	effects.itemChanged(racer)
 
 	local forward = forwardOf(racer)
-	if id == "nitro" or id == "tripleNitro" then
-		effects.boost(racer, NITRO_TIME)
-	elseif id == "overdrive" then
-		effects.overdrive(racer, OVERDRIVE_TIME)
-	elseif id == "oil" then
-		local part = newPart("Oil", Vector3.new(0.3, 7, 7), Color3.fromRGB(25, 20, 35), Enum.PartType.Cylinder)
-		part.Material = Enum.Material.Glass
-		part.CFrame = CFrame.new(root.Position - forward * 7 - Vector3.new(0, 1.8, 0)) * CFrame.Angles(0, 0, math.rad(90))
-		table.insert(hazards, { kind = "oil", part = part, owner = racer, born = now(), life = 45 })
-	elseif id == "bouncer" then
-		local pos = root.Position + forward * 6
-		local part = newPart("Bouncer", Vector3.new(2.5, 2.5, 2.5), Color3.fromRGB(60, 230, 90), Enum.PartType.Ball)
-		part.Position = pos
-		table.insert(hazards, { kind = "bouncer", part = part, owner = racer, born = now(), life = 7, pos = pos, dir = forward })
-	elseif id == "homing" or id == "leaderBolt" then
-		local target = if id == "homing" then racerAtPlace(racers, racer.place - 1) else racerAtPlace(racers, 1)
-		local part = if id == "homing"
-			then newPart("Rocket", Vector3.new(1.4, 1.4, 4), Color3.fromRGB(255, 60, 60))
-			else newPart("Bolt", Vector3.new(3, 3, 3), Color3.fromRGB(255, 240, 80), Enum.PartType.Ball)
-		part.Position = root.Position + forward * 6
-		table.insert(hazards, {
+	local ground = root.CFrame.Position - Vector3.new(0, 2, 0)
+
+	if id == "turboSoda" then
+		effects.boost(racer, Items.SodaBoost)
+		sound(root, "fizz")
+	elseif id == "bubbleShield" then
+		effects.shield(racer, Items.ShieldTime)
+	elseif id == "windupRocket" then
+		makeRoom(racer, false)
+		local m = newModel("Rocket")
+		part(m, "ellipsoid", Vector3.new(2.6, 2.6, 6), CFrame.new(), Color3.fromRGB(240, 70, 70))
+		part(m, "ellipsoid", Vector3.new(2, 2, 2.4), CFrame.new(0, 0, -2.8), Color3.fromRGB(255, 255, 255))
+		part(m, "box", Vector3.new(4, 0.3, 1.4), CFrame.new(0, 0, 2.2), Color3.fromRGB(255, 210, 60))
+		part(m, "disc", Vector3.new(1.4, 0.6, 1.4), CFrame.new(0, 1.6, 1) , Color3.fromRGB(255, 210, 60))
+		local flame = part(m, "ball", Vector3.new(1.6, 1.6, 1.6), CFrame.new(0, 0, 3.4), Color3.fromRGB(255, 160, 40), Enum.Material.Neon)
+		flame.Name = "Flame"
+		place(m, CFrame.lookAt(root.CFrame.Position, root.CFrame.Position + forward))
+		local proj = Track.project(track, Track.v(root.CFrame.Position.X, root.CFrame.Position.Y, root.CFrame.Position.Z), racer.progress.index)
+		local direction = if aimBack then -1 else 1
+		local h: Hazard = {
 			kind = id,
-			part = part,
+			model = m,
 			owner = racer,
 			born = now(),
-			life = 12,
-			score = racer.score + 6,
-			lateral = 0,
-			target = target,
+			life = Items.RocketLife,
+			pos = root.CFrame.Position,
+			score = racer.score + 7 * direction,
+			direction = direction,
+			lateral = proj.lateral,
+		}
+		table.insert(hazards, h)
+		sound(flame, "whoosh")
+	elseif id == "popcornBomb" then
+		makeRoom(racer, false)
+		local m = newModel("PopcornBomb")
+		part(m, "ball", Vector3.new(4, 4, 4), CFrame.new(), Color3.fromRGB(255, 80, 80))
+		part(m, "ball", Vector3.new(4.1, 4.1, 4.1), CFrame.new(0, 0.3, 0), Color3.fromRGB(255, 255, 255), nil, 0.6)
+		for i = 1, 6 do
+			local a = i * 1.05
+			part(m, "ball", Vector3.new(1.4, 1.4, 1.4), CFrame.new(math.cos(a) * 1.2, 2.2, math.sin(a) * 1.2), Color3.fromRGB(255, 245, 210))
+		end
+		local fuse = part(m, "ball", Vector3.new(1, 1, 1), CFrame.new(0, 3.2, 0), Color3.fromRGB(255, 220, 60), Enum.Material.Neon)
+		fuse.Name = "Fuse"
+		place(m, CFrame.new(root.CFrame.Position + Vector3.new(0, 2, 0)))
+		local target = if aimBack then ground - forward * 8 else ground + forward * Items.BombThrow + Vector3.new(0, 0, 0)
+		local h: Hazard = {
+			kind = id,
+			model = m,
+			owner = racer,
+			born = now(),
+			life = 6,
+			pos = target,
+			from = root.CFrame.Position + Vector3.new(0, 2, 0),
+			landAt = now() + (if aimBack then 0.15 else 0.55),
+			popAt = now() + (if aimBack then 0.15 else 0.55) + Items.BombFuse,
+		}
+		table.insert(hazards, h)
+	elseif id == "jellyPuddle" or id == "springMine" then
+		makeRoom(racer, true)
+		local spot = ground - forward * 8
+		local m: Model
+		if id == "jellyPuddle" then
+			m = newModel("JellyPuddle")
+			part(m, "ellipsoid", Vector3.new(10, 1.6, 10), CFrame.new(0, 0.6, 0), Color3.fromRGB(255, 120, 190), Enum.Material.Glass, 0.25)
+			part(m, "ellipsoid", Vector3.new(5, 2.2, 5), CFrame.new(1.2, 1.2, -0.8), Color3.fromRGB(255, 160, 210), Enum.Material.Glass, 0.2)
+		else
+			m = newModel("SpringMine")
+			part(m, "disc", Vector3.new(6, 0.8, 6), CFrame.new(0, 0.4, 0), Color3.fromRGB(60, 60, 70))
+			for k = 0, 3 do
+				part(m, "disc", Vector3.new(4.2, 0.5, 4.2), CFrame.new(0, 1 + k * 0.7, 0), if k % 2 == 0 then Color3.fromRGB(255, 210, 60) else Color3.fromRGB(240, 70, 70))
+			end
+			part(m, "disc", Vector3.new(5, 0.6, 5), CFrame.new(0, 3.9, 0), Color3.fromRGB(240, 70, 70), Enum.Material.Neon)
+		end
+		place(m, CFrame.new(spot))
+		table.insert(hazards, {
+			kind = id,
+			model = m,
+			owner = racer,
+			born = now(),
+			life = if id == "jellyPuddle" then Items.JellyLife else Items.MineLife,
+			pos = spot,
+			hitsLeft = if id == "jellyPuddle" then Items.JellyHits else 1,
 		})
+		sound(m:FindFirstChildWhichIsA("BasePart") :: BasePart, if id == "jellyPuddle" then "splat" else "boing")
 	end
 end
 
+local function touching(racer: any, pos: Vector3, radius: number): boolean
+	local root = rootOf(racer)
+	return root ~= nil and (root.CFrame.Position - pos).Magnitude <= radius
+end
+
+-- Returns false when the hazard is finished and should be removed.
 local function stepHazard(h: Hazard, track: Track.Built, racers: { any }, dt: number, effects: any): boolean
 	local t = now()
 	if t - h.born > h.life then
 		return false
 	end
-	local ownerSafe = t - h.born < 0.5
+	local ownerSafe = t - h.born < 0.6
 
-	if h.kind == "oil" then
+	if h.kind == "windupRocket" then
+		h.score = (h.score :: number) + Items.RocketSpeed * dt * (h.direction :: number)
+		local d = (h.score :: number) % track.length
+		local spot = Track.spot(track, d, h.lateral :: number)
+		local _, tan = Track.at(track, d)
+		h.pos = v3(spot) + Vector3.new(0, 2, 0)
+		local dir = Vector3.new(tan.x, 0, tan.z) * (h.direction :: number)
+		local wobble = CFrame.Angles(0, 0, math.sin(t * 20) * 0.2)
+		place(h.model, CFrame.lookAt(h.pos, h.pos + dir) * wobble)
+		warnAhead(racers, h, effects)
 		for _, r in racers do
-			local root = rootOf(r)
-			if root and not (ownerSafe and r == h.owner) and (root.Position - h.part.Position).Magnitude <= HIT_RADIUS then
-				effects.hit(r)
+			if not (ownerSafe and r == h.owner) and touching(r, h.pos, HIT_RADIUS) then
+				effects.hit(r, "spin")
+				ItemService.explode(h.pos, "POP!")
 				return false
 			end
 		end
 		return true
-	elseif h.kind == "bouncer" then
-		local pos = (h.pos :: Vector3) + (h.dir :: Vector3) * BOUNCER_SPEED * dt
-		local proj = Track.project(track, Track.v(pos.X, pos.Y, pos.Z))
-		local limit = track.def.width / 2 + Track.ShoulderWidth - 1
-		if math.abs(proj.lateral) > limit then
-			-- Bounce off the wall: reflect across the wall's direction.
-			local _, tan = Track.at(track, proj.distance)
-			local right = Vector3.new(-tan.z, 0, tan.x).Unit * math.sign(proj.lateral)
-			local dir = h.dir :: Vector3
-			h.dir = (dir - right * 2 * dir:Dot(right)).Unit
-			pos = h.pos :: Vector3
+	elseif h.kind == "popcornBomb" then
+		local landAt, popAt = h.landAt :: number, h.popAt :: number
+		if t < landAt then
+			-- Lobbed in an arc.
+			local u = 1 - (landAt - t) / math.max(landAt - h.born, 0.01)
+			local from = h.from :: Vector3
+			local p = from:Lerp(h.pos, u) + Vector3.new(0, math.sin(u * math.pi) * 12, 0)
+			place(h.model, CFrame.new(p + Vector3.new(0, 2, 0)))
+			return true
 		end
-		local ground = Track.spot(track, proj.distance, proj.lateral)
-		h.pos = Vector3.new(pos.X, ground.y + 1.5, pos.Z)
-		h.part.Position = h.pos :: Vector3
-		for _, r in racers do
-			local root = rootOf(r)
-			if root and not (ownerSafe and r == h.owner) and (root.Position - (h.pos :: Vector3)).Magnitude <= HIT_RADIUS then
-				effects.hit(r)
-				return false
-			end
+		place(h.model, CFrame.new(h.pos + Vector3.new(0, 2, 0)))
+		-- Blink faster as the fuse runs down.
+		local fuse = h.model:FindFirstChild("Fuse") :: BasePart?
+		if fuse then
+			local left = popAt - t
+			local rate = if left < 0.6 then 14 else 5
+			fuse.Transparency = if math.floor(t * rate) % 2 == 0 then 0 else 0.8
 		end
-		return true
-	else
-		-- Rocket or bolt: follow the track toward the target.
-		local target = h.target
-		if not target or not rootOf(target) or target.finishTime then
-			if h.kind == "homing" then
-				return false
-			end
-			target = racerAtPlace(racers, 1)
-			h.target = target
-			if not target then
-				return false
-			end
-		end
-		local speed = if h.kind == "homing" then ROCKET_SPEED else BOLT_SPEED
-		h.score = (h.score :: number) + speed * dt
-		local targetRoot = rootOf(target) :: BasePart
-		local targetProj = Track.project(track, Track.v(targetRoot.Position.X, targetRoot.Position.Y, targetRoot.Position.Z), target.progress.index)
-		h.lateral = (h.lateral :: number) + (targetProj.lateral - (h.lateral :: number)) * math.min(1, dt * 4)
-		local spot = Track.spot(track, (h.score :: number) % track.length, h.lateral :: number)
-		local height = if h.kind == "leaderBolt" then 20 else 2
-		h.part.Position = v3(spot) + Vector3.new(0, height, 0)
-		if (h.score :: number) >= target.score - 4 then
-			if h.kind == "leaderBolt" then
-				hitNear(racers, targetRoot.Position, BOLT_SPLASH, nil, effects)
-			else
-				effects.hit(target)
+		if t >= popAt then
+			ItemService.explode(h.pos + Vector3.new(0, 2, 0), "POP!", Color3.fromRGB(255, 240, 200))
+			for _, r in racers do
+				if touching(r, h.pos + Vector3.new(0, 2, 0), Items.BombRadius) then
+					effects.hit(r, "spin")
+				end
 			end
 			return false
 		end
+		-- Warn anyone driving into the blast zone.
+		for _, r in racers do
+			if touching(r, h.pos, Items.BombRadius + 25) and t - (r.lastBombWarn or 0) > 1.2 then
+				r.lastBombWarn = t
+				effects.warn(r, "🍿 Bomb ahead!")
+			end
+		end
+		return true
+	elseif h.kind == "jellyPuddle" or h.kind == "springMine" then
+		-- Jelly wobbles; mines bounce a little so they're easy to spot.
+		local bob = if h.kind == "springMine" then math.abs(math.sin(t * 4)) * 0.6 else 0
+		local squish = if h.kind == "jellyPuddle" then CFrame.Angles(0, t * 0.5, 0) else CFrame.new()
+		place(h.model, CFrame.new(h.pos + Vector3.new(0, bob, 0)) * squish)
+		for _, r in racers do
+			if not (ownerSafe and r == h.owner) and touching(r, h.pos + Vector3.new(0, 2, 0), HIT_RADIUS + 1) then
+				local kind = if h.kind == "jellyPuddle" then "slow" else "launch"
+				if effects.hit(r, kind) then
+					ItemService.explode(h.pos + Vector3.new(0, 2, 0), if kind == "slow" then "SPLAT!" else "BOING!", if kind == "slow" then Color3.fromRGB(255, 140, 200) else Color3.fromRGB(255, 220, 90))
+					h.hitsLeft = (h.hitsLeft :: number) - 1
+					if (h.hitsLeft :: number) <= 0 then
+						return false
+					end
+				end
+			end
+		end
 		return true
 	end
+	return false
 end
 
 function ItemService.tick(track: Track.Built, racers: { any }, dt: number, effects: any)
@@ -2918,19 +3129,22 @@ function ItemService.tick(track: Track.Built, racers: { any }, dt: number, effec
 	local field = #racers
 
 	for _, box in boxes do
+		local core = (box :: any).core :: BasePart
 		if box.respawnAt then
 			if t >= box.respawnAt then
 				box.respawnAt = nil
-				box.part.Transparency = 0.25
+				box.part.Transparency = 0.2
+				core.Transparency = 0
 			end
 			continue
 		end
 		for _, r in racers do
 			local root = rootOf(r)
-			if root and not r.item and (root.Position - box.pos).Magnitude <= PICKUP_RADIUS then
+			if root and not r.item and not r.finishTime and (root.CFrame.Position - box.pos).Magnitude <= PICKUP_RADIUS then
 				giveItem(r, field, effects)
 				box.respawnAt = t + Items.BoxRespawn
 				box.part.Transparency = 1
+				core.Transparency = 1
 				break
 			end
 		end
@@ -2938,19 +3152,27 @@ function ItemService.tick(track: Track.Built, racers: { any }, dt: number, effec
 
 	for i = #hazards, 1, -1 do
 		local h = hazards[i]
-		if not stepHazard(h, track, racers, dt, effects) then
-			h.part:Destroy()
+		local ok, keep = pcall(stepHazard, h, track, racers, dt, effects)
+		if not ok or not keep then
+			if not ok then
+				warn("[ItemService] hazard failed:", keep)
+			end
+			h.model:Destroy()
 			table.remove(hazards, i)
 		end
 	end
 
-	-- CPU drivers use their items after a short, random delay.
+	-- CPU drivers use their items after a short, random delay. Traps and
+	-- shields are used straight away; attacks wait for someone nearby.
 	for _, r in racers do
 		if r.state and r.item and t >= r.cpuUseAt then
-			if r.item == "oil" or r.place > 1 or (r.item ~= "homing" and r.item ~= "leaderBolt") then
-				ItemService.use(track, racers, r, effects)
-				r.cpuUseAt = t + 0.6
+			local id = r.item
+			local ahead = racerAtPlace(racers, r.place - 1)
+			local attackReady = id ~= "windupRocket" or (ahead ~= nil and ahead.score - r.score < 160)
+			if attackReady then
+				ItemService.use(track, racers, r, effects, false)
 			end
+			r.cpuUseAt = t + 0.8
 		end
 	end
 end
@@ -4345,6 +4567,7 @@ local Karts = require(Shared.Karts)
 local RaceRules = require(Shared.RaceRules)
 local Track = require(Shared.Track)
 local KartRig = require(ReplicatedStorage.Common.KartRig)
+local Shapes = require(ReplicatedStorage.Common.Shapes)
 
 local ItemService = require(script.Parent.ItemService)
 local Net = require(script.Parent.Net)
@@ -4380,6 +4603,7 @@ export type Racer = {
 	finishTime: number?,
 	invincibleUntil: number,
 	protectUntil: number, -- brief immunity after any hit, so nobody gets juggled
+	shieldUntil: number, -- Bubble Shield: blocks the next attack
 	speedFactor: number,
 	lastRespawn: number,
 	-- Stats for results and awards
@@ -4462,10 +4686,58 @@ RaceService.Effects = Effects
 
 local HIT_PROTECTION = 2.5
 
--- Returns true if the hit landed. Overdrive and the post-hit grace period block it.
+local function removeBubble(racer: Racer)
+	local bubble = racer.model:FindFirstChild("ShieldBubble")
+	if bubble then
+		bubble:Destroy()
+	end
+end
+
+-- Bubble Shield: a see-through bubble around the kart that blocks one attack.
+function Effects.shield(racer: Racer, seconds: number)
+	local root = racer.model.PrimaryPart
+	if not root then
+		return
+	end
+	racer.shieldUntil = now() + seconds
+	removeBubble(racer)
+	local bubble = Shapes.ball(racer.model, 10, root.CFrame, {
+		color = Color3.fromRGB(170, 220, 255),
+		material = Enum.Material.Glass,
+		transparency = 0.55,
+		reflectance = 0.2,
+		anchored = false,
+		name = "ShieldBubble",
+	})
+	bubble.Massless = true
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = root
+	weld.Part1 = bubble
+	weld.Parent = bubble
+	task.delay(seconds, function()
+		if now() >= racer.shieldUntil then
+			removeBubble(racer)
+		end
+	end)
+	Effects.warn(racer, "🫧 Shield up!")
+end
+
+-- Returns true if the hit landed. A Bubble Shield, Overdrive and the
+-- post-hit grace period all block it.
 function Effects.hit(racer: Racer, kind: string?): boolean
 	local t = now()
 	if t < racer.invincibleUntil or t < racer.protectUntil then
+		return false
+	end
+	if t < racer.shieldUntil then
+		racer.shieldUntil = 0
+		racer.protectUntil = t + 0.8
+		removeBubble(racer)
+		local root = racer.model.PrimaryPart
+		if root then
+			ItemService.explode(root.Position + Vector3.new(0, 3, 0), "BLOCKED!", Color3.fromRGB(170, 220, 255))
+		end
+		Effects.warn(racer, "🫧 Shield blocked it!")
 		return false
 	end
 	racer.protectUntil = t + HIT_PROTECTION
@@ -4702,6 +4974,7 @@ function RaceService.startRace(trackId: string, entrants: { Entrant }, onEnded: 
 			finishTime = nil,
 			invincibleUntil = 0,
 			protectUntil = 0,
+			shieldUntil = 0,
 			speedFactor = 1,
 			lastRespawn = 0,
 			worstPlace = slot,

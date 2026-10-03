@@ -1,45 +1,59 @@
 --!strict
--- Item definitions and the item box roll. Drivers near the back get stronger
--- catch-up items; the leader mostly gets defensive ones.
+-- Item definitions and the item box roll. Front runners mostly get defensive
+-- items and modest traps; the middle gets a mix; the back gets more recovery
+-- boosts and stronger attacks.
+--
+-- Every attack has a warning and a counter: rockets can be blocked with a
+-- Bubble Shield or dodged sideways, bombs show a fuse, traps sit still where
+-- you can see them, and a hit gives a few seconds of protection so nobody
+-- gets juggled.
 
 export type ItemDef = {
 	id: string,
 	name: string,
+	icon: string,
 	description: string,
 	uses: number,
-	front: number, -- roll weight when in 1st
-	back: number, -- roll weight when in last
+	front: number, -- roll weight in 1st
+	back: number, -- roll weight in last
 }
 
 local Items = {}
 
 Items.RouletteTime = 1.5 -- seconds of spinning before an item can be used
 Items.BoxRespawn = 3
+Items.MaxActiveHazards = 16 -- traps and projectiles on the track at once
+Items.MaxTrapsPerRacer = 3
+
+-- Tuning shared by server effects and tests.
+Items.SodaBoost = 1.4
+Items.ShieldTime = 12
+Items.RocketSpeed = 170
+Items.RocketLife = 6
+Items.BombThrow = 45 -- studs ahead it lands
+Items.BombFuse = 1.6
+Items.BombRadius = 14
+Items.JellyLife = 20
+Items.JellyHits = 2
+Items.JellySlow = 2
+Items.MineLife = 25
 
 Items.Defs = {
-	nitro = { id = "nitro", name = "Nitro", description = "A quick speed boost.", uses = 1, front = 10, back = 22 },
-	tripleNitro = { id = "tripleNitro", name = "Triple Nitro", description = "Three boosts.", uses = 3, front = 0, back = 18 },
-	oil = { id = "oil", name = "Oil Slick", description = "Drop it behind you. Anyone who drives over it spins out.", uses = 1, front = 35, back = 4 },
-	bouncer = { id = "bouncer", name = "Bouncer", description = "Fires straight ahead and bounces off walls.", uses = 1, front = 35, back = 10 },
-	homing = { id = "homing", name = "Homing Rocket", description = "Chases the racer just ahead of you.", uses = 1, front = 0, back = 24 },
-	leaderBolt = { id = "leaderBolt", name = "Leader Bolt", description = "Flies over everyone and strikes 1st place.", uses = 1, front = 0, back = 7 },
-	overdrive = { id = "overdrive", name = "Overdrive", description = "Six seconds of speed. Nothing can hit you.", uses = 1, front = 0, back = 15 },
+	turboSoda = { id = "turboSoda", name = "Turbo Soda", icon = "🥤", description = "A fizzy speed boost.", uses = 1, front = 8, back = 30 },
+	windupRocket = { id = "windupRocket", name = "Wind-up Rocket", icon = "🚀", description = "Zooms along the road and pops on the first kart it meets. Hold back to fire it behind you.", uses = 1, front = 10, back = 26 },
+	popcornBomb = { id = "popcornBomb", name = "Popcorn Bomb", icon = "🍿", description = "Throw it ahead (or drop it behind). Pops after a short fuse.", uses = 1, front = 14, back = 20 },
+	jellyPuddle = { id = "jellyPuddle", name = "Jelly Puddle", icon = "🍮", description = "A sticky wobbly trap dropped behind you. Slows whoever drives in.", uses = 1, front = 26, back = 8 },
+	bubbleShield = { id = "bubbleShield", name = "Bubble Shield", icon = "🫧", description = "Blocks one attack, then pops.", uses = 1, front = 24, back = 10 },
+	springMine = { id = "springMine", name = "Spring Mine", icon = "🌀", description = "A springy trap dropped behind you. Boings karts into the air.", uses = 1, front = 18, back = 6 },
 } :: { [string]: ItemDef }
 
-Items.Order = { "nitro", "tripleNitro", "oil", "bouncer", "homing", "leaderBolt", "overdrive" }
+Items.Order = { "turboSoda", "windupRocket", "popcornBomb", "jellyPuddle", "bubbleShield", "springMine" }
 
 -- Weight of one item for a racer at `place` of `field`.
 function Items.weight(id: string, place: number, field: number): number
 	local def = Items.Defs[id]
 	local f = if field > 1 then (place - 1) / (field - 1) else 0.5
-	local w = def.front + (def.back - def.front) * f
-	if place == 1 and (id == "homing" or id == "leaderBolt") then
-		return 0 -- nobody ahead to hit
-	end
-	if id == "leaderBolt" and f < 0.5 then
-		return 0
-	end
-	return math.max(w, 0)
+	return math.max(def.front + (def.back - def.front) * f, 0)
 end
 
 -- r is a random number in [0, 1).
@@ -55,10 +69,10 @@ function Items.roll(place: number, field: number, r: number): string
 			return id
 		end
 	end
-	return "nitro"
+	return Items.Order[1]
 end
 
--- Odds (0..1) of each item, for tests and a future "item odds" screen.
+-- Odds (0..1) of each item, for tests and an "item odds" screen.
 function Items.odds(place: number, field: number): { [string]: number }
 	local total = 0
 	for _, id in Items.Order do
@@ -70,5 +84,9 @@ function Items.odds(place: number, field: number): { [string]: number }
 	end
 	return out
 end
+
+-- Defensive = shield or trap; used to check the front gets more of them.
+Items.Defensive = { bubbleShield = true, jellyPuddle = true, springMine = true }
+Items.Recovery = { turboSoda = true, windupRocket = true }
 
 return Items

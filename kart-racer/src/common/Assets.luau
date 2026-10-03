@@ -13,6 +13,9 @@
 --           Sound objects named Wind, Water, Birds, Engine, LobbyAmbience.
 --       Sky
 --           A Sky object (a custom skybox) used on every track.
+--       Tracks
+--           Model named emberfort: original exported map scenery, using
+--           absolute track coordinates. The native road remains active.
 --       Bodies
 --           Car models (e.g. from Blender). A model named after a body id
 --           (thunder, v12, classic, …) replaces that car's look; any other
@@ -113,6 +116,27 @@ function Assets.bodyModel(id: string): Model?
 		return m
 	end
 	return nil
+end
+
+-- Original track scenery keeps exported absolute stud coordinates. Road
+-- collision, checkpoints, items and race logic remain owned by TrackBuilder.
+function Assets.placeTrack(id: string, parent: Instance): Model?
+	local f = folder("Tracks")
+	local source = f and f:FindFirstChild(id)
+	if not source or not source:IsA("Model") then
+		return nil
+	end
+	local model = source:Clone()
+	for _, part in model:GetDescendants() do
+		if part:IsA("BasePart") then
+			part.Anchored = true
+			part.CanCollide = false
+			part.CanTouch = false
+			part.CanQuery = false
+		end
+	end
+	model.Parent = parent
+	return model
 end
 
 -- Registers every model in KartAssets.Bodies whose name isn't an existing

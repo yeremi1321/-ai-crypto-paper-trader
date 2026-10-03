@@ -39,6 +39,10 @@
         "Bodies": {
           "$className": "Folder",
           "$ignoreUnknownInstances": true
+        },
+        "Tracks": {
+          "$className": "Folder",
+          "$ignoreUnknownInstances": true
         }
       }
     },

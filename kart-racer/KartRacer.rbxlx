@@ -35,6 +35,9 @@
 --           Sound objects named Wind, Water, Birds, Engine, LobbyAmbience.
 --       Sky
 --           A Sky object (a custom skybox) used on every track.
+--       Tracks
+--           Model named emberfort: original exported map scenery, using
+--           absolute track coordinates. The native road remains active.
 --       Bodies
 --           Car models (e.g. from Blender). A model named after a body id
 --           (thunder, v12, classic, …) replaces that car's look; any other
@@ -135,6 +138,27 @@ function Assets.bodyModel(id: string): Model?
 		return m
 	end
 	return nil
+end
+
+-- Original track scenery keeps exported absolute stud coordinates. Road
+-- collision, checkpoints, items and race logic remain owned by TrackBuilder.
+function Assets.placeTrack(id: string, parent: Instance): Model?
+	local f = folder("Tracks")
+	local source = f and f:FindFirstChild(id)
+	if not source or not source:IsA("Model") then
+		return nil
+	end
+	local model = source:Clone()
+	for _, part in model:GetDescendants() do
+		if part:IsA("BasePart") then
+			part.Anchored = true
+			part.CanCollide = false
+			part.CanTouch = false
+			part.CanQuery = false
+		end
+	end
+	model.Parent = parent
+	return model
 end
 
 -- Registers every model in KartAssets.Bodies whose name isn't an existing
@@ -1215,15 +1239,20 @@ return Shapes
       </Item>
       <Item class="Folder" referent="14">
         <Properties>
+          <string name="Name">Tracks</string>
+        </Properties>
+      </Item>
+      <Item class="Folder" referent="15">
+        <Properties>
           <string name="Name">Trees</string>
         </Properties>
       </Item>
     </Item>
-    <Item class="Folder" referent="15">
+    <Item class="Folder" referent="16">
       <Properties>
         <string name="Name">Shared</string>
       </Properties>
-      <Item class="ModuleScript" referent="16">
+      <Item class="ModuleScript" referent="17">
         <Properties>
           <string name="Name">AIDriver</string>
           <string name="Source"><![CDATA[--!strict
@@ -1289,7 +1318,7 @@ return AIDriver
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="17">
+      <Item class="ModuleScript" referent="18">
         <Properties>
           <string name="Name">Cosmetics</string>
           <string name="Source"><![CDATA[--!strict
@@ -1414,7 +1443,7 @@ return Cosmetics
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="18">
+      <Item class="ModuleScript" referent="19">
         <Properties>
           <string name="Name">Items</string>
           <string name="Source"><![CDATA[--!strict
@@ -1512,7 +1541,7 @@ return Items
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="19">
+      <Item class="ModuleScript" referent="20">
         <Properties>
           <string name="Name">KartBodies</string>
           <string name="Source"><![CDATA[--!strict
@@ -2291,7 +2320,7 @@ return KartBodies
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="20">
+      <Item class="ModuleScript" referent="21">
         <Properties>
           <string name="Name">KartPhysics</string>
           <string name="Source"><![CDATA[--!strict
@@ -2583,7 +2612,7 @@ return KartPhysics
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="21">
+      <Item class="ModuleScript" referent="22">
         <Properties>
           <string name="Name">Karts</string>
           <string name="Source"><![CDATA[--!strict
@@ -2659,7 +2688,7 @@ return Karts
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="22">
+      <Item class="ModuleScript" referent="23">
         <Properties>
           <string name="Name">Landscape</string>
           <string name="Source"><![CDATA[--!strict
@@ -3043,7 +3072,7 @@ return Landscape
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="23">
+      <Item class="ModuleScript" referent="24">
         <Properties>
           <string name="Name">LobbyLayout</string>
           <string name="Source"><![CDATA[--!strict
@@ -3170,7 +3199,7 @@ return LobbyLayout
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="24">
+      <Item class="ModuleScript" referent="25">
         <Properties>
           <string name="Name">PlayerData</string>
           <string name="Source"><![CDATA[--!strict
@@ -3497,7 +3526,7 @@ return PlayerData
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="25">
+      <Item class="ModuleScript" referent="26">
         <Properties>
           <string name="Name">RaceRules</string>
           <string name="Source"><![CDATA[--!strict
@@ -3583,7 +3612,7 @@ return RaceRules
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="26">
+      <Item class="ModuleScript" referent="27">
         <Properties>
           <string name="Name">RemoteNames</string>
           <string name="Source"><![CDATA[--!strict
@@ -3616,7 +3645,7 @@ return {
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="27">
+      <Item class="ModuleScript" referent="28">
         <Properties>
           <string name="Name">Rewards</string>
           <string name="Source"><![CDATA[--!strict
@@ -3733,7 +3762,7 @@ return Rewards
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="28">
+      <Item class="ModuleScript" referent="29">
         <Properties>
           <string name="Name">RoadGeometry</string>
           <string name="Source"><![CDATA[--!strict
@@ -3843,7 +3872,7 @@ return RoadGeometry
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="29">
+      <Item class="ModuleScript" referent="30">
         <Properties>
           <string name="Name">Scenery</string>
           <string name="Source"><![CDATA[--!strict
@@ -4065,7 +4094,7 @@ return Scenery
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="30">
+      <Item class="ModuleScript" referent="31">
         <Properties>
           <string name="Name">Track</string>
           <string name="Source"><![CDATA[--!strict
@@ -4478,7 +4507,7 @@ return Track
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="31">
+      <Item class="ModuleScript" referent="32">
         <Properties>
           <string name="Name">Tracks</string>
           <string name="Source"><![CDATA[--!strict
@@ -5117,7 +5146,7 @@ return Tracks
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="32">
+      <Item class="ModuleScript" referent="33">
         <Properties>
           <string name="Name">Voting</string>
           <string name="Source"><![CDATA[--!strict
@@ -5211,15 +5240,15 @@ return Voting
       </Item>
     </Item>
   </Item>
-  <Item class="ServerScriptService" referent="33">
+  <Item class="ServerScriptService" referent="34">
     <Properties>
       <string name="Name">ServerScriptService</string>
     </Properties>
-    <Item class="Folder" referent="34">
+    <Item class="Folder" referent="35">
       <Properties>
         <string name="Name">Server</string>
       </Properties>
-      <Item class="ModuleScript" referent="35">
+      <Item class="ModuleScript" referent="36">
         <Properties>
           <string name="Name">DataService</string>
           <string name="Source"><![CDATA[-- Loads and saves player data (coins, unlocks, equipped kart, settings,
@@ -5408,7 +5437,7 @@ return DataService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="36">
+      <Item class="ModuleScript" referent="37">
         <Properties>
           <string name="Name">FortressBuilder</string>
           <string name="Source"><![CDATA[-- Original fortress course dressing. Masonry and lava stay outside the
@@ -5416,6 +5445,7 @@ return DataService
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Track = require(ReplicatedStorage.Shared.Track)
 local Shapes = require(ReplicatedStorage.Common.Shapes)
+local Assets = require(ReplicatedStorage.Common.Assets)
 local FortressBuilder = {}
 local stone = Color3.fromRGB(86, 79, 76)
 local trim = Color3.fromRGB(145, 127, 105)
@@ -5425,6 +5455,11 @@ local function box(parent, size, cf, color, name, material)
  return Shapes.box(parent, size, cf, { color = color, material = material or Enum.Material.Cobblestone, name = name, collide = false })
 end
 function FortressBuilder.build(track, parent)
+ local imported = Assets.placeTrack(track.def.id, parent)
+ if imported then
+  imported.Name = "Citadel"
+  return
+ end
  local folder = Instance.new("Folder")
  folder.Name = "Citadel"
  folder.Parent = parent
@@ -5499,7 +5534,7 @@ return FortressBuilder
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="37">
+      <Item class="ModuleScript" referent="38">
         <Properties>
           <string name="Name">ItemService</string>
           <string name="Source"><![CDATA[-- Item boxes, rolling items and everything the six items do on the track.
@@ -6032,7 +6067,7 @@ return ItemService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="38">
+      <Item class="ModuleScript" referent="39">
         <Properties>
           <string name="Name">Landmarks</string>
           <string name="Source"><![CDATA[-- Big themed pieces for the oversized-world tracks: tunnels (the bed, garden
@@ -6422,7 +6457,7 @@ return Landmarks
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="39">
+      <Item class="ModuleScript" referent="40">
         <Properties>
           <string name="Name">LobbyBuilder</string>
           <string name="Source"><![CDATA[-- Compact indoor Kart HQ: soft lighting, four voting pads, garage,
@@ -7115,7 +7150,7 @@ return LobbyBuilder
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Script" referent="40">
+      <Item class="Script" referent="41">
         <Properties>
           <string name="Name">Main</string>
           <token name="RunContext">0</token>
@@ -7139,7 +7174,7 @@ print("[KartRacer] server ready - press READY or step onto a vote pad to race")
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="41">
+      <Item class="ModuleScript" referent="42">
         <Properties>
           <string name="Name">Net</string>
           <string name="Source"><![CDATA[-- Creates the RemoteEvents listed in Shared.RemoteNames under ReplicatedStorage.Remotes.
@@ -7164,7 +7199,7 @@ return Net
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="42">
+      <Item class="ModuleScript" referent="43">
         <Properties>
           <string name="Name">PracticeService</string>
           <string name="Source"><![CDATA[-- Practice karts on the lobby loop. Anyone not in a race can take one out to
@@ -7257,7 +7292,7 @@ return PracticeService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="43">
+      <Item class="ModuleScript" referent="44">
         <Properties>
           <string name="Name">Props</string>
           <string name="Source"><![CDATA[-- Scenery models built from parts. Scenery.luau decides where they go; this
@@ -7656,7 +7691,7 @@ return Props
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="44">
+      <Item class="ModuleScript" referent="45">
         <Properties>
           <string name="Name">RaceService</string>
           <string name="Source"><![CDATA[-- Runs one race: builds the track, puts karts on the grid, counts down,
@@ -8443,7 +8478,7 @@ return RaceService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="45">
+      <Item class="ModuleScript" referent="46">
         <Properties>
           <string name="Name">RoadSurface</string>
           <string name="Source"><![CDATA[-- Builds the road and everything alongside it from one set of frames
@@ -8730,7 +8765,7 @@ return RoadSurface
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="46">
+      <Item class="ModuleScript" referent="47">
         <Properties>
           <string name="Name">RoundService</string>
           <string name="Source"><![CDATA[-- The round loop:
@@ -9370,7 +9405,7 @@ return RoundService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="47">
+      <Item class="ModuleScript" referent="48">
         <Properties>
           <string name="Name">StudioTools</string>
           <string name="Source"><![CDATA[-- Command-bar helpers for shaping a track's land by hand in Roblox Studio.
@@ -9574,7 +9609,7 @@ return StudioTools
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="48">
+      <Item class="ModuleScript" referent="49">
         <Properties>
           <string name="Name">TerrainBuilder</string>
           <string name="Source"><![CDATA[-- Turns a Landscape plan into Roblox Terrain: grass or sand ground, earth
@@ -9854,7 +9889,7 @@ return TerrainBuilder
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="49">
+      <Item class="ModuleScript" referent="50">
         <Properties>
           <string name="Name">TrackBuilder</string>
           <string name="Source"><![CDATA[-- Builds a track from its centerline: the road and everything along it
@@ -10253,7 +10288,7 @@ return TrackBuilder
       </Item>
     </Item>
   </Item>
-  <Item class="StarterPlayer" referent="50">
+  <Item class="StarterPlayer" referent="51">
     <Properties>
       <string name="Name">StarterPlayer</string>
       <float name="CameraMaxZoomDistance">80</float>
@@ -10261,15 +10296,15 @@ return TrackBuilder
       <float name="HealthDisplayDistance">0</float>
       <float name="NameDisplayDistance">45</float>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="51">
+    <Item class="StarterPlayerScripts" referent="52">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="Folder" referent="52">
+      <Item class="Folder" referent="53">
         <Properties>
           <string name="Name">Client</string>
         </Properties>
-        <Item class="ModuleScript" referent="53">
+        <Item class="ModuleScript" referent="54">
           <Properties>
             <string name="Name">GarageUI</string>
             <string name="Source"><![CDATA[-- The garage: a live 3D preview of your kart plus tabs for kart type (stats),
@@ -10622,7 +10657,7 @@ return GarageUI
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="54">
+        <Item class="ModuleScript" referent="55">
           <Properties>
             <string name="Name">Hud</string>
             <string name="Source"><![CDATA[-- In-race screens: place, lap, item slot with roulette, standings, countdown,
@@ -10851,7 +10886,7 @@ return Hud
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="55">
+        <Item class="ModuleScript" referent="56">
           <Properties>
             <string name="Name">KartController</string>
             <string name="Source"><![CDATA[-- Drives your kart: reads input, runs KartPhysics on this client (you own the
@@ -11307,7 +11342,7 @@ return KartController
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="56">
+        <Item class="ModuleScript" referent="57">
           <Properties>
             <string name="Name">KartVisuals</string>
             <string name="Source"><![CDATA[-- Makes every nearby kart look alive, on this client only: the body leans into
@@ -11480,7 +11515,7 @@ return KartVisuals
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="57">
+        <Item class="ModuleScript" referent="58">
           <Properties>
             <string name="Name">LobbyScreens</string>
             <string name="Source"><![CDATA[-- Local wall displays and proximity doors for Kart HQ. SurfaceGuis belong
@@ -11764,7 +11799,7 @@ return LobbyScreens
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="58">
+        <Item class="ModuleScript" referent="59">
           <Properties>
             <string name="Name">LobbyUI</string>
             <string name="Source"><![CDATA[-- Lobby screens: the status bar (phase + countdown, always visible), coins,
@@ -12221,7 +12256,7 @@ return LobbyUI
 ]]></string>
           </Properties>
         </Item>
-        <Item class="LocalScript" referent="59">
+        <Item class="LocalScript" referent="60">
           <Properties>
             <string name="Name">Main</string>
             <string name="Source"><![CDATA[-- Client entry point: wires remotes to the lobby screens, garage, race HUD,
@@ -12509,7 +12544,7 @@ end)
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="60">
+        <Item class="ModuleScript" referent="61">
           <Properties>
             <string name="Name">Spectate</string>
             <string name="Source"><![CDATA[-- Spectator camera: follows a racer's kart from behind. Used by lobby players
@@ -12611,7 +12646,7 @@ return Spectate
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="61">
+        <Item class="ModuleScript" referent="62">
           <Properties>
             <string name="Name">TrackAnimator</string>
             <string name="Source"><![CDATA[-- Animates the current track on this client: crossers (toy robot, toy train,
@@ -12726,7 +12761,7 @@ return TrackAnimator
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="62">
+        <Item class="ModuleScript" referent="63">
           <Properties>
             <string name="Name">TrackPreview</string>
             <string name="Source"><![CDATA[-- Animated mini-map of a track, drawn from the same track data the race
@@ -12870,7 +12905,7 @@ return TrackPreview
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="63">
+        <Item class="ModuleScript" referent="64">
           <Properties>
             <string name="Name">UI</string>
             <string name="Source"><![CDATA[-- Shared look for every screen: rounded panels, chunky buttons sized for
@@ -13131,14 +13166,14 @@ return UI
       </Item>
     </Item>
   </Item>
-  <Item class="Workspace" referent="64">
+  <Item class="Workspace" referent="65">
     <Properties>
       <string name="Name">Workspace</string>
       <float name="Gravity">150</float>
       <bool name="NeedsPivotMigration">false</bool>
       <bool name="StreamingEnabled">false</bool>
     </Properties>
-    <Item class="Terrain" referent="65">
+    <Item class="Terrain" referent="66">
       <Properties>
         <string name="Name">Terrain</string>
         <bool name="Decoration">true</bool>

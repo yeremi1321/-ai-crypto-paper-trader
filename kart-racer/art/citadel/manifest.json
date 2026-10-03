@@ -1,0 +1,583 @@
+{
+  "track_id": "emberfort",
+  "road_length": 2591.453989737801,
+  "scenery_triangles": 74348,
+  "meshes": [
+    {
+      "center_roblox": [
+        300.0,
+        29.612503051757812,
+        -51.530426025390625
+      ],
+      "size_roblox": [
+        1500.0,
+        375.9803466796875,
+        1453.0608520507812
+      ],
+      "name": "Landscape_Basalt_1",
+      "triangles": 8972,
+      "fbx": "exports/Landscape_Basalt_1.fbx",
+      "material": "Basalt"
+    },
+    {
+      "center_roblox": [
+        -149.4890365600586,
+        32.188392639160156,
+        -53.996307373046875
+      ],
+      "size_roblox": [
+        511.8130645751953,
+        362.8940887451172,
+        1314.9092407226562
+      ],
+      "name": "Landscape_Basalt_2",
+      "triangles": 8960,
+      "fbx": "exports/Landscape_Basalt_2.fbx",
+      "material": "Basalt"
+    },
+    {
+      "center_roblox": [
+        451.9528465270996,
+        35.40119934082031,
+        382.4404602050781
+      ],
+      "size_roblox": [
+        1097.9657669067383,
+        372.3164367675781,
+        722.4028930664062
+      ],
+      "name": "Landscape_Basalt_3",
+      "triangles": 8960,
+      "fbx": "exports/Landscape_Basalt_3.fbx",
+      "material": "Basalt"
+    },
+    {
+      "center_roblox": [
+        433.3937072753906,
+        17.243072509765625,
+        -293.0959663391113
+      ],
+      "size_roblox": [
+        1169.1553344726562,
+        236.61325073242188,
+        760.8211288452148
+      ],
+      "name": "Landscape_Basalt_4",
+      "triangles": 8960,
+      "fbx": "exports/Landscape_Basalt_4.fbx",
+      "material": "Basalt"
+    },
+    {
+      "center_roblox": [
+        297.2389221191406,
+        3.877666473388672,
+        270.0950469970703
+      ],
+      "size_roblox": [
+        905.8954467773438,
+        75.15117645263672,
+        549.8946228027344
+      ],
+      "name": "Landscape_Basalt_5",
+      "triangles": 7360,
+      "fbx": "exports/Landscape_Basalt_5.fbx",
+      "material": "Basalt"
+    },
+    {
+      "center_roblox": [
+        301.13316345214844,
+        18.198694229125977,
+        -65.89958190917969
+      ],
+      "size_roblox": [
+        747.6127014160156,
+        38.39738845825195,
+        1073.9272766113281
+      ],
+      "name": "Landscape_Lava_1",
+      "triangles": 928,
+      "fbx": "exports/Landscape_Lava_1.fbx",
+      "material": "Lava"
+    },
+    {
+      "center_roblox": [
+        -4.988685607910156,
+        43.650001525878906,
+        -154.11193943023682
+      ],
+      "size_roblox": [
+        118.33747863769531,
+        72.5,
+        333.5415630340576
+      ],
+      "name": "Sector1_CitadelStone_1",
+      "triangles": 2704,
+      "fbx": "exports/Sector1_CitadelStone_1.fbx",
+      "material": "CitadelStone"
+    },
+    {
+      "center_roblox": [
+        -4.988685607910156,
+        46.36868953704834,
+        -154.14847803115845
+      ],
+      "size_roblox": [
+        119.93748474121094,
+        56.06262397766113,
+        334.2207441329956
+      ],
+      "name": "Sector1_SandstoneTrim_1",
+      "triangles": 896,
+      "fbx": "exports/Sector1_SandstoneTrim_1.fbx",
+      "material": "SandstoneTrim"
+    },
+    {
+      "center_roblox": [
+        -4.533742904663086,
+        40.90000057220459,
+        -121.34151247143745
+      ],
+      "size_roblox": [
+        92.93737411499023,
+        43.00000190734863,
+        243.76140254735947
+      ],
+      "name": "Sector1_Iron_1",
+      "triangles": 432,
+      "fbx": "exports/Sector1_Iron_1.fbx",
+      "material": "Iron"
+    },
+    {
+      "center_roblox": [
+        -2.267251968383789,
+        25.425400733947754,
+        -121.31540727615356
+      ],
+      "size_roblox": [
+        85.9145622253418,
+        3.6541004180908203,
+        244.39103603363037
+      ],
+      "name": "Sector1_Flame_1",
+      "triangles": 1920,
+      "fbx": "exports/Sector1_Flame_1.fbx",
+      "material": "Flame"
+    },
+    {
+      "center_roblox": [
+        -4.7787169218063354,
+        70.4000015258789,
+        -125.8724136352539
+      ],
+      "size_roblox": [
+        8.05109429359436,
+        9.0,
+        2.264739990234375
+      ],
+      "name": "Sector1_Gold_1",
+      "triangles": 44,
+      "fbx": "exports/Sector1_Gold_1.fbx",
+      "material": "Gold"
+    },
+    {
+      "center_roblox": [
+        103.71881866455078,
+        20.24824571609497,
+        -434.8709716796875
+      ],
+      "size_roblox": [
+        274.19822692871094,
+        12.660773277282715,
+        273.498779296875
+      ],
+      "name": "Sector2_CitadelStone_1",
+      "triangles": 1584,
+      "fbx": "exports/Sector2_CitadelStone_1.fbx",
+      "material": "CitadelStone"
+    },
+    {
+      "center_roblox": [
+        103.7049446105957,
+        20.798246383666992,
+        -434.8891143798828
+      ],
+      "size_roblox": [
+        275.0183334350586,
+        5.810771942138672,
+        274.3174743652344
+      ],
+      "name": "Sector2_SandstoneTrim_1",
+      "triangles": 528,
+      "fbx": "exports/Sector2_SandstoneTrim_1.fbx",
+      "material": "SandstoneTrim"
+    },
+    {
+      "center_roblox": [
+        378.0550231933594,
+        53.73009490966797,
+        -486.66748046875
+      ],
+      "size_roblox": [
+        325.86700439453125,
+        72.5,
+        202.891845703125
+      ],
+      "name": "Sector3_CitadelStone_1",
+      "triangles": 2704,
+      "fbx": "exports/Sector3_CitadelStone_1.fbx",
+      "material": "CitadelStone"
+    },
+    {
+      "center_roblox": [
+        378.1011505126953,
+        54.147586822509766,
+        -486.8816680908203
+      ],
+      "size_roblox": [
+        326.6939392089844,
+        60.665016174316406,
+        204.21749877929688
+      ],
+      "name": "Sector3_SandstoneTrim_1",
+      "triangles": 896,
+      "fbx": "exports/Sector3_SandstoneTrim_1.fbx",
+      "material": "SandstoneTrim"
+    },
+    {
+      "center_roblox": [
+        319.5567626953125,
+        54.48009490966797,
+        -534.7902069091797
+      ],
+      "size_roblox": [
+        26.74365234375,
+        36.0,
+        89.17788696289062
+      ],
+      "name": "Sector3_Iron_1",
+      "triangles": 264,
+      "fbx": "exports/Sector3_Iron_1.fbx",
+      "material": "Iron"
+    },
+    {
+      "center_roblox": [
+        326.2254180908203,
+        80.48009490966797,
+        -532.6620788574219
+      ],
+      "size_roblox": [
+        4.215789794921875,
+        9.0,
+        8.10772705078125
+      ],
+      "name": "Sector3_Gold_1",
+      "triangles": 44,
+      "fbx": "exports/Sector3_Gold_1.fbx",
+      "material": "Gold"
+    },
+    {
+      "center_roblox": [
+        539.3791656494141,
+        43.91784477233887,
+        -323.51268005371094
+      ],
+      "size_roblox": [
+        136.00595092773438,
+        14.879840850830078,
+        222.33316040039062
+      ],
+      "name": "Sector4_CitadelStone_1",
+      "triangles": 1056,
+      "fbx": "exports/Sector4_CitadelStone_1.fbx",
+      "material": "CitadelStone"
+    },
+    {
+      "center_roblox": [
+        539.3549194335938,
+        44.46784591674805,
+        -323.5475769042969
+      ],
+      "size_roblox": [
+        136.8670654296875,
+        8.029838562011719,
+        223.1395263671875
+      ],
+      "name": "Sector4_SandstoneTrim_1",
+      "triangles": 352,
+      "fbx": "exports/Sector4_SandstoneTrim_1.fbx",
+      "material": "SandstoneTrim"
+    },
+    {
+      "center_roblox": [
+        538.5708312988281,
+        47.82063293457031,
+        288.94049072265625
+      ],
+      "size_roblox": [
+        228.69842529296875,
+        72.5,
+        281.75079345703125
+      ],
+      "name": "Sector5_CitadelStone_1",
+      "triangles": 1384,
+      "fbx": "exports/Sector5_CitadelStone_1.fbx",
+      "material": "CitadelStone"
+    },
+    {
+      "center_roblox": [
+        538.3746185302734,
+        56.07063293457031,
+        289.1939926147461
+      ],
+      "size_roblox": [
+        229.90603637695312,
+        45.0,
+        282.9976348876953
+      ],
+      "name": "Sector5_SandstoneTrim_1",
+      "triangles": 456,
+      "fbx": "exports/Sector5_SandstoneTrim_1.fbx",
+      "material": "SandstoneTrim"
+    },
+    {
+      "center_roblox": [
+        470.5887756347656,
+        48.57063293457031,
+        369.9449005126953
+      ],
+      "size_roblox": [
+        42.48065185546875,
+        36.0,
+        82.86978149414062
+      ],
+      "name": "Sector5_Iron_1",
+      "triangles": 264,
+      "fbx": "exports/Sector5_Iron_1.fbx",
+      "material": "Iron"
+    },
+    {
+      "center_roblox": [
+        464.29058837890625,
+        74.57063293457031,
+        372.99989318847656
+      ],
+      "size_roblox": [
+        5.11627197265625,
+        9.0,
+        7.896209716796875
+      ],
+      "name": "Sector5_Gold_1",
+      "triangles": 44,
+      "fbx": "exports/Sector5_Gold_1.fbx",
+      "material": "Gold"
+    },
+    {
+      "center_roblox": [
+        513.3861541748047,
+        27.22555923461914,
+        304.4614944458008
+      ],
+      "size_roblox": [
+        267.4931945800781,
+        21.534881591796875,
+        273.89805603027344
+      ],
+      "name": "Sector6_CitadelStone_1",
+      "triangles": 1584,
+      "fbx": "exports/Sector6_CitadelStone_1.fbx",
+      "material": "CitadelStone"
+    },
+    {
+      "center_roblox": [
+        513.4098815917969,
+        27.775558471679688,
+        304.47167205810547
+      ],
+      "size_roblox": [
+        268.29766845703125,
+        14.684883117675781,
+        274.70643615722656
+      ],
+      "name": "Sector6_SandstoneTrim_1",
+      "triangles": 528,
+      "fbx": "exports/Sector6_SandstoneTrim_1.fbx",
+      "material": "SandstoneTrim"
+    },
+    {
+      "center_roblox": [
+        503.90464782714844,
+        29.29242515563965,
+        332.33260345458984
+      ],
+      "size_roblox": [
+        223.97769165039062,
+        15.66861343383789,
+        207.9184112548828
+      ],
+      "name": "Sector6_Iron_1",
+      "triangles": 168,
+      "fbx": "exports/Sector6_Iron_1.fbx",
+      "material": "Iron"
+    },
+    {
+      "center_roblox": [
+        503.9081268310547,
+        32.77805519104004,
+        332.2983856201172
+      ],
+      "size_roblox": [
+        224.70852661132812,
+        14.10696029663086,
+        208.63540649414062
+      ],
+      "name": "Sector6_Flame_1",
+      "triangles": 1920,
+      "fbx": "exports/Sector6_Flame_1.fbx",
+      "material": "Flame"
+    },
+    {
+      "center_roblox": [
+        198.79403686523438,
+        43.650001525878906,
+        327.7816848754883
+      ],
+      "size_roblox": [
+        402.97369384765625,
+        72.5,
+        247.0830535888672
+      ],
+      "name": "Sector7_CitadelStone_1",
+      "triangles": 2704,
+      "fbx": "exports/Sector7_CitadelStone_1.fbx",
+      "material": "CitadelStone"
+    },
+    {
+      "center_roblox": [
+        198.572172164917,
+        46.12247371673584,
+        327.5313949584961
+      ],
+      "size_roblox": [
+        404.12988662719727,
+        56.55505561828613,
+        248.3363800048828
+      ],
+      "name": "Sector7_SandstoneTrim_1",
+      "triangles": 896,
+      "fbx": "exports/Sector7_SandstoneTrim_1.fbx",
+      "material": "SandstoneTrim"
+    },
+    {
+      "center_roblox": [
+        53.57575035095215,
+        44.40000057220459,
+        258.1688232421875
+      ],
+      "size_roblox": [
+        69.43782424926758,
+        36.00000190734863,
+        61.98089599609375
+      ],
+      "name": "Sector7_Iron_1",
+      "triangles": 264,
+      "fbx": "exports/Sector7_Iron_1.fbx",
+      "material": "Iron"
+    },
+    {
+      "center_roblox": [
+        48.99838638305664,
+        70.4000015258789,
+        252.87281036376953
+      ],
+      "size_roblox": [
+        7.098854064941406,
+        9.0,
+        6.4828948974609375
+      ],
+      "name": "Sector7_Gold_1",
+      "triangles": 44,
+      "fbx": "exports/Sector7_Gold_1.fbx",
+      "material": "Gold"
+    },
+    {
+      "center_roblox": [
+        36.52172088623047,
+        18.249999046325684,
+        169.77087211608887
+      ],
+      "size_roblox": [
+        177.0542755126953,
+        7.69999885559082,
+        321.28601455688477
+      ],
+      "name": "Sector8_CitadelStone_1",
+      "triangles": 1584,
+      "fbx": "exports/Sector8_CitadelStone_1.fbx",
+      "material": "CitadelStone"
+    },
+    {
+      "center_roblox": [
+        36.56513786315918,
+        18.799999237060547,
+        169.84379291534424
+      ],
+      "size_roblox": [
+        177.87977981567383,
+        0.8499984741210938,
+        322.0621089935303
+      ],
+      "name": "Sector8_SandstoneTrim_1",
+      "triangles": 528,
+      "fbx": "exports/Sector8_SandstoneTrim_1.fbx",
+      "material": "SandstoneTrim"
+    },
+    {
+      "center_roblox": [
+        557.833984375,
+        53.60074806213379,
+        -29.80377197265625
+      ],
+      "size_roblox": [
+        175.761962890625,
+        58.00837326049805,
+        397.4892883300781
+      ],
+      "name": "Bridge_Iron_1",
+      "triangles": 4064,
+      "fbx": "exports/Bridge_Iron_1.fbx",
+      "material": "Iron"
+    },
+    {
+      "center_roblox": [
+        586.2705993652344,
+        36.934288024902344,
+        -41.444732666015625
+      ],
+      "size_roblox": [
+        135.44403076171875,
+        109.86857604980469,
+        385.902099609375
+      ],
+      "name": "Bridge_CitadelStone_1",
+      "triangles": 176,
+      "fbx": "exports/Bridge_CitadelStone_1.fbx",
+      "material": "CitadelStone"
+    },
+    {
+      "center_roblox": [
+        586.5630798339844,
+        86.3846664428711,
+        -41.15221405029297
+      ],
+      "size_roblox": [
+        138.13494873046875,
+        13.967819213867188,
+        388.59303283691406
+      ],
+      "name": "Bridge_SandstoneTrim_1",
+      "triangles": 176,
+      "fbx": "exports/Bridge_SandstoneTrim_1.fbx",
+      "material": "SandstoneTrim"
+    }
+  ]
+}

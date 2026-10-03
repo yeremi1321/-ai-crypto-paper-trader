@@ -222,3 +222,13 @@ and engine drive details. Nature models have branches, root flares, smoother
 canopies and weathered rock material patches. Review the 1080×1080 renders
 and per-model triangle counts under `art/` before importing; Studio rendering
 and actual avatar/wheel behaviour remain unverified.
+
+## Emberstone Citadel map preview and scenery import
+
+`art/citadel/` contains the original Blender map, 1080p geometry renders,
+512px textures, chunked scenery FBXs and a coordinate/triangle manifest.
+The road is derived from the existing playable track. A Model named
+`ReplicatedStorage.KartAssets.Tracks.emberfort` replaces the procedural
+FortressBuilder scenery; native roads, checkpoints and race mechanics stay
+active. See `art/citadel/README.md` before import. Blender renders do not
+verify Roblox lighting, material loading, terrain overlap or performance.

@@ -187,6 +187,33 @@ check("KartRig builds every kart class and body design", function()
 	end
 end)
 
+check("Imported citadel scenery preserves road and original world coordinates", function()
+	local root = Instance.new("Folder")
+	root.Name = "KartAssets"
+	root.Parent = game:GetService("ReplicatedStorage")
+	local tracks = Instance.new("Folder")
+	tracks.Name = "Tracks"
+	tracks.Parent = root
+	local source = Instance.new("Model")
+	source.Name = "emberfort"
+	source.Parent = tracks
+	local part = Instance.new("Part")
+	part.Name = "ImportedArch"
+	part.CFrame = roblox.CFrame.new(100, 50, -200)
+	part.Parent = source
+	local TrackBuilder = load(server.TrackBuilder)
+	local world = TrackBuilder.build("emberfort")
+	local citadel = world:FindFirstChild("Citadel")
+	assert(citadel and citadel:IsA("Model"), "imported citadel replaces fallback")
+	local copy = citadel:FindFirstChild("ImportedArch")
+	assert(copy.CFrame.Position == part.CFrame.Position, "absolute export coordinates")
+	assert(copy.Anchored and not copy.CanCollide and not copy.CanQuery, "scenery is cosmetic")
+	assert(world:FindFirstChild("RoadSurface"), "native drivable road remains")
+	assert(source.Parent == tracks, "original asset remains untouched")
+	root:Destroy()
+	world:Destroy()
+end)
+
 check("ItemService: boxes, and every item used in a fake race", function()
 	local Track = load(shared.Track)
 	local Tracks = load(shared.Tracks)

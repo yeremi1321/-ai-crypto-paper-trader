@@ -3,6 +3,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Track = require(ReplicatedStorage.Shared.Track)
 local Shapes = require(ReplicatedStorage.Common.Shapes)
+local Assets = require(ReplicatedStorage.Common.Assets)
 local FortressBuilder = {}
 local stone = Color3.fromRGB(86, 79, 76)
 local trim = Color3.fromRGB(145, 127, 105)
@@ -12,6 +13,11 @@ local function box(parent, size, cf, color, name, material)
  return Shapes.box(parent, size, cf, { color = color, material = material or Enum.Material.Cobblestone, name = name, collide = false })
 end
 function FortressBuilder.build(track, parent)
+ local imported = Assets.placeTrack(track.def.id, parent)
+ if imported then
+  imported.Name = "Citadel"
+  return
+ end
  local folder = Instance.new("Folder")
  folder.Name = "Citadel"
  folder.Parent = parent

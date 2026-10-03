@@ -22,10 +22,12 @@
           <string name="Name">Atmos</string>
           <string name="Source"><![CDATA[-- Lighting for a track theme (sky haze, sun, bloom, colour grading). Runs on
 -- each client: racers see the track's theme while lobby players keep the
--- carnival look, since Lighting changes made on a client stay on that client.
+-- Kart HQ look, since Lighting changes made on a client stay on that client.
+-- Changes ease in over a second or so instead of snapping.
 
 local Lighting = game:GetService("Lighting")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 
 local function child(parent: Instance, name: string): Instance
 	return parent:FindFirstChild(name) or parent:WaitForChild(name)
@@ -34,60 +36,78 @@ local Tracks = require(child(child(ReplicatedStorage, "Shared"), "Tracks"))
 
 local Atmos = {}
 
+Atmos.FadeSeconds = 1.2
+
 local function rgb(c: { number }): Color3
 	return Color3.fromRGB(c[1], c[2], c[3])
 end
 
--- Sky, sun and colour grading for a theme. Replaces the previous track's.
-function Atmos.applyTheme(theme: any)
-	for _, name in { "KartAtmosphere", "KartBloom", "KartGrade", "KartSunRays" } do
-		local old = Lighting:FindFirstChild(name)
-		if old then
-			old:Destroy()
-		end
+-- The effect objects are made once and then tweened between themes.
+local function effect(className: string, name: string): Instance
+	local existing = Lighting:FindFirstChild(name)
+	if existing and existing.ClassName == className then
+		return existing
 	end
+	if existing then
+		existing:Destroy()
+	end
+	local e = Instance.new(className)
+	e.Name = name
+	e.Parent = Lighting
+	return e
+end
+
+local function tween(inst: Instance, seconds: number, goals: { [string]: any })
+	if seconds <= 0 then
+		for k, v in goals do
+			(inst :: any)[k] = v
+		end
+		return
+	end
+	TweenService:Create(inst, TweenInfo.new(seconds, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), goals):Play()
+end
+
+-- Sky, sun and colour grading for a theme. `seconds` = fade time (0 = snap).
+function Atmos.applyTheme(theme: any, seconds: number?)
+	local fade = seconds or Atmos.FadeSeconds
+	-- The sun can't sweep across the sky in a second without looking odd, so
+	-- the time of day changes at once; everything else fades.
 	Lighting.ClockTime = theme.clock
-	Lighting.Brightness = theme.brightness
-	Lighting.Ambient = rgb(theme.ambient)
-	Lighting.OutdoorAmbient = rgb(theme.ambient)
 	Lighting.GlobalShadows = true
 	Lighting.EnvironmentDiffuseScale = 0.5
 	Lighting.EnvironmentSpecularScale = 0.5
+	tween(Lighting, fade, {
+		Brightness = theme.brightness,
+		Ambient = rgb(theme.ambient),
+		OutdoorAmbient = rgb(theme.ambient),
+	})
 
 	local a = theme.atmosphere
-	local atmosphere = Instance.new("Atmosphere")
-	atmosphere.Name = "KartAtmosphere"
-	atmosphere.Density = a.density
-	atmosphere.Haze = a.haze
-	atmosphere.Glare = a.glare
-	atmosphere.Color = rgb(a.color)
-	atmosphere.Decay = rgb(a.decay)
-	atmosphere.Parent = Lighting
+	tween(effect("Atmosphere", "KartAtmosphere"), fade, {
+		Density = a.density,
+		Haze = a.haze,
+		Glare = a.glare,
+		Color = rgb(a.color),
+		Decay = rgb(a.decay),
+	})
 
-	local bloom = Instance.new("BloomEffect")
-	bloom.Name = "KartBloom"
-	bloom.Intensity = theme.bloom
+	local bloom = effect("BloomEffect", "KartBloom") :: BloomEffect
 	bloom.Size = 24
 	bloom.Threshold = 0.9
-	bloom.Parent = Lighting
+	tween(bloom, fade, { Intensity = theme.bloom })
 
-	local grade = Instance.new("ColorCorrectionEffect")
-	grade.Name = "KartGrade"
-	grade.TintColor = rgb(theme.tint)
-	grade.Saturation = theme.saturation
+	local grade = effect("ColorCorrectionEffect", "KartGrade") :: ColorCorrectionEffect
 	grade.Contrast = 0.08
-	grade.Parent = Lighting
+	tween(grade, fade, { TintColor = rgb(theme.tint), Saturation = theme.saturation })
 
-	local rays = Instance.new("SunRaysEffect")
-	rays.Name = "KartSunRays"
-	rays.Intensity = if theme.clock > 6 and theme.clock < 19 then 0.08 else 0
+	local rays = effect("SunRaysEffect", "KartSunRays") :: SunRaysEffect
 	rays.Spread = 0.6
-	rays.Parent = Lighting
+	tween(rays, fade, { Intensity = if theme.clock > 6 and theme.clock < 19 then 0.08 else 0 })
 end
 
-function Atmos.apply(themeId: string)
-	local theme = Tracks.Themes[themeId] or Tracks.Themes.carnival
-	Atmos.applyTheme(theme)
+function Atmos.apply(themeId: string, seconds: number?)
+	local theme = Tracks.Themes[themeId] or Tracks.Themes.hq
+	Atmos.applyTheme(theme, seconds)
 end
 
 return Atmos
@@ -1879,20 +1899,24 @@ return Karts
         <Properties>
           <string name="Name">LobbyLayout</string>
           <string name="Source"><![CDATA[--!strict
--- Where everything in the Kart Carnival lobby goes. The lobby sits far from
--- the race tracks (which are built around the world origin), so the two never
--- overlap. Coordinates are world studs; +z is "south", away from the voting area.
+-- Layout of the indoor lobby: a tall voting chamber in the middle, with
+-- side doors to optional rooms. It sits far from the race tracks (which are
+-- built around the world origin). Coordinates are world studs; -z is the
+-- "front" of the chamber (the giant voting screen), +z is the back (spawn).
 --
---            [voting pads + track displays]
---   [podium]       [status board]          [garage + kart displays]
---   [ready arch]     (spawn plaza)         [photo spot]
---   [spectator screen]
---            [practice loop: drift circle, jump ramp, boost tunnel]
+--                     [ giant voting screen + status board ]
+--   [departure door]   pads: 1   2   3   RANDOM   [departure door]
+--   west wall doors:          ( central circular floor )       east wall doors:
+--     garage            ramp                       ramp          practice hall
+--     viewing lounge                                             party bays
+--     trophy room        [ stairs down from the entrance ]
+--   [ walkway ]       [ entrance platform with spawn (raised) ]       [ walkway ]
 
 local Track = require("./Track")
 local v = Track.v
 
 export type Spot = { x: number, y: number, z: number }
+export type Box = { min: Spot, max: Spot }
 
 local LobbyLayout = {}
 
@@ -1900,81 +1924,134 @@ local OX, OZ = 0, 5000
 local function at(dx: number, dz: number, y: number?): Spot
 	return { x = OX + dx, y = y or 0, z = OZ + dz }
 end
+local function box(x0: number, z0: number, x1: number, z1: number): Box
+	return { min = at(x0, z0), max = at(x1, z1) }
+end
 
 LobbyLayout.Origin = at(0, 0)
-LobbyLayout.Spawn = at(0, 0)
-LobbyLayout.PlazaRadius = 46
-LobbyLayout.StatusBoard = at(0, -58)
-LobbyLayout.VotePads = { at(-52, -112), at(0, -112), at(52, -112) }
-LobbyLayout.VotePadSize = 26
-LobbyLayout.ReadyArch = at(-72, 0)
-LobbyLayout.Garage = at(140, 0)
-LobbyLayout.KartDisplays = (function()
-	local spots = {}
-	for i = 0, 7 do
-		table.insert(spots, at(92, -56 + i * 16))
-	end
-	return spots
-end)()
-LobbyLayout.Podium = at(-120, -70)
-LobbyLayout.SpectatorScreen = at(-130, 60)
-LobbyLayout.PhotoSpot = at(120, 110)
-LobbyLayout.FerrisWheel = at(-190, -150)
 
--- Hidden collectibles (stage 5 turns these into coins).
-LobbyLayout.Collectibles = {
-	at(176, 30, 2), -- behind the garage
-	at(-190, -110, 2), -- under the Ferris wheel
-	at(120, 132, 2), -- behind the photo wall
-	at(-150, 74, 2), -- behind the spectator screen
-	at(0, 300, 3), -- inside the boost tunnel
-	at(-180, 380, 2), -- far corner of the practice area
+-- The chamber ------------------------------------------------------------
+LobbyLayout.HalfWidth = 120 -- interior x from -120 to 120
+LobbyLayout.HalfDepth = 150 -- interior z from -150 (screen) to 150 (back)
+LobbyLayout.Height = 110 -- tall ceiling, so cameras have room
+LobbyLayout.DeckHeight = 20 -- entrance platform and walkways
+
+LobbyLayout.Screen = { center = at(0, -150, 50), width = 130, height = 56, recess = 6 }
+LobbyLayout.StatusBoard = at(0, -149, 94)
+LobbyLayout.DepartureDoors = { at(-92, -150), at(92, -150) }
+LobbyLayout.CentralFloor = { center = at(0, -30), radius = 56 }
+
+-- Vote pads in an arc in front of the screen. Pad 4 is Random.
+LobbyLayout.VotePads = { at(-63, -100), at(-21, -106), at(21, -106), at(63, -100) }
+LobbyLayout.VotePadSize = 22
+LobbyLayout.RandomPad = 4
+-- Colours shared by the pads, the wall screen and the vote cards (RGB).
+LobbyLayout.PadColors = { { 0, 225, 255 }, { 255, 90, 170 }, { 255, 200, 60 }, { 170, 120, 255 } }
+
+-- Raised entrance platform across the back, with spawn in the middle.
+LobbyLayout.Platform = box(-120, 100, 120, 150)
+LobbyLayout.Spawn = at(0, 128, LobbyLayout.DeckHeight)
+LobbyLayout.Stairs = { from = at(0, 100, LobbyLayout.DeckHeight), to = at(0, 60), width = 50, steps = 10 }
+-- Gentle accessible ramps either side of the stairs (about 11 degrees).
+LobbyLayout.Ramps = {
+	{ from = at(-69, 100, LobbyLayout.DeckHeight), to = at(-69, 0), width = 18 },
+	{ from = at(69, 100, LobbyLayout.DeckHeight), to = at(69, 0), width = 18 },
+}
+-- Walkways along both side walls at deck height.
+LobbyLayout.Walkways = { box(-120, -140, -104, 100), box(104, -140, 120, 100) }
+
+-- Doors in the side walls (floor level, under the walkways), and the rooms behind.
+export type Room = { id: string, name: string, icon: string, door: Spot, side: number, box: Box }
+LobbyLayout.Rooms = {
+	{ id = "garage", name = "Garage", icon = "🔧", door = at(-120, -70), side = -1, box = box(-230, -112, -120, -28) },
+	{ id = "lounge", name = "Viewing Lounge", icon = "📺", door = at(-120, 5), side = -1, box = box(-230, -22, -120, 34) },
+	{ id = "trophy", name = "Trophy Room", icon = "🏆", door = at(-120, 70), side = -1, box = box(-230, 40, -120, 98) },
+	{ id = "practice", name = "Practice Circuit", icon = "🏁", door = at(120, -70), side = 1, box = box(120, -240, 520, -10) },
+	{ id = "party", name = "Party Bays", icon = "🎉", door = at(120, 40), side = 1, box = box(120, 10, 230, 90) },
+} :: { Room }
+LobbyLayout.DoorWidth = 22
+LobbyLayout.DoorHeight = 15
+
+-- Kart display alcoves: four under the screen, four in the side walls.
+LobbyLayout.KartDisplays = {
+	at(-45, -143),
+	at(-15, -143),
+	at(15, -143),
+	at(45, -143),
+	at(-114, -115),
+	at(-114, -32),
+	at(114, -115),
+	at(114, -5),
 }
 
--- Practice loop: an open area (no walls) south of the plaza.
-LobbyLayout.PracticeArea = { min = at(-240, 170), max = at(240, 470) }
-LobbyLayout.DriftCircle = { center = at(0, 320), radius = 46 }
+-- Indoor practice circuit (inside the practice hall). Open, no walls.
+LobbyLayout.PracticeArea = box(150, -230, 510, -18)
+LobbyLayout.DriftCircle = { center = at(330, -120), radius = 40 }
 LobbyLayout.PracticeTrack = {
 	id = "practice",
-	name = "Practice Loop",
-	theme = "carnival",
-	width = 36,
+	name = "Practice Circuit",
+	theme = "hq",
+	width = 34,
 	laps = 1,
 	walls = false,
 	controls = {
-		v(OX + 0, 0, OZ + 200),
-		v(OX + 150, 0, OZ + 200),
-		v(OX + 205, 0, OZ + 260),
-		v(OX + 205, 0, OZ + 380),
-		v(OX + 150, 0, OZ + 440),
-		v(OX - 150, 0, OZ + 440),
-		v(OX - 205, 0, OZ + 380),
-		v(OX - 205, 0, OZ + 260),
-		v(OX - 150, 0, OZ + 200),
+		v(OX + 240, 0, OZ - 40),
+		v(OX + 420, 0, OZ - 40),
+		v(OX + 465, 0, OZ - 80),
+		v(OX + 465, 0, OZ - 160),
+		v(OX + 420, 0, OZ - 200),
+		v(OX + 240, 0, OZ - 200),
+		v(OX + 195, 0, OZ - 160),
+		v(OX + 195, 0, OZ - 80),
 	},
-	-- Boost "tunnel" pads on the opening straight; the jump ramp is on the far straight.
-	boostPads = { { t = 0.04, offset = 0 }, { t = 0.08, offset = 0 } },
+	boostPads = { { t = 0.05, offset = 0 }, { t = 0.1, offset = 0 } },
 	itemRows = {},
-	ramps = { { t = 0.6, offset = 0, width = 18 } },
+	ramps = { { t = 0.62, offset = 0, width = 16 } },
 	difficulty = "Easy",
 	feature = "Practice drifting, jumping and boosting",
-	icon = "🎡",
+	icon = "🏁",
 } :: Track.TrackDef
 
-function LobbyLayout.inPlaza(x: number, z: number): boolean
-	local dx, dz = x - LobbyLayout.Spawn.x, z - LobbyLayout.Spawn.z
-	return dx * dx + dz * dz <= LobbyLayout.PlazaRadius * LobbyLayout.PlazaRadius
+-- Hidden golden tokens around the lobby rooms.
+LobbyLayout.Collectibles = {
+	at(-112, -136, LobbyLayout.DeckHeight + 2), -- far end of the west walkway
+	at(112, -136, LobbyLayout.DeckHeight + 2), -- far end of the east walkway
+	at(-220, -104, 2), -- back corner of the garage
+	at(226, 86, 2), -- behind the couch in the last party bay
+	at(-222, 92, 2), -- behind the trophy shelves
+	at(500, -225, 2), -- corner of the practice hall
+}
+
+-- Practice sign at the practice hall entrance; it starts a practice kart.
+LobbyLayout.PracticeStart = at(170, -70)
+
+function LobbyLayout.roomById(id: string): Room?
+	for _, room in LobbyLayout.Rooms do
+		if room.id == id then
+			return room
+		end
+	end
+	return nil
 end
 
--- Which vote pad (1..3) a position is standing on, if any.
+-- Which vote pad (1..4, 4 = Random) a position is standing on, if any.
 function LobbyLayout.padAt(x: number, z: number): number?
-	local half = LobbyLayout.VotePadSize / 2
+	local r = LobbyLayout.VotePadSize / 2
 	for i, pad in LobbyLayout.VotePads do
-		if math.abs(x - pad.x) <= half and math.abs(z - pad.z) <= half then
+		local dx, dz = x - pad.x, z - pad.z
+		if dx * dx + dz * dz <= r * r then
 			return i
 		end
 	end
 	return nil
+end
+
+function LobbyLayout.inChamber(x: number, z: number): boolean
+	return math.abs(x - OX) <= LobbyLayout.HalfWidth and math.abs(z - OZ) <= LobbyLayout.HalfDepth
+end
+
+function LobbyLayout.inBox(b: Box, x: number, z: number): boolean
+	return x >= b.min.x and x <= b.max.x and z >= b.min.z and z <= b.max.z
 end
 
 return LobbyLayout
@@ -3277,6 +3354,24 @@ Tracks.Themes = {
 		tint = { 255, 250, 245 },
 		saturation = 0.25,
 	},
+	-- Kart HQ, the indoor lobby: soft, clear white light with cool blue fill,
+	-- and enough bloom for the cyan trim to glow without washing out.
+	hq = {
+		road = { 40, 48, 78 },
+		shoulder = { 28, 38, 72 },
+		ground = { 16, 22, 44 },
+		wall = { 34, 46, 86 },
+		accent = { 0, 225, 255 },
+		curb = { { 0, 225, 255 }, { 240, 246, 255 } },
+		line = { 240, 246, 255 },
+		clock = 14,
+		ambient = { 128, 136, 165 },
+		brightness = 2,
+		atmosphere = { density = 0.12, haze = 0, glare = 0, color = { 200, 215, 240 }, decay = { 120, 140, 190 } },
+		bloom = 0.7,
+		tint = { 245, 250, 255 },
+		saturation = 0.18,
+	},
 	neon = {
 		road = { 30, 30, 42 },
 		shoulder = { 50, 30, 80 },
@@ -3558,6 +3653,11 @@ local Voting = {}
 
 Voting.OptionCount = 3
 Voting.VoteSeconds = 20
+Voting.AnnounceSeconds = 5 -- winner reveal before the race loads
+
+-- The fourth choice. It isn't a track: picking it casts your vote for one of
+-- the offered tracks, chosen at random, and the cards show which one.
+Voting.Random = "random"
 
 -- Picks `count` different tracks from `pool` (a list of ids), avoiding the
 -- track that was just raced when there are enough others. `random` returns 0..1.
@@ -3611,6 +3711,12 @@ function Voting.winner(options: { string }, votes: { [any]: string }, random: ()
 		end
 	end
 	return tied[math.floor(random() * #tied) + 1]
+end
+
+-- The track a Random vote goes to: any of the offered options.
+function Voting.randomPick(options: { string }, random: () -> number): string
+	assert(#options > 0, "no options to vote on")
+	return options[math.min(#options, math.floor(random() * #options) + 1)]
 end
 
 -- Who voted for what, for the voter icons on each option.
@@ -4753,11 +4859,19 @@ return Landmarks
       <Item class="ModuleScript" referent="27">
         <Properties>
           <string name="Name">LobbyBuilder</string>
-          <string name="Source"><![CDATA[-- Builds the Kart Carnival lobby from LobbyLayout: spawn plaza, status board,
--- map voting pads with miniature track displays, ready arch, garage with kart
--- display pedestals, podium, spectator screen, photo spot, Ferris wheel,
--- practice loop (drift circle, jump ramp, boost tunnel) and hidden tokens.
--- Returns handles RoundService uses to update signs and displays.
+          <string name="Source"><![CDATA[-- Builds the Kart HQ lobby from LobbyLayout: a tall indoor voting chamber.
+--   * raised entrance platform with spawn, wide stairs and two gentle ramps
+--   * central circular floor with celebration pedestals
+--   * four vote pads (three tracks + Random) under a giant recessed screen
+--   * status board above the screen, departure doors either side of it
+--   * walkways along both side walls, rounded columns with lit panels
+--   * labelled sliding doors to the garage, viewing lounge, trophy room,
+--     practice circuit and party bays
+--
+-- The wall screen, status board, pad signs and lounge screen are blank parts
+-- here; each client draws them from the round state (client/LobbyScreens), so
+-- they stay in sync with the vote cards. Sliding doors are opened on clients.
+-- Returns handles RoundService uses for karts, prompts and celebrations.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
@@ -4766,7 +4880,6 @@ local Shared = ReplicatedStorage.Shared
 local Karts = require(Shared.Karts)
 local LobbyLayout = require(Shared.LobbyLayout)
 local Track = require(Shared.Track)
-local Tracks = require(Shared.Tracks)
 local KartRig = require(ReplicatedStorage.Common.KartRig)
 local Shapes = require(ReplicatedStorage.Common.Shapes)
 
@@ -4774,201 +4887,299 @@ local TrackBuilder = require(script.Parent.TrackBuilder)
 
 local LobbyBuilder = {}
 
-local PALETTE = {
-	pink = Color3.fromRGB(255, 95, 140),
-	yellow = Color3.fromRGB(255, 205, 60),
-	sky = Color3.fromRGB(90, 190, 255),
-	mint = Color3.fromRGB(110, 220, 170),
-	purple = Color3.fromRGB(160, 110, 240),
-	white = Color3.fromRGB(250, 250, 252),
-	cream = Color3.fromRGB(255, 240, 215),
-	grass = Color3.fromRGB(120, 200, 110),
-	tile = Color3.fromRGB(235, 225, 210),
-	dark = Color3.fromRGB(40, 42, 56),
-	gold = Color3.fromRGB(255, 200, 40),
-}
-local PAD_COLORS = { PALETTE.pink, PALETTE.sky, PALETTE.mint }
+-- Optional looping ambience (a soft machinery hum). Upload a sound to Roblox
+-- and paste its id here, e.g. "rbxassetid://123456". Empty = silent.
+LobbyBuilder.AmbientSoundId = ""
 
-local function cf(spot: LobbyLayout.Spot, y: number?): CFrame
+local C = {
+	wall = Color3.fromRGB(22, 30, 58),
+	wallLight = Color3.fromRGB(34, 46, 86),
+	panel = Color3.fromRGB(28, 38, 72),
+	floor = Color3.fromRGB(26, 34, 62),
+	floorLine = Color3.fromRGB(44, 64, 110),
+	navy = Color3.fromRGB(16, 22, 44),
+	cyan = Color3.fromRGB(0, 225, 255),
+	cyanSoft = Color3.fromRGB(110, 230, 255),
+	white = Color3.fromRGB(240, 246, 255),
+	lamp = Color3.fromRGB(190, 215, 245),
+	steel = Color3.fromRGB(170, 185, 210),
+	gold = Color3.fromRGB(255, 200, 60),
+	silver = Color3.fromRGB(205, 215, 230),
+	bronze = Color3.fromRGB(225, 145, 80),
+	pink = Color3.fromRGB(255, 90, 170),
+	screen = Color3.fromRGB(8, 12, 26),
+	glass = Color3.fromRGB(150, 220, 255),
+}
+local NEON = Enum.Material.Neon
+local GLASS = Enum.Material.Glass
+
+local O = LobbyLayout.Origin
+local HW, HD = LobbyLayout.HalfWidth, LobbyLayout.HalfDepth
+local HEIGHT, DECK = LobbyLayout.Height, LobbyLayout.DeckHeight
+local WALL = 4 -- chamber wall thickness
+
+local function rgb(t: { number }): Color3
+	return Color3.fromRGB(t[1], t[2], t[3])
+end
+
+-- World position from chamber-relative x/z.
+local function W(x: number, y: number, z: number): Vector3
+	return Vector3.new(O.x + x, y, O.z + z)
+end
+
+local function at(spot: LobbyLayout.Spot, y: number?): CFrame
 	return CFrame.new(spot.x, (y or 0) + spot.y, spot.z)
 end
 
-local function facing(spot: LobbyLayout.Spot, target: LobbyLayout.Spot, y: number): CFrame
-	local from = Vector3.new(spot.x, y, spot.z)
-	return CFrame.lookAt(from, Vector3.new(target.x, y, target.z))
+-- A CFrame at `pos` whose front face (-Z) looks along `dir`.
+local function facing(pos: Vector3, dir: Vector3): CFrame
+	return CFrame.lookAt(pos, pos + dir)
 end
 
--- A sign with a SurfaceGui on its front. Returns the title and body labels.
-local function sign(parent: Instance, size: Vector3, at: CFrame, color: Color3, title: string): (TextLabel, TextLabel)
-	local parts = Shapes.roundedBox(parent, size, 1.2, at, { color = color, collide = true })
-	local face = Shapes.box(parent, Vector3.new(size.X - 2, size.Y - 2, 0.2), at * CFrame.new(0, 0, -size.Z / 2 - 0.1), { color = PALETTE.dark })
-	local _ = parts
+local function light(parent: BasePart, kind: string, range: number, brightness: number, color: Color3)
+	local l = Instance.new(kind) :: any
+	l.Range = range
+	l.Brightness = brightness
+	l.Color = color
+	l.Shadows = false
+	l.Parent = parent
+	return l
+end
+
+-- Text on the front face of a part.
+local function text(part: BasePart, value: string, color: Color3, pixelsPerStud: number?): TextLabel
 	local gui = Instance.new("SurfaceGui")
 	gui.Face = Enum.NormalId.Front
 	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
-	gui.PixelsPerStud = 24
+	gui.PixelsPerStud = pixelsPerStud or 20
 	gui.LightInfluence = 0
-	gui.Parent = face
-	local titleLabel = Instance.new("TextLabel")
-	titleLabel.Size = UDim2.fromScale(1, 0.32)
-	titleLabel.BackgroundTransparency = 1
-	titleLabel.Font = Enum.Font.FredokaOne
-	titleLabel.TextScaled = true
-	titleLabel.TextColor3 = PALETTE.yellow
-	titleLabel.Text = title
-	titleLabel.Parent = gui
-	local body = Instance.new("TextLabel")
-	body.Position = UDim2.fromScale(0.04, 0.34)
-	body.Size = UDim2.fromScale(0.92, 0.62)
-	body.BackgroundTransparency = 1
-	body.Font = Enum.Font.FredokaOne
-	body.TextScaled = true
-	body.TextWrapped = true
-	body.TextColor3 = PALETTE.white
-	body.Text = ""
-	body.Parent = gui
-	return titleLabel, body
+	gui.Parent = part
+	local l = Instance.new("TextLabel")
+	l.Size = UDim2.fromScale(1, 1)
+	l.BackgroundTransparency = 1
+	l.Font = Enum.Font.FredokaOne
+	l.TextScaled = true
+	l.TextWrapped = true
+	l.TextColor3 = color
+	l.TextStrokeTransparency = 0.5
+	l.Text = value
+	l.Parent = gui
+	return l
 end
 
-local function prompt(parent: BasePart, action: string, object: string, key: Enum.KeyCode?): ProximityPrompt
+local function prompt(parent: BasePart, action: string, object: string): ProximityPrompt
 	local p = Instance.new("ProximityPrompt")
 	p.ActionText = action
 	p.ObjectText = object
-	p.KeyboardKeyCode = key or Enum.KeyCode.E
-	p.MaxActivationDistance = 16
+	p.KeyboardKeyCode = Enum.KeyCode.E
+	p.MaxActivationDistance = 14
 	p.RequiresLineOfSight = false
 	p.HoldDuration = 0.15
 	p.Parent = parent
 	return p
 end
 
+-- A disc with a glowing rim: a neon disc with a slightly smaller one on top.
+local function rimDisc(parent: Instance, diameter: number, top: number, cf: CFrame, color: Color3, rim: Color3, rimWidth: number?)
+	local w = rimWidth or 1
+	Shapes.disc(parent, diameter, 0.4, cf * CFrame.new(0, top - 0.25, 0), { color = rim, material = NEON, collide = true })
+	return Shapes.disc(parent, diameter - w * 2, 0.4, cf * CFrame.new(0, top - 0.2, 0), { color = color, collide = true })
+end
+
 ---------------------------------------------------------------------------
--- Decorations
+-- Architecture pieces
 ---------------------------------------------------------------------------
-local function balloonCluster(parent: Instance, at: CFrame)
-	local colors = { PALETTE.pink, PALETTE.yellow, PALETTE.sky, PALETTE.mint, PALETTE.purple }
-	for i = 1, 5 do
-		local a = i / 5 * math.pi * 2
-		local offset = Vector3.new(math.cos(a) * 2.2, 14 + (i % 2) * 2.5, math.sin(a) * 2.2)
-		Shapes.ellipsoid(parent, Vector3.new(3.4, 4.2, 3.4), at + offset, { color = colors[i], reflectance = 0.15 })
-		Shapes.box(parent, Vector3.new(0.08, offset.Y - 2, 0.08), at + Vector3.new(offset.X / 2, (offset.Y - 2) / 2, offset.Z / 2), { color = PALETTE.white })
+
+-- A straight wall from floor point `a` to `b`, with rectangular openings.
+-- Each opening is { at = distance from a, width, bottom, top }.
+type Opening = { at: number, width: number, bottom: number, top: number }
+local function wall(parent: Instance, a: Vector3, b: Vector3, height: number, thickness: number, openings: { Opening }, color: Color3?)
+	local along = Vector3.new(b.X - a.X, 0, b.Z - a.Z)
+	local length = along.Magnitude
+	local u = along.Unit
+	local style = { color = color or C.wall, collide = true }
+	local function block(d0: number, d1: number, y0: number, y1: number)
+		if d1 - d0 < 0.05 or y1 - y0 < 0.05 then
+			return
+		end
+		local center = a + u * ((d0 + d1) / 2) + Vector3.new(0, (y0 + y1) / 2, 0)
+		Shapes.box(parent, Vector3.new(thickness, y1 - y0, d1 - d0), facing(center, u), style)
+	end
+	table.sort(openings, function(x, y)
+		return x.at < y.at
+	end)
+	local cursor = 0
+	for _, o in openings do
+		local s, e = o.at - o.width / 2, o.at + o.width / 2
+		block(cursor, s, 0, height)
+		block(s, e, o.top, height)
+		block(s, e, 0, o.bottom)
+		cursor = e
+	end
+	block(cursor, length, 0, height)
+end
+
+-- A beveled wall panel on a wall, facing out along cf's look direction.
+local function wallPanel(parent: Instance, cf: CFrame, w: number, h: number, color: Color3?)
+	Shapes.box(parent, Vector3.new(w, h, 0.6), cf, { color = color or C.panel })
+	Shapes.box(parent, Vector3.new(w - 2.4, h - 2.4, 0.6), cf * CFrame.new(0, 0, -0.5), { color = C.wallLight })
+	-- 45° chamfers along each edge catch the light like a bevel.
+	for _, sy in { -1, 1 } do
+		Shapes.box(parent, Vector3.new(w - 1.2, 0.9, 0.9), cf * CFrame.new(0, sy * (h / 2 - 1.1), -0.35) * CFrame.Angles(math.rad(45), 0, 0), { color = C.panel })
+	end
+	for _, sx in { -1, 1 } do
+		Shapes.box(parent, Vector3.new(0.9, h - 1.2, 0.9), cf * CFrame.new(sx * (w / 2 - 1.1), 0, -0.35) * CFrame.Angles(0, math.rad(45), 0), { color = C.panel })
 	end
 end
 
-local function tent(parent: Instance, at: CFrame, color: Color3, size: number)
-	local s = size
-	Shapes.pillar(parent, 16 * s, 8 * s, at * CFrame.new(0, 4 * s, 0), { color = PALETTE.cream, collide = true })
-	for i = 0, 3 do
-		local d = (16 - i * 3.6) * s
-		Shapes.pillar(parent, d, 2 * s, at * CFrame.new(0, (9 + i * 2) * s, 0), { color = if i % 2 == 0 then color else PALETTE.white })
+-- A rail between two floor points: posts, a steel top tube, a cyan glow tube
+-- under it and a glass panel. Works on slopes (stairs and ramps) too.
+local RAIL_HEIGHT = 3.6
+local function railing(parent: Instance, a: Vector3, b: Vector3, posts: boolean?)
+	local length = (b - a).Magnitude
+	if length < 0.1 then
+		return
 	end
-	Shapes.ball(parent, 1.6 * s, at * CFrame.new(0, 17.4 * s, 0), { color = PALETTE.yellow })
-	Shapes.box(parent, Vector3.new(0.2, 4 * s, 3 * s), at * CFrame.new(0, 20 * s, 1.5 * s), { color = color })
+	local up = Vector3.new(0, RAIL_HEIGHT, 0)
+	local mid = (a + b) / 2
+	local along = CFrame.lookAt(mid, b) * CFrame.Angles(0, math.rad(90), 0) -- local x runs a → b
+	Shapes.tube(parent, 0.7, length + 0.6, along + up, { color = C.steel, collide = true })
+	Shapes.tube(parent, 0.35, length, along + up * 0.82, { color = C.cyan, material = NEON })
+	Shapes.box(parent, Vector3.new(length, RAIL_HEIGHT * 0.7, 0.2), along + up * 0.45, { color = C.glass, material = GLASS, transparency = 0.6, collide = true })
+	if posts ~= false then
+		local n = math.max(1, math.floor(length / 8 + 0.5))
+		for i = 0, n do
+			local p = a:Lerp(b, i / n)
+			Shapes.pillar(parent, 0.7, RAIL_HEIGHT, CFrame.new(p + up / 2), { color = C.steel })
+		end
+	end
 end
 
-local function stringLights(parent: Instance, a: Vector3, b: Vector3)
-	local colors = { PALETTE.yellow, PALETTE.pink, PALETTE.sky, PALETTE.mint }
-	local n = math.floor((b - a).Magnitude / 4)
-	for i = 0, n do
-		local t = i / n
-		local sag = math.sin(t * math.pi) * 3
-		Shapes.ball(parent, 0.9, CFrame.new(a:Lerp(b, t) - Vector3.new(0, sag, 0)), { color = colors[i % #colors + 1], material = Enum.Material.Neon })
+local function railPath(parent: Instance, points: { Vector3 })
+	for i = 1, #points - 1 do
+		railing(parent, points[i], points[i + 1], i == 1 or i == #points - 1 or (points[i + 1] - points[i]).Magnitude > 4)
 	end
 end
 
-local function ferrisWheel(parent: Instance, spot: LobbyLayout.Spot)
-	local base = cf(spot) * CFrame.Angles(0, math.rad(30), 0)
+-- Quarter-circle corner points (for rounded railing ends).
+local function arc(center: Vector3, radius: number, from: number, to: number, steps: number): { Vector3 }
+	local out = {}
+	for i = 0, steps do
+		local a = from + (to - from) * i / steps
+		table.insert(out, center + Vector3.new(math.cos(a) * radius, 0, math.sin(a) * radius))
+	end
+	return out
+end
+
+-- A rounded column with glowing rings and a lit panel facing `face`.
+local function column(parent: Instance, base: Vector3, height: number, face: Vector3)
+	Shapes.pillar(parent, 11, 2, CFrame.new(base + Vector3.new(0, 1, 0)), { color = C.wallLight, collide = true })
+	Shapes.pillar(parent, 8, height, CFrame.new(base + Vector3.new(0, height / 2, 0)), { color = C.panel, collide = true })
+	Shapes.pillar(parent, 11, 2.4, CFrame.new(base + Vector3.new(0, height - 1.2, 0)), { color = C.wallLight })
+	for _, y in { 8, 40, 76 } do
+		if y < height - 4 then
+			Shapes.pillar(parent, 8.6, 0.8, CFrame.new(base + Vector3.new(0, y, 0)), { color = C.cyan, material = NEON })
+		end
+	end
+	-- Illuminated panel strip on the side facing the room.
+	local stripHeight = math.min(28, height - 20)
+	local stripCf = facing(base + face.Unit * 4.05 + Vector3.new(0, 10 + stripHeight / 2, 0), face)
+	Shapes.box(parent, Vector3.new(2.2, stripHeight, 0.3), stripCf, { color = C.cyanSoft, material = NEON })
+	Shapes.box(parent, Vector3.new(3.4, stripHeight + 1.2, 0.2), stripCf * CFrame.new(0, 0, 0.15), { color = C.navy })
+end
+
+-- A hanging checkered racing banner with the HQ name.
+local function banner(parent: Instance, top: Vector3, face: Vector3, accent: Color3)
+	local cf = facing(top, face)
+	Shapes.tube(parent, 0.6, 12, cf * CFrame.new(0, 0.3, 0), { color = C.steel })
+	local cloth = Shapes.box(parent, Vector3.new(10, 26, 0.3), cf * CFrame.new(0, -13.3, 0), { color = C.navy })
+	Shapes.box(parent, Vector3.new(10, 1.2, 0.35), cf * CFrame.new(0, -1.2, 0), { color = accent, material = NEON })
+	for i = 0, 9 do
+		local col, row = i % 5, math.floor(i / 5)
+		Shapes.box(parent, Vector3.new(2, 2, 0.35), cf * CFrame.new(-4 + col * 2, -23.3 - row * 2, 0), { color = if (col + row) % 2 == 0 then C.white else C.navy })
+	end
+	Shapes.box(parent, Vector3.new(10, 0.6, 0.35), cf * CFrame.new(0, -21.8, 0), { color = accent, material = NEON })
+	text(cloth, "KART\nHQ", C.white, 12)
+end
+
+-- Two-panel sliding door. Parts with a "Side" attribute slide apart on
+-- clients (client/LobbyScreens); parts named "Glow" light up.
+local function slidingDoor(parent: Instance, name: string, cf: CFrame, w: number, h: number, accent: Color3): Model
+	local door = Instance.new("Model")
+	door.Name = name
+	door:SetAttribute("SlidingDoor", true)
+	door:SetAttribute("Width", w)
 	for _, side in { -1, 1 } do
-		Shapes.box(parent, Vector3.new(2, 48, 2), base * CFrame.new(side * 14, 22, -6) * CFrame.Angles(0, 0, math.rad(side * -16)), { color = PALETTE.white, collide = true })
-		Shapes.box(parent, Vector3.new(2, 48, 2), base * CFrame.new(side * 14, 22, 6) * CFrame.Angles(0, 0, math.rad(side * -16)), { color = PALETTE.white, collide = true })
+		local panelCf = cf * CFrame.new(side * w / 4, h / 2, 0)
+		local panel = Shapes.box(door, Vector3.new(w / 2, h, 0.8), panelCf, { color = C.wallLight, collide = true, name = `Panel{if side < 0 then 1 else 2}` })
+		panel:SetAttribute("Side", side)
+		local window = Shapes.box(door, Vector3.new(w / 2 - 3, h * 0.35, 0.9), panelCf * CFrame.new(0, h * 0.12, 0), { color = C.glass, material = GLASS, transparency = 0.45, name = "Window" })
+		window:SetAttribute("Side", side)
+		local stripe = Shapes.box(door, Vector3.new(w / 2 - 1, 0.5, 1), panelCf * CFrame.new(0, -h * 0.18, 0), { color = accent, material = NEON, name = "Glow" })
+		stripe:SetAttribute("Side", side)
+		local edge = Shapes.box(door, Vector3.new(0.4, h - 1, 1), panelCf * CFrame.new(-side * (w / 4 - 0.3), 0, 0), { color = accent, material = NEON, name = "Glow" })
+		edge:SetAttribute("Side", side)
 	end
-	-- The wheel turns on each client (Main.client spins models with a "Spin" attribute).
-	local wheel = Instance.new("Model")
-	wheel.Name = "FerrisWheel"
-	local hubCf = base * CFrame.new(0, 44, 0)
-	local hub = Shapes.tube(wheel, 5, 14, hubCf * CFrame.Angles(0, math.rad(90), 0), { color = PALETTE.yellow })
-	wheel.PrimaryPart = hub
-	local radius = 34
-	local cabins = 10
-	for i = 0, 35 do
-		local a = i / 36 * math.pi * 2
-		Shapes.ball(wheel, 1.4, hubCf * CFrame.new(math.cos(a) * radius, math.sin(a) * radius, 0), { color = PALETTE.pink, material = Enum.Material.Neon })
+	-- Frame: posts, header and a glowing outline.
+	for _, side in { -1, 1 } do
+		Shapes.box(door, Vector3.new(1.6, h + 1.6, 1.6), cf * CFrame.new(side * (w / 2 + 0.8), (h + 1.6) / 2, 0), { color = C.steel, collide = true })
+		Shapes.box(door, Vector3.new(0.4, h + 1, 0.4), cf * CFrame.new(side * (w / 2 + 0.2), h / 2, -1.1), { color = accent, material = NEON, name = "Glow" })
 	end
-	for i = 0, cabins - 1 do
-		local a = i / cabins * math.pi * 2
-		local p = Vector3.new(math.cos(a) * radius, math.sin(a) * radius, 0)
-		Shapes.box(wheel, Vector3.new(0.8, radius, 0.8), hubCf * CFrame.new(p / 2) * CFrame.Angles(0, 0, a + math.pi / 2), { color = PALETTE.white })
-		local colors = { PALETTE.pink, PALETTE.sky, PALETTE.mint, PALETTE.purple, PALETTE.yellow }
-		Shapes.ellipsoid(wheel, Vector3.new(6, 5, 5), hubCf * CFrame.new(p - Vector3.new(0, 3, 0)), { color = colors[i % #colors + 1] })
-	end
-	wheel:SetAttribute("Spin", 0.12)
-	wheel.Parent = parent
+	Shapes.box(door, Vector3.new(w + 3.2, 1.6, 1.6), cf * CFrame.new(0, h + 0.8, 0), { color = C.steel, collide = true })
+	Shapes.box(door, Vector3.new(w + 0.4, 0.4, 0.4), cf * CFrame.new(0, h + 0.2, -1.1), { color = accent, material = NEON, name = "Glow" })
+	door.Parent = parent
+	return door
 end
 
--- Little themed model for each track on the voting pads.
-local function miniature(parent: Instance, trackId: string, at: CFrame)
-	local def = Tracks.get(trackId)
-	local theme = Tracks.Themes[def.theme]
-	local function c(t: { number }): Color3
-		return Color3.fromRGB(t[1], t[2], t[3])
-	end
-	local folder = Instance.new("Model")
-	folder.Name = `Mini_{trackId}`
-	Shapes.disc(folder, 14, 1, at * CFrame.new(0, 0.5, 0), { color = c(theme.ground) })
-	-- A loop of road on the base.
-	for i = 0, 15 do
-		local a = i / 16 * math.pi * 2
-		Shapes.box(folder, Vector3.new(2.6, 0.3, 2.4), at * CFrame.new(math.cos(a) * 4.5, 1.1, math.sin(a) * 4.5) * CFrame.Angles(0, -a, 0), { color = c(theme.road) })
-	end
-	if def.theme == "sunny" then
-		Shapes.pillar(folder, 0.8, 4, at * CFrame.new(0, 3, 0), { color = Color3.fromRGB(140, 95, 60) })
-		Shapes.ball(folder, 4, at * CFrame.new(0, 5.6, 0), { color = Color3.fromRGB(90, 180, 80) })
-	elseif def.theme == "canyon" then
-		for i, w in { 6, 4.6, 3.2 } do
-			Shapes.pillar(folder, w, 1.4, at * CFrame.new(0, 1.2 + i * 1.4, 0), { color = c(theme.wall):Lerp(Color3.new(1, 1, 1), i * 0.08) })
-		end
-	elseif def.theme == "neon" then
-		for i, h in { 6, 9, 4.5 } do
-			local x = (i - 2) * 2
-			Shapes.box(folder, Vector3.new(1.6, h, 1.6), at * CFrame.new(x, 1 + h / 2, 0), { color = Color3.fromRGB(30, 26, 50) })
-			Shapes.box(folder, Vector3.new(1.7, 0.3, 1.7), at * CFrame.new(x, 1 + h * 0.7, 0), { color = c(theme.accent), material = Enum.Material.Neon })
-		end
-	elseif def.theme == "toyroom" then
-		-- A wobbly tower of toy blocks and a ball.
-		local colors = { Color3.fromRGB(240, 80, 80), Color3.fromRGB(80, 150, 240), Color3.fromRGB(255, 210, 60) }
-		for i = 0, 2 do
-			Shapes.box(folder, Vector3.new(2.6, 2.6, 2.6), at * CFrame.new(0.3 * i, 2.5 + i * 2.6, 0) * CFrame.Angles(0, i * 0.4, 0), { color = colors[i + 1] })
-		end
-		Shapes.ball(folder, 2.4, at * CFrame.new(3.5, 2.4, 1), { color = Color3.fromRGB(110, 210, 120) })
-	elseif def.theme == "kitchen" then
-		-- A little fridge with its door swung open.
-		Shapes.roundedBox(folder, Vector3.new(4, 8, 3.4), 0.6, at * CFrame.new(0, 5, 0), { color = Color3.fromRGB(240, 245, 250) })
-		Shapes.box(folder, Vector3.new(3.4, 7.4, 0.2), at * CFrame.new(0, 5, -1.75), { color = Color3.fromRGB(180, 230, 255), material = Enum.Material.Neon })
-		Shapes.box(folder, Vector3.new(0.3, 7.6, 3.4), at * CFrame.new(-3.7, 5, -2.6) * CFrame.Angles(0, math.rad(70), 0), { color = Color3.fromRGB(240, 245, 250) })
-		Shapes.ball(folder, 1.2, at * CFrame.new(0.8, 6.5, -1.2), { color = Color3.fromRGB(230, 60, 60) })
-	elseif def.theme == "backyard" then
-		-- A flowerpot with a ladybug on the rim.
-		Shapes.pillar(folder, 4, 3.5, at * CFrame.new(0, 2.8, 0), { color = Color3.fromRGB(210, 110, 70) })
-		Shapes.pillar(folder, 0.4, 4, at * CFrame.new(0, 6, 0), { color = Color3.fromRGB(80, 160, 70) })
-		Shapes.ball(folder, 2.2, at * CFrame.new(0, 8.3, 0), { color = Color3.fromRGB(255, 120, 170) })
-		Shapes.ellipsoid(folder, Vector3.new(1.4, 0.9, 1.8), at * CFrame.new(1.8, 4.8, 0), { color = Color3.fromRGB(230, 40, 40) })
-	else
-		Shapes.ball(folder, 4, at * CFrame.new(0, 3.5, 0), { color = c(theme.accent) })
-	end
+-- Floor, ceiling, light and walls around a side room. The wall shared with
+-- the chamber already exists, apart from any stretch beyond the chamber.
+local function roomShell(parent: Instance, room: LobbyLayout.Room, height: number, lights: number)
+	local b = room.box
+	local x0, x1, z0, z1 = b.min.x, b.max.x, b.min.z, b.max.z
+	local cx, cz = (x0 + x1) / 2, (z0 + z1) / 2
+	local folder = Instance.new("Folder")
+	folder.Name = room.id
 	folder.Parent = parent
+	Shapes.box(folder, Vector3.new(x1 - x0 + 4, 1, z1 - z0 + 4), CFrame.new(cx, -0.5, cz), { color = C.floor, collide = true, name = "Floor" })
+	-- Spans stop inside the chamber wall on the near side, so nothing pokes in.
+	local e0 = if room.side < 0 then x0 - 2 else x0 + 2
+	local e1 = if room.side < 0 then x1 - 2 else x1 + 2
+	Shapes.box(folder, Vector3.new(e1 - e0, 2, z1 - z0 + 4), CFrame.new((e0 + e1) / 2, height + 1, cz), { color = C.wall, collide = true })
+	-- Walls: far side, both ends, and the chamber side outside the chamber.
+	local farX = if room.side < 0 then x0 else x1
+	local nearX = if room.side < 0 then x1 else x0
+	wall(folder, Vector3.new(farX + room.side, 0, z0 - 2), Vector3.new(farX + room.side, 0, z1 + 2), height, 2, {})
+	wall(folder, Vector3.new(e0, 0, z0 - 1), Vector3.new(e1, 0, z0 - 1), height, 2, {})
+	wall(folder, Vector3.new(e0, 0, z1 + 1), Vector3.new(e1, 0, z1 + 1), height, 2, {})
+	local chamberZ0, chamberZ1 = O.z - HD - WALL, O.z + HD + WALL
+	if z0 < chamberZ0 then
+		wall(folder, Vector3.new(nearX - room.side, 0, z0), Vector3.new(nearX - room.side, 0, chamberZ0), height, 2, {})
+	end
+	if z1 > chamberZ1 then
+		wall(folder, Vector3.new(nearX - room.side, 0, chamberZ1), Vector3.new(nearX - room.side, 0, z1), height, 2, {})
+	end
+	-- Glowing skirting and recessed ceiling lights.
+	for _, z in { z0 + 0.1, z1 - 0.1 } do
+		Shapes.box(folder, Vector3.new(x1 - x0, 0.4, 0.2), CFrame.new(cx, 1, z), { color = C.cyan, material = NEON })
+	end
+	for i = 1, lights do
+		local lx = x0 + (x1 - x0) * (i - 0.5) / lights
+		local lamp = Shapes.box(folder, Vector3.new(math.min(24, (x1 - x0) / lights - 6), 0.4, math.min(24, z1 - z0 - 10)), CFrame.new(lx, height - 0.2, cz), { color = C.lamp, material = NEON })
+		local holder = Shapes.box(folder, Vector3.new(1, 1, 1), CFrame.new(lx, height - 6, cz), { color = C.white, transparency = 1 })
+		local _ = lamp
+		light(holder, "PointLight", 60, 1.1, Color3.fromRGB(235, 242, 255))
+	end
+	return folder
 end
 
 ---------------------------------------------------------------------------
 -- Build
 ---------------------------------------------------------------------------
 export type Handles = {
-	setStatus: (title: string, body: string) -> (),
-	setVoteOption: (index: number, info: any?) -> (),
 	setPodium: (rows: { any }) -> (),
-	setSpectator: (title: string, body: string) -> (),
 	setKartDisplay: (slot: number, name: string?, kartId: string?, look: any?) -> (),
+	setDeparture: (lit: boolean) -> (),
 	celebrate: (place: number, character: Model) -> (),
-	readyPrompt: ProximityPrompt,
 	garagePrompt: ProximityPrompt,
 	spectatePrompt: ProximityPrompt,
 	practicePrompt: ProximityPrompt,
@@ -4982,201 +5193,544 @@ function LobbyBuilder.build(): Handles
 	end
 	local lobby = Instance.new("Folder")
 	lobby.Name = "Lobby"
-	local O = LobbyLayout.Origin
-	local spawnSpot = LobbyLayout.Spawn
+	local shell = Instance.new("Folder")
+	shell.Name = "Chamber"
+	shell.Parent = lobby
+	local rooms = Instance.new("Folder")
+	rooms.Name = "Rooms"
+	rooms.Parent = lobby
 
-	-- Ground: soft grass everywhere, a tiled plaza, paths to each area.
-	Shapes.box(lobby, Vector3.new(900, 2, 1000), CFrame.new(O.x, -1, O.z + 120), { color = PALETTE.grass, collide = true, name = "Ground" })
-	Shapes.disc(lobby, LobbyLayout.PlazaRadius * 2, 0.4, cf(spawnSpot, 0.2), { color = PALETTE.tile, collide = true })
-	Shapes.disc(lobby, LobbyLayout.PlazaRadius * 2 - 6, 0.42, cf(spawnSpot, 0.21), { color = PALETTE.cream, collide = true })
-	for i = 0, 7 do
-		local a = i / 8 * math.pi * 2
-		Shapes.disc(lobby, 8, 0.45, cf(spawnSpot, 0.23) * CFrame.new(math.cos(a) * 34, 0, math.sin(a) * 34), { color = PAD_COLORS[i % 3 + 1] })
+	-----------------------------------------------------------------------
+	-- Floor, walls, ceiling
+	-----------------------------------------------------------------------
+	Shapes.box(shell, Vector3.new(HW * 2 + WALL * 2, 1, HD * 2 + WALL * 2), CFrame.new(O.x, -0.5, O.z), { color = C.floor, collide = true, name = "Floor" })
+	-- Tile grid on the main floor (stops at the entrance platform).
+	local platform = LobbyLayout.Platform
+	for x = -HW + 24, HW - 24, 24 do
+		local z0, z1 = -HD, platform.min.z - O.z
+		Shapes.box(shell, Vector3.new(0.4, 0.06, z1 - z0), CFrame.new(O.x + x, 0.03, O.z + (z0 + z1) / 2), { color = C.floorLine })
 	end
+	for z = -HD + 25, platform.min.z - O.z - 1, 25 do
+		Shapes.box(shell, Vector3.new(HW * 2, 0.06, 0.4), CFrame.new(O.x, 0.03, O.z + z), { color = C.floorLine })
+	end
+
+	-- Side walls with door openings (under the walkways).
+	local doorW, doorH = LobbyLayout.DoorWidth, LobbyLayout.DoorHeight
+	for _, side in { -1, 1 } do
+		local openings = {}
+		for _, room in LobbyLayout.Rooms do
+			if room.side == side then
+				table.insert(openings, { at = room.door.z - (O.z - HD - WALL), width = doorW, bottom = 0, top = doorH })
+			end
+		end
+		local x = side * (HW + WALL / 2)
+		wall(shell, W(x, 0, -HD - WALL), W(x, 0, HD + WALL), HEIGHT, WALL, openings)
+	end
+	-- Back wall behind the entrance platform.
+	wall(shell, W(-HW, 0, HD + WALL / 2), W(HW, 0, HD + WALL / 2), HEIGHT, WALL, {})
+	-- Front wall: the recessed screen and the two departure doors.
+	local screen = LobbyLayout.Screen
+	local screenBottom = screen.center.y - screen.height / 2
+	local frontOpenings: { Opening } = {
+		{ at = HW, width = screen.width + 4, bottom = screenBottom - 2, top = screenBottom + screen.height + 2 },
+	}
+	local departW, departH = 22, 18
+	for _, d in LobbyLayout.DepartureDoors do
+		table.insert(frontOpenings, { at = d.x - (O.x - HW), width = departW, bottom = 0, top = departH })
+	end
+	wall(shell, W(-HW, 0, -HD - WALL / 2), W(HW, 0, -HD - WALL / 2), HEIGHT, WALL, frontOpenings)
+
+	-- Ceiling with recessed light coffers.
+	Shapes.box(shell, Vector3.new(HW * 2 + WALL * 2, 4, HD * 2 + WALL * 2), CFrame.new(O.x, HEIGHT + 2, O.z), { color = C.wall, collide = true, name = "Ceiling" })
+	local cellX, cellZ = 60, 60
+	for x = -HW, HW, cellX do
+		Shapes.box(shell, Vector3.new(3, 3, HD * 2), CFrame.new(O.x + x, HEIGHT - 1.5, O.z), { color = C.wallLight })
+	end
+	for z = -HD, HD, cellZ do
+		Shapes.box(shell, Vector3.new(HW * 2, 3, 3), CFrame.new(O.x, HEIGHT - 1.5, O.z + z), { color = C.wallLight })
+	end
+	for x = -HW + cellX / 2, HW, cellX do
+		for z = -HD + cellZ / 2, HD, cellZ do
+			Shapes.box(shell, Vector3.new(cellX - 16, 0.4, cellZ - 16), CFrame.new(O.x + x, HEIGHT - 0.2, O.z + z), { color = C.lamp, material = NEON })
+		end
+	end
+	-- The coffers can't light a 110-stud room alone, so soft lamps hang lower.
+	for _, x in { -70, 0, 70 } do
+		for _, z in { -105, -30, 50 } do
+			local holder = Shapes.box(shell, Vector3.new(1, 1, 1), CFrame.new(O.x + x, 52, O.z + z), { color = C.white, transparency = 1 })
+			light(holder, "PointLight", 60, 1.15, Color3.fromRGB(235, 242, 255))
+		end
+	end
+
+	-- Cyan cornice under the ceiling and skirting at the floor.
+	for _, side in { -1, 1 } do
+		Shapes.box(shell, Vector3.new(0.4, 0.8, HD * 2), CFrame.new(O.x + side * (HW - 0.2), HEIGHT - 6, O.z), { color = C.cyan, material = NEON })
+		Shapes.box(shell, Vector3.new(HW * 2, 0.8, 0.4), CFrame.new(O.x, HEIGHT - 6, O.z + side * (HD - 0.2)), { color = C.cyan, material = NEON })
+		Shapes.box(shell, Vector3.new(HW * 2, 0.5, 0.3), CFrame.new(O.x, 1, O.z + side * (HD - 0.15)), { color = C.cyan, material = NEON })
+	end
+
+	-- Beveled panels on the side walls above the walkways.
+	for _, side in { -1, 1 } do
+		local face = Vector3.new(-side, 0, 0)
+		for z = -HD + 20, HD - 20, 26 do
+			for _, y in { DECK + 22, DECK + 50 } do
+				wallPanel(shell, facing(W(side * (HW - 0.3), y, z), face), 22, 22)
+			end
+		end
+	end
+
+	-----------------------------------------------------------------------
+	-- Giant recessed voting screen, status board, departure doors
+	-----------------------------------------------------------------------
+	local sc = screen.center
+	local recessBack = sc.z - screen.recess
+	local ow, oh = screen.width + 4, screen.height + 4
+	Shapes.box(shell, Vector3.new(ow + 4, oh + 4, 4), CFrame.new(sc.x, sc.y, recessBack - 2), { color = C.navy, collide = true })
+	for _, sx in { -1, 1 } do
+		Shapes.box(shell, Vector3.new(1, oh, screen.recess), CFrame.new(sc.x + sx * (ow / 2 - 0.5), sc.y, sc.z - screen.recess / 2), { color = C.wallLight })
+	end
+	for _, sy in { -1, 1 } do
+		Shapes.box(shell, Vector3.new(ow, 1, screen.recess), CFrame.new(sc.x, sc.y + sy * (oh / 2 - 0.5), sc.z - screen.recess / 2), { color = C.wallLight })
+	end
+	local voteScreen = Shapes.box(shell, Vector3.new(screen.width, screen.height, 0.6), facing(Vector3.new(sc.x, sc.y, recessBack + 0.5), Vector3.zAxis), { color = C.screen, name = "VoteScreen" })
+	local glow = Instance.new("SurfaceLight")
+	glow.Face = Enum.NormalId.Front
+	glow.Range = 40
+	glow.Brightness = 0.8
+	glow.Angle = 120
+	glow.Color = C.cyanSoft
+	glow.Parent = voteScreen
+	-- Beveled frame with a glowing inner edge.
+	local frameCf = facing(Vector3.new(sc.x, sc.y, sc.z + 0.6), Vector3.zAxis)
+	for _, sx in { -1, 1 } do
+		Shapes.box(shell, Vector3.new(4, oh + 8, 1.6), frameCf * CFrame.new(sx * (ow / 2 + 2), 0, 0), { color = C.wallLight })
+		Shapes.box(shell, Vector3.new(0.5, oh, 0.4), frameCf * CFrame.new(sx * (ow / 2 + 0.2), 0, -0.6), { color = C.cyan, material = NEON })
+	end
+	for _, sy in { -1, 1 } do
+		Shapes.box(shell, Vector3.new(ow + 8, 4, 1.6), frameCf * CFrame.new(0, sy * (oh / 2 + 2), 0), { color = C.wallLight })
+		Shapes.box(shell, Vector3.new(ow, 0.5, 0.4), frameCf * CFrame.new(0, sy * (oh / 2 + 0.2), -0.6), { color = C.cyan, material = NEON })
+	end
+
+	local board = LobbyLayout.StatusBoard
+	local boardCf = facing(Vector3.new(board.x, board.y, board.z + 0.8), Vector3.zAxis)
+	Shapes.roundedBox(shell, Vector3.new(68, 15, 1.4), 2, boardCf * CFrame.new(0, 0, 0.4), { color = C.wallLight })
+	Shapes.box(shell, Vector3.new(66, 13, 0.3), boardCf * CFrame.new(0, 0, -0.4), { color = C.cyan, material = NEON })
+	Shapes.box(shell, Vector3.new(64, 11, 0.6), boardCf * CFrame.new(0, 0, -0.6), { color = C.screen, name = "StatusBoard" })
+
+	local departure = Instance.new("Folder")
+	departure.Name = "Departure"
+	departure.Parent = lobby
+	for i, d in LobbyLayout.DepartureDoors do
+		local wallCf = facing(Vector3.new(d.x, 0, d.z - WALL / 2), Vector3.zAxis)
+		local door = slidingDoor(departure, `DepartureDoor{i}`, wallCf, departW, departH, C.cyan)
+		door:SetAttribute("Departure", true)
+		door:SetAttribute("Lit", false)
+		-- A short glowing tunnel behind the door (seen when it opens).
+		local tunnelCf = facing(Vector3.new(d.x, 0, d.z - WALL - 8), Vector3.zAxis)
+		Shapes.box(departure, Vector3.new(departW + 2, 1, 16), tunnelCf * CFrame.new(0, -0.5, 0), { color = C.navy, collide = true })
+		Shapes.box(departure, Vector3.new(departW + 2, 1, 16), tunnelCf * CFrame.new(0, departH + 0.5, 0), { color = C.wall, collide = true })
+		for _, sx in { -1, 1 } do
+			Shapes.box(departure, Vector3.new(1, departH, 16), tunnelCf * CFrame.new(sx * (departW / 2 + 0.5), departH / 2, 0), { color = C.wall, collide = true })
+			for k = 0, 3 do
+				Shapes.box(departure, Vector3.new(0.3, departH - 4, 0.5), tunnelCf * CFrame.new(sx * departW / 2, departH / 2, -6 + k * 4), { color = C.cyan, material = NEON, name = "Glow" })
+			end
+		end
+		local back = Shapes.box(departure, Vector3.new(departW + 2, departH, 1), tunnelCf * CFrame.new(0, departH / 2, 8.5), { color = C.navy, collide = true })
+		text(back, "» TO THE TRACK »", C.cyan, 10)
+		local tunnelLight = Shapes.box(departure, Vector3.new(1, 1, 1), tunnelCf * CFrame.new(0, departH - 3, 0), { color = C.white, transparency = 1 })
+		light(tunnelLight, "PointLight", 18, 1, C.cyanSoft)
+		local sign = Shapes.box(departure, Vector3.new(departW, 4, 0.6), facing(Vector3.new(d.x, departH + 4, d.z + 0.4), Vector3.zAxis), { color = C.navy, name = "DepartureSign" })
+		text(sign, "DEPARTURES", C.cyan, 16)
+	end
+
+	-- Big columns flanking the screen.
+	for _, sx in { -1, 1 } do
+		column(shell, W(sx * 74, 0, -HD + 4), HEIGHT, Vector3.zAxis)
+	end
+
+	-- Kart display alcoves: under the screen and in the side walls.
+	local displays = Instance.new("Folder")
+	displays.Name = "KartDisplays"
+	displays.Parent = lobby
+	local displayYaw = {}
+	for i, spot in LobbyLayout.KartDisplays do
+		local face: Vector3
+		if math.abs(spot.x - O.x) > HW - 10 then
+			face = Vector3.new(if spot.x < O.x then 1 else -1, 0, 0)
+		else
+			face = Vector3.zAxis
+		end
+		displayYaw[i] = math.atan2(-face.X, -face.Z)
+		local base = Vector3.new(spot.x, 0, spot.z)
+		rimDisc(shell, 12, 1, CFrame.new(base), C.panel, C.cyan, 0.6)
+		local wallGap = if face.Z ~= 0 then spot.z - (O.z - HD) else HW - math.abs(spot.x - O.x)
+		local backCf = facing(base - face * (wallGap - 0.4) + Vector3.new(0, 6.5, 0), face)
+		wallPanel(shell, backCf, 14, 12)
+		Shapes.box(shell, Vector3.new(15, 0.8, 7), facing(base - face * 2.5 + Vector3.new(0, 13, 0), face), { color = C.wallLight })
+		local lamp = Shapes.box(shell, Vector3.new(12, 0.2, 5), facing(base - face * 2.5 + Vector3.new(0, 12.55, 0), face), { color = C.lamp, material = NEON })
+		light(lamp, "PointLight", 14, 1.2, Color3.fromRGB(220, 240, 255))
+	end
+
+	-----------------------------------------------------------------------
+	-- Entrance platform, stairs, ramps, walkways, railings
+	-----------------------------------------------------------------------
+	local px0, px1, pz0, pz1 = platform.min.x, platform.max.x, platform.min.z, platform.max.z
+	Shapes.box(shell, Vector3.new(px1 - px0, DECK, pz1 - pz0), CFrame.new((px0 + px1) / 2, DECK / 2, (pz0 + pz1) / 2), { color = C.wall, collide = true, name = "Platform" })
+	Shapes.box(shell, Vector3.new(px1 - px0, 0.1, pz1 - pz0 - 2), CFrame.new((px0 + px1) / 2, DECK + 0.05, (pz0 + pz1) / 2 + 1), { color = C.floor, collide = true })
+	Shapes.box(shell, Vector3.new(px1 - px0, 0.5, 0.3), CFrame.new((px0 + px1) / 2, DECK - 0.6, pz0 - 0.1), { color = C.cyan, material = NEON })
+	-- Panels on the platform's front face, between the stairs and ramps.
+	for _, x in { -45, 45, -96, 96 } do
+		wallPanel(shell, facing(W(x, DECK / 2 - 1, pz0 - O.z - 0.3), -Vector3.zAxis), 12, 14)
+	end
+
+	local spawnSpot = LobbyLayout.Spawn
+	rimDisc(shell, 18, DECK + 0.25, CFrame.new(spawnSpot.x, 0, spawnSpot.z), C.wallLight, C.cyan, 0.8)
 	local spawn = Instance.new("SpawnLocation")
 	spawn.Anchored = true
-	spawn.Size = Vector3.new(14, 0.5, 14)
-	spawn.CFrame = cf(spawnSpot, 0.5)
+	spawn.Size = Vector3.new(12, 0.5, 12)
+	spawn.CFrame = at(spawnSpot, 0.6) -- facing -z: towards the screen
 	spawn.Transparency = 1
 	spawn.CanCollide = false
 	spawn.Neutral = true
 	spawn.Duration = 0
 	spawn.Parent = lobby
-	local fountain = Shapes.pillar(lobby, 10, 3, cf(spawnSpot, 1.5) * CFrame.new(0, 0, 18), { color = PALETTE.white, collide = true })
-	local _ = fountain
-	Shapes.disc(lobby, 8.6, 0.4, cf(spawnSpot, 3.1) * CFrame.new(0, 0, 18), { color = PALETTE.sky, material = Enum.Material.Glass, transparency = 0.2 })
-	Shapes.ellipsoid(lobby, Vector3.new(5, 7, 5), cf(spawnSpot, 6) * CFrame.new(0, 0, 18), { color = PALETTE.yellow, reflectance = 0.2 })
+	-- The HQ logo on the back wall, behind spawn.
+	local logo = Shapes.roundedBox(shell, Vector3.new(60, 18, 1.4), 3, facing(W(0, DECK + 26, HD - 0.8), -Vector3.zAxis), { color = C.wallLight })
+	local logoFace = Shapes.box(shell, Vector3.new(56, 14, 0.4), facing(W(0, DECK + 26, HD - 1.6), -Vector3.zAxis), { color = C.navy })
+	local _ = logo
+	text(logoFace, "🏁 KART HQ 🏁", C.cyan, 10)
 
-	local function path(a: LobbyLayout.Spot, b: LobbyLayout.Spot, width: number)
-		local pa, pb = Vector3.new(a.x, 0.15, a.z), Vector3.new(b.x, 0.15, b.z)
-		Shapes.box(lobby, Vector3.new(width, 0.3, (pb - pa).Magnitude), CFrame.lookAt((pa + pb) / 2, pb), { color = PALETTE.tile, collide = true })
+	-- Stairs: wide steps down to the main floor, with glowing nosings.
+	local stairs = LobbyLayout.Stairs
+	local steps = stairs.steps
+	local run = (stairs.from.z - stairs.to.z) / steps
+	local rise = DECK / steps
+	for k = 1, steps - 1 do
+		local top = DECK - rise * k
+		local zFar = stairs.from.z - run * (k - 1)
+		local zNear = stairs.from.z - run * k
+		Shapes.box(shell, Vector3.new(stairs.width, top, zFar - zNear), CFrame.new(stairs.from.x, top / 2, (zFar + zNear) / 2), { color = if k % 2 == 0 then C.wall else C.panel, collide = true })
+		Shapes.box(shell, Vector3.new(stairs.width - 1, 0.12, 0.4), CFrame.new(stairs.from.x, top + 0.04, zNear + 0.3), { color = C.cyanSoft, material = NEON })
 	end
-	path(spawnSpot, LobbyLayout.VotePads[2], 20)
-	path(spawnSpot, LobbyLayout.Garage, 16)
-	path(spawnSpot, LobbyLayout.ReadyArch, 16)
-	path(spawnSpot, LobbyLayout.SpectatorScreen, 14)
-	path(spawnSpot, LobbyLayout.Podium, 14)
-	path(spawnSpot, { x = spawnSpot.x, y = 0, z = spawnSpot.z + 170 }, 18)
+	for _, sx in { -1, 1 } do
+		local x = stairs.from.x + sx * (stairs.width / 2 + 0.5)
+		railing(shell, Vector3.new(x, DECK, stairs.from.z), Vector3.new(x, 0, stairs.to.z + run))
+	end
 
-	-- Status board: what's happening and the countdown, readable from spawn.
-	local boardCf = facing(LobbyLayout.StatusBoard, spawnSpot, 22)
+	-- Accessible ramps either side of the stairs (wedges: high end at +z).
+	for _, ramp in LobbyLayout.Ramps do
+		local length = ramp.from.z - ramp.to.z
+		local wedge = Instance.new("WedgePart")
+		wedge.Name = "Ramp"
+		wedge.Anchored = true
+		wedge.Size = Vector3.new(ramp.width, DECK, length)
+		wedge.CFrame = CFrame.new(ramp.from.x, DECK / 2, (ramp.from.z + ramp.to.z) / 2)
+		wedge.Color = C.panel
+		wedge.Material = Enum.Material.SmoothPlastic
+		wedge.TopSurface = Enum.SurfaceType.Smooth
+		wedge.Parent = shell
+		local slope = math.atan2(DECK, length)
+		for _, sx in { -1, 1 } do
+			local x = ramp.from.x + sx * (ramp.width / 2 + 0.5)
+			railing(shell, Vector3.new(x, DECK, ramp.from.z), Vector3.new(x, 0, ramp.to.z))
+			Shapes.box(shell, Vector3.new(0.5, 0.15, length / math.cos(slope)), CFrame.new(ramp.from.x + sx * (ramp.width / 2 - 1), DECK / 2 + 0.1, (ramp.from.z + ramp.to.z) / 2) * CFrame.Angles(-slope, 0, 0), { color = C.cyanSoft, material = NEON })
+		end
+	end
+
+	-- Walkways along both side walls, joined to the platform.
+	for _, walk in LobbyLayout.Walkways do
+		local x0, x1, z0, z1 = walk.min.x, walk.max.x, walk.min.z, walk.max.z
+		Shapes.box(shell, Vector3.new(x1 - x0, 2, z1 - z0), CFrame.new((x0 + x1) / 2, DECK - 1, (z0 + z1) / 2), { color = C.wall, collide = true, name = "Walkway" })
+		Shapes.box(shell, Vector3.new(x1 - x0, 0.1, z1 - z0), CFrame.new((x0 + x1) / 2, DECK + 0.05, (z0 + z1) / 2), { color = C.floor, collide = true })
+		local side = if x0 < O.x then -1 else 1
+		local innerX = if side < 0 then x1 else x0
+		Shapes.box(shell, Vector3.new(0.3, 0.5, z1 - z0), CFrame.new(innerX - side * 0.15, DECK - 1.2, (z0 + z1) / 2), { color = C.cyan, material = NEON })
+		-- Railing along the inner edge, curving round at the far end.
+		local r = 8
+		local points = { Vector3.new(innerX, DECK, z1) }
+		local corner = Vector3.new(innerX + side * r, DECK, z0 + r)
+		for _, p in arc(corner, r, if side < 0 then 0 else math.pi, if side < 0 then -math.pi / 2 else math.pi * 1.5, 6) do
+			table.insert(points, p)
+		end
+		table.insert(points, Vector3.new(if side < 0 then x0 else x1, DECK, z0))
+		railPath(shell, points)
+	end
+
+	-- Platform edge railing, with gaps for the stairs, ramps and walkways.
+	local edgeZ = pz0
+	local gaps = { { stairs.from.x - stairs.width / 2 - 1, stairs.from.x + stairs.width / 2 + 1 } }
+	for _, ramp in LobbyLayout.Ramps do
+		table.insert(gaps, { ramp.from.x - ramp.width / 2 - 1, ramp.from.x + ramp.width / 2 + 1 })
+	end
+	table.sort(gaps, function(a, b)
+		return a[1] < b[1]
+	end)
+	local walkInner = LobbyLayout.Walkways[1].max.x
+	local cursor = walkInner
+	for _, g in gaps do
+		railing(shell, Vector3.new(cursor, DECK, edgeZ), Vector3.new(g[1], DECK, edgeZ))
+		cursor = g[2]
+	end
+	railing(shell, Vector3.new(cursor, DECK, edgeZ), Vector3.new(LobbyLayout.Walkways[2].min.x, DECK, edgeZ))
+
+	-- Columns along the walkway edges (they hold the walkways up).
 	for _, side in { -1, 1 } do
-		Shapes.pillar(lobby, 3, 24, boardCf * CFrame.new(side * 26, -10, 1.5), { color = PALETTE.white, collide = true })
-	end
-	local statusTitle, statusBody = sign(lobby, Vector3.new(52, 20, 3), boardCf, PALETTE.pink, "KART CARNIVAL")
-
-	-- Voting pads with miniature track displays and info signs.
-	local voteTitles, voteBodies = {}, {}
-	for i, pad in LobbyLayout.VotePads do
-		Shapes.disc(lobby, LobbyLayout.VotePadSize, 0.6, cf(pad, 0.3), { color = PAD_COLORS[i], collide = true, name = `VotePad{i}` })
-		Shapes.disc(lobby, LobbyLayout.VotePadSize - 4, 0.62, cf(pad, 0.31), { color = PALETTE.white, collide = true })
-		Shapes.disc(lobby, LobbyLayout.VotePadSize - 8, 0.64, cf(pad, 0.32), { color = PAD_COLORS[i], collide = true })
-		local displayCf = cf(pad, 0) * CFrame.new(0, 0, -20)
-		Shapes.pillar(lobby, 16, 5, displayCf * CFrame.new(0, 2.5, 0), { color = PALETTE.cream, collide = true })
-		local title, body = sign(lobby, Vector3.new(22, 14, 2), facing({ x = pad.x, y = 0, z = pad.z - 30 }, spawnSpot, 16), PAD_COLORS[i], `OPTION {i}`)
-		voteTitles[i], voteBodies[i] = title, body
-	end
-	local miniFolder = Instance.new("Folder")
-	miniFolder.Name = "Miniatures"
-	miniFolder.Parent = lobby
-
-	-- Ready arch.
-	local arch = LobbyLayout.ReadyArch
-	local archCf = cf(arch, 0) * CFrame.Angles(0, math.rad(90), 0)
-	Shapes.arch(lobby, 22, 3, 4, archCf, { color = PALETTE.yellow, collide = true }, 14)
-	Shapes.disc(lobby, 20, 0.5, cf(arch, 0.25), { color = PALETTE.mint, collide = true })
-	local readySign = Shapes.box(lobby, Vector3.new(4, 4, 4), cf(arch, 2), { color = PALETTE.mint, transparency = 1, collide = false })
-	local readyPrompt = prompt(readySign, "Ready up", "Join the next race")
-	local readyTitle, readyBody = sign(lobby, Vector3.new(14, 6, 1.5), cf(arch, 14.5) * CFrame.Angles(0, math.rad(90), 0), PALETTE.mint, "READY UP")
-	readyBody.Text = "Walk in or press E"
-	local _ = readyTitle
-
-	-- Garage with kart display pedestals.
-	local garageSpot = LobbyLayout.Garage
-	-- Turned so the door (local front) faces the plaza to the west.
-	local garageCf = cf(garageSpot, 0) * CFrame.Angles(0, math.rad(90), 0)
-	Shapes.roundedBox(lobby, Vector3.new(60, 26, 40), 6, garageCf * CFrame.new(0, 13, 0), { color = PALETTE.sky, collide = true })
-	Shapes.ellipsoid(lobby, Vector3.new(62, 16, 42), garageCf * CFrame.new(0, 26, 0), { color = PALETTE.white })
-	Shapes.arch(lobby, 22, 2.4, 2, garageCf * CFrame.new(0, 0, -20.5), { color = PALETTE.yellow }, 12)
-	Shapes.box(lobby, Vector3.new(20, 11, 0.6), garageCf * CFrame.new(0, 5.5, -20.2), { color = PALETTE.dark })
-	local garageDoor = Shapes.box(lobby, Vector3.new(6, 6, 6), garageCf * CFrame.new(0, 3, -24), { color = PALETTE.dark, transparency = 1 })
-	local garagePrompt = prompt(garageDoor, "Customize kart", "Garage")
-	local gTitle = sign(lobby, Vector3.new(26, 7, 1.5), garageCf * CFrame.new(0, 31, -20), PALETTE.yellow, "GARAGE")
-	local _ = gTitle
-	local displays = Instance.new("Folder")
-	displays.Name = "KartDisplays"
-	displays.Parent = lobby
-	for _, spot in LobbyLayout.KartDisplays do
-		Shapes.disc(lobby, 12, 1.2, cf(spot, 0.6), { color = PALETTE.white, collide = true })
-		Shapes.disc(lobby, 10, 1.25, cf(spot, 0.62), { color = PALETTE.purple, collide = true })
+		for _, z in { -128, -100, -40, 22, 90 } do
+			local base = W(side * 99, 0, z)
+			column(shell, base, HEIGHT, Vector3.new(-side, 0, 0))
+			Shapes.box(shell, Vector3.new(6, 2, 4), CFrame.new(base + Vector3.new(side * 4, DECK - 1, 0)), { color = C.wallLight, collide = true })
+		end
 	end
 
-	-- Podium for the last race's top three.
-	local podium = LobbyLayout.Podium
-	local podiumCf = facing(podium, spawnSpot, 0)
-	local stepHeights = { 7, 4.5, 2.5 }
-	local stepX = { 0, -11, 11 }
-	local stepColors = { PALETTE.gold, Color3.fromRGB(200, 210, 225), Color3.fromRGB(230, 150, 80) }
+	-- Racing banners hanging between the columns.
+	local accents = { C.cyan, C.pink, C.gold }
+	for i, z in { -70, -10, 56 } do
+		for _, side in { -1, 1 } do
+			banner(shell, W(side * 82, HEIGHT - 4, z), Vector3.new(0, 0, 1), accents[i])
+		end
+	end
+
+	-----------------------------------------------------------------------
+	-- Central floor, celebration pedestals, vote pads
+	-----------------------------------------------------------------------
+	local cf0 = LobbyLayout.CentralFloor
+	local centerCf = CFrame.new(cf0.center.x, 0, cf0.center.z)
+	local d = cf0.radius * 2
+	rimDisc(shell, d, 0.1, centerCf, C.navy, C.cyan, 1.2)
+	rimDisc(shell, d - 16, 0.2, centerCf, C.wallLight, C.floorLine, 1)
+	rimDisc(shell, 52, 0.3, centerCf, C.navy, C.cyan, 1)
+	for i = 0, 11 do
+		local a = i / 12 * math.pi * 2
+		local mid = (cf0.radius - 8 + 26) / 2
+		Shapes.box(shell, Vector3.new(0.6, 0.08, cf0.radius - 8 - 26 - 2), centerCf * CFrame.Angles(0, a, 0) * CFrame.new(0, 0.22, mid), { color = C.cyanSoft, material = NEON })
+	end
+	-- Checker-flag inlay in the middle.
+	for i = 0, 15 do
+		local col, row = i % 4, math.floor(i / 4)
+		Shapes.box(shell, Vector3.new(3, 0.1, 3), centerCf * CFrame.new(-4.5 + col * 3, 0.33, -4.5 + row * 3), { color = if (col + row) % 2 == 0 then C.white else C.navy })
+	end
+
+	local stepHeights = { 6, 4, 3 }
+	local stepX = { 0, -12, 12 }
+	local pedestalCf = centerCf * CFrame.new(0, 0, 12)
+	local stepColors = { C.gold, C.silver, C.bronze }
 	for place = 1, 3 do
 		local h = stepHeights[place]
-		Shapes.roundedBox(lobby, Vector3.new(10, h, 10), 1.5, podiumCf * CFrame.new(stepX[place], h / 2, 0), { color = stepColors[place], collide = true })
+		local base = pedestalCf * CFrame.new(stepX[place], 0, 0)
+		Shapes.pillar(shell, 10.6, 0.5, base * CFrame.new(0, h - 0.4, 0), { color = C.cyan, material = NEON })
+		Shapes.pillar(shell, 10, h, base * CFrame.new(0, h / 2, 0), { color = stepColors[place], collide = true })
+	end
+
+	for i, pad in LobbyLayout.VotePads do
+		local color = rgb(LobbyLayout.PadColors[i])
+		local padCf = at(pad)
+		rimDisc(shell, LobbyLayout.VotePadSize, 0.45, padCf, C.navy, color, 1.2)
+		Shapes.disc(shell, LobbyLayout.VotePadSize - 8, 0.1, padCf * CFrame.new(0, 0.5, 0), { color = color, material = NEON, name = `VotePad{i}` }).Transparency = 0.5
+		-- A sign behind each pad; clients draw the track name and votes on it.
+		local signCf = facing(Vector3.new(pad.x, 9, pad.z - 14), Vector3.zAxis)
+		Shapes.pillar(shell, 1.2, 9, CFrame.new(pad.x, 4.5, pad.z - 14.6), { color = C.steel })
+		Shapes.roundedBox(shell, Vector3.new(18, 7, 0.8), 1.2, signCf * CFrame.new(0, 0, 0.5), { color = color })
+		Shapes.box(shell, Vector3.new(16.6, 5.6, 0.3), signCf, { color = C.screen, name = `PadSign{i}` })
+	end
+
+	-----------------------------------------------------------------------
+	-- Side rooms and their doors
+	-----------------------------------------------------------------------
+	local roomFolders = {}
+	for _, room in LobbyLayout.Rooms do
+		local isHall = room.id == "practice"
+		local folder = roomShell(rooms, room, if isHall then 50 else 26, if isHall then 3 else 1)
+		roomFolders[room.id] = folder
+		local into = Vector3.new(-room.side, 0, 0) -- from the door into the chamber
+		local doorCf = facing(Vector3.new(room.door.x + room.side * WALL / 2, 0, room.door.z), into)
+		slidingDoor(folder, `Door_{room.id}`, doorCf, doorW, doorH, C.cyan)
+		-- Name sign hanging under the walkway edge, facing the chamber.
+		local walkEdge = O.x + room.side * (HW - 16)
+		local sign = Shapes.box(folder, Vector3.new(20, 3.6, 0.5), facing(Vector3.new(walkEdge + into.X * 0.4, DECK - 4, room.door.z), into), { color = C.navy, name = "Sign" })
+		text(sign, `{room.icon} {string.upper(room.name)}`, C.cyan, 16)
+		Shapes.box(folder, Vector3.new(20.6, 0.3, 0.6), facing(Vector3.new(walkEdge + into.X * 0.2, DECK - 6, room.door.z), into), { color = C.cyan, material = NEON })
+		-- Floor arrow from the central floor to the door.
+		local arrowCf = facing(Vector3.new(room.door.x - room.side * 14, 0.06, room.door.z), -into)
+		for k = 0, 2 do
+			Shapes.box(folder, Vector3.new(4, 0.08, 1), arrowCf * CFrame.new(0, 0, -k * 3) * CFrame.Angles(0, math.rad(35), 0) * CFrame.new(-1.6, 0, 0), { color = C.cyanSoft, material = NEON })
+			Shapes.box(folder, Vector3.new(4, 0.08, 1), arrowCf * CFrame.new(0, 0, -k * 3) * CFrame.Angles(0, math.rad(-35), 0) * CFrame.new(1.6, 0, 0), { color = C.cyanSoft, material = NEON })
+		end
+	end
+
+	-- Garage: kart lifts, tool wall, tyre stacks and the customise bench.
+	local garage = assert(LobbyLayout.roomById("garage"))
+	local gFolder = roomFolders.garage
+	local gb = garage.box
+	for _, z in { gb.min.z + 22, gb.max.z - 22 } do
+		local liftCf = CFrame.new(gb.min.x + 34, 0, z)
+		Shapes.box(gFolder, Vector3.new(16, 1, 10), liftCf * CFrame.new(0, 3, 0), { color = C.steel, collide = true })
+		for _, sx in { -1, 1 } do
+			Shapes.box(gFolder, Vector3.new(1.4, 12, 1.4), liftCf * CFrame.new(sx * 9, 6, 0), { color = C.gold })
+		end
+		Shapes.box(gFolder, Vector3.new(16.4, 0.3, 0.4), liftCf * CFrame.new(0, 3.6, -5.1), { color = C.cyan, material = NEON })
+	end
+	local toolWall = Shapes.box(gFolder, Vector3.new(0.4, 12, 40), CFrame.new(gb.min.x + 0.3, 9, (gb.min.z + gb.max.z) / 2), { color = C.wallLight })
+	local _ = toolWall
+	local toolColors = { C.pink, C.gold, C.cyan, C.silver }
+	for i = 0, 11 do
+		local tz = gb.min.z + 30 + (i % 6) * 5
+		local ty = 6 + math.floor(i / 6) * 5
+		Shapes.box(gFolder, Vector3.new(0.6, 3.5, 0.8), CFrame.new(gb.min.x + 0.8, ty, tz) * CFrame.Angles(math.rad((i % 3 - 1) * 20), 0, 0), { color = toolColors[i % 4 + 1] })
+	end
+	for _, spot in { { gb.max.x - 8, gb.min.z + 6 }, { gb.max.x - 8, gb.max.z - 6 }, { gb.min.x + 8, gb.max.z - 6 } } do
+		for k = 0, 2 do
+			Shapes.pillar(gFolder, 5, 1.6, CFrame.new(spot[1], 0.8 + k * 1.7, spot[2]), { color = Color3.fromRGB(30, 30, 36), collide = true })
+			Shapes.pillar(gFolder, 2.6, 1.7, CFrame.new(spot[1], 0.8 + k * 1.7, spot[2]), { color = C.steel })
+		end
+	end
+	local benchCf = CFrame.new(garage.door.x - 16, 0, garage.door.z + 14)
+	Shapes.roundedBox(gFolder, Vector3.new(12, 3.6, 5), 1, benchCf * CFrame.new(0, 1.8, 0), { color = C.wallLight, collide = true })
+	Shapes.box(gFolder, Vector3.new(12.2, 0.3, 5.2), benchCf * CFrame.new(0, 3.7, 0), { color = C.cyan, material = NEON })
+	local garageSpot = Shapes.box(gFolder, Vector3.new(3, 3, 3), benchCf * CFrame.new(0, 5, 0), { color = C.white, transparency = 1, name = "GaragePrompt" })
+	local garagePrompt = prompt(garageSpot, "Customize kart", "Garage")
+	local gSign = Shapes.box(gFolder, Vector3.new(30, 6, 0.4), facing(Vector3.new(gb.min.x + 0.7, 19, (gb.min.z + gb.max.z) / 2), Vector3.xAxis), { color = C.navy })
+	text(gSign, "🔧 GARAGE", C.gold, 14)
+
+	-- Viewing lounge: big screen and sofas.
+	local lounge = assert(LobbyLayout.roomById("lounge"))
+	local lFolder = roomFolders.lounge
+	local lb = lounge.box
+	local lz = (lb.min.z + lb.max.z) / 2
+	Shapes.box(lFolder, Vector3.new(1.4, 25, 46), CFrame.new(lb.min.x + 1, 13, lz), { color = C.wallLight })
+	Shapes.box(lFolder, Vector3.new(0.3, 23, 44), CFrame.new(lb.min.x + 1.8, 13, lz), { color = C.cyan, material = NEON })
+	Shapes.box(lFolder, Vector3.new(42, 21, 0.6), facing(Vector3.new(lb.min.x + 2.1, 13, lz), Vector3.xAxis), { color = C.screen, name = "LoungeScreen" })
+	for i, x in { lb.min.x + 36, lb.min.x + 60 } do
+		for _, sz in { -1, 1 } do
+			local sofaCf = CFrame.new(x, 0, lz + sz * 11) * CFrame.Angles(0, math.rad(90), 0)
+			Shapes.roundedBox(lFolder, Vector3.new(18, 2.4, 6), 1.2, sofaCf * CFrame.new(0, 1.2, 0), { color = if i == 1 then C.pink else C.wallLight, collide = true })
+			Shapes.roundedBox(lFolder, Vector3.new(18, 4, 1.6), 0.8, sofaCf * CFrame.new(0, 3.2, 2.6), { color = if i == 1 then C.pink else C.wallLight, collide = true })
+			for k = -1, 1 do
+				Shapes.ellipsoid(lFolder, Vector3.new(5, 1.4, 4.2), sofaCf * CFrame.new(k * 5.8, 2.8, -0.2), { color = C.white })
+			end
+		end
+	end
+	local watchSpot = Shapes.box(lFolder, Vector3.new(3, 3, 3), CFrame.new(lb.min.x + 48, 3, lz), { color = C.white, transparency = 1, name = "WatchPrompt" })
+	local spectatePrompt = prompt(watchSpot, "Watch race", "Viewing lounge")
+
+	-- Trophy room: podium for the last race's top three, trophy shelves.
+	local trophy = assert(LobbyLayout.roomById("trophy"))
+	local tFolder = roomFolders.trophy
+	local tb = trophy.box
+	local tz = (tb.min.z + tb.max.z) / 2
+	local podiumCf = CFrame.new(tb.min.x + 30, 0, tz) * CFrame.Angles(0, math.rad(-90), 0) -- faces the door (+x)
+	local podiumX = { 0, -11, 11 }
+	local podiumH = { 7, 4.5, 2.5 }
+	for place = 1, 3 do
+		local h = podiumH[place]
+		Shapes.roundedBox(tFolder, Vector3.new(10, h, 10), 1.5, podiumCf * CFrame.new(podiumX[place], h / 2, 0), { color = stepColors[place], collide = true })
+		Shapes.box(tFolder, Vector3.new(10.2, 0.3, 0.3), podiumCf * CFrame.new(podiumX[place], h - 0.3, -5.05), { color = C.cyan, material = NEON })
 	end
 	local podiumKarts = Instance.new("Folder")
 	podiumKarts.Name = "PodiumKarts"
-	podiumKarts.Parent = lobby
-	local podiumTitle, podiumBody = sign(lobby, Vector3.new(30, 8, 1.5), podiumCf * CFrame.new(0, 20, 6), PALETTE.gold, "LAST RACE")
-	local _ = podiumTitle
-	podiumBody.Text = "No races yet"
-
-	-- Spectator screen.
-	local screenSpot = LobbyLayout.SpectatorScreen
-	local screenCf = facing(screenSpot, spawnSpot, 16)
-	for _, side in { -1, 1 } do
-		Shapes.pillar(lobby, 2.5, 18, screenCf * CFrame.new(side * 17, -7, 1), { color = PALETTE.dark, collide = true })
-	end
-	local spectatorTitle, spectatorBody = sign(lobby, Vector3.new(34, 18, 2), screenCf, PALETTE.purple, "LIVE RACE")
-	spectatorBody.Text = "No race running"
-	local spectateSpot = Shapes.box(lobby, Vector3.new(4, 4, 4), screenCf * CFrame.new(0, -13, -8), { color = PALETTE.dark, transparency = 1 })
-	local spectatePrompt = prompt(spectateSpot, "Watch race", "Spectator screen")
-
-	-- Photo spot: a backdrop with a marker to stand on.
-	local photo = LobbyLayout.PhotoSpot
-	local photoCf = facing(photo, spawnSpot, 0)
-	Shapes.arch(lobby, 30, 3, 3, photoCf * CFrame.new(0, 0, 8), { color = PALETTE.pink, collide = true }, 14)
-	Shapes.box(lobby, Vector3.new(30, 16, 1), photoCf * CFrame.new(0, 8, 9.5), { color = PALETTE.cream, collide = true })
-	local photoTitle, photoBody = sign(lobby, Vector3.new(22, 6, 1), photoCf * CFrame.new(0, 10, 8.5), PALETTE.pink, "KART CARNIVAL")
-	local _ = photoTitle
-	photoBody.Text = "Say cheese!"
-	Shapes.disc(lobby, 8, 0.4, photoCf * CFrame.new(0, 0.2, -4), { color = PALETTE.yellow, collide = true })
-	for i = 1, 14 do
-		local a = i * 2.39
-		local colors = { PALETTE.pink, PALETTE.yellow, PALETTE.sky, PALETTE.mint }
-		Shapes.ball(lobby, 1.2, photoCf * CFrame.new(math.cos(a) * 11, 6 + (i % 5) * 2, 9) , { color = colors[i % 4 + 1] })
+	podiumKarts.Parent = tFolder
+	local podiumSign = Shapes.box(tFolder, Vector3.new(32, 8, 0.4), facing(Vector3.new(tb.min.x + 0.7, 19, tz), Vector3.xAxis), { color = C.navy })
+	local podiumText = text(podiumSign, "🏆 LAST RACE\nNo races yet", C.gold, 12)
+	for _, sz in { -1, 1 } do
+		local shelfZ = if sz < 0 then tb.min.z + 2 else tb.max.z - 2
+		for _, y in { 6, 12 } do
+			Shapes.box(tFolder, Vector3.new(60, 0.8, 3), CFrame.new(tb.min.x + 50, y, shelfZ), { color = C.wallLight, collide = true })
+			Shapes.box(tFolder, Vector3.new(60, 0.2, 0.2), CFrame.new(tb.min.x + 50, y - 0.5, shelfZ - sz * 1.5), { color = C.cyan, material = NEON })
+			for k = 0, 4 do
+				local cup = CFrame.new(tb.min.x + 26 + k * 12, y + 0.4, shelfZ)
+				local color = ({ C.gold, C.silver, C.bronze })[(k + y) % 3 + 1]
+				Shapes.pillar(tFolder, 1.6, 0.8, cup * CFrame.new(0, 0.4, 0), { color = C.navy })
+				Shapes.pillar(tFolder, 0.5, 1.2, cup * CFrame.new(0, 1.4, 0), { color = color })
+				Shapes.ellipsoid(tFolder, Vector3.new(2, 2, 2), cup * CFrame.new(0, 2.8, 0), { color = color, reflectance = 0.2 })
+				Shapes.tube(tFolder, 0.9, 2.8, cup * CFrame.new(0, 3, 0), { color = color })
+			end
+		end
 	end
 
-	-- Decorations.
-	ferrisWheel(lobby, LobbyLayout.FerrisWheel)
-	local tentColors = { PALETTE.pink, PALETTE.sky, PALETTE.purple, PALETTE.mint }
-	for i, offset in { { -150, 10 }, { -165, 130 }, { 175, -100 }, { 60, -170 }, { -60, -175 } } do
-		tent(lobby, CFrame.new(O.x + offset[1], 0, O.z + offset[2]), tentColors[i % 4 + 1], 1 + (i % 2) * 0.3)
+	-- Party bays: three hangout booths with couches and coloured light.
+	local party = assert(LobbyLayout.roomById("party"))
+	local pFolder = roomFolders.party
+	local pb = party.box
+	local bayColors = { C.pink, C.cyan, C.gold }
+	local bayDepth = (pb.max.z - pb.min.z) / 3
+	for i = 1, 3 do
+		local bz = pb.min.z + bayDepth * (i - 0.5)
+		local bayCf = CFrame.new(pb.max.x - 20, 0, bz)
+		if i < 3 then
+			Shapes.box(pFolder, Vector3.new(26, 10, 1), CFrame.new(pb.max.x - 13, 5, pb.min.z + bayDepth * i), { color = C.wallLight, collide = true })
+		end
+		Shapes.roundedBox(pFolder, Vector3.new(5, 2.4, bayDepth - 6), 1.2, bayCf * CFrame.new(10, 1.2, 0), { color = bayColors[i], collide = true })
+		Shapes.roundedBox(pFolder, Vector3.new(1.6, 4, bayDepth - 6), 0.8, bayCf * CFrame.new(12.4, 3.2, 0), { color = bayColors[i], collide = true })
+		Shapes.pillar(pFolder, 7, 0.6, bayCf * CFrame.new(2, 3, 0), { color = C.white, collide = true })
+		Shapes.pillar(pFolder, 1.2, 3, bayCf * CFrame.new(2, 1.5, 0), { color = C.steel })
+		Shapes.box(pFolder, Vector3.new(0.3, 0.6, bayDepth - 4), CFrame.new(pb.max.x - 0.4, 9, bz), { color = bayColors[i], material = NEON })
+		local baySign = Shapes.box(pFolder, Vector3.new(10, 3, 0.4), facing(Vector3.new(pb.max.x - 0.8, 13, bz), -Vector3.xAxis), { color = C.navy })
+		text(baySign, `BAY {i}`, bayColors[i], 14)
 	end
-	for _, offset in { { 36, 30 }, { -36, 30 }, { 36, -30 }, { -36, -30 } } do
-		balloonCluster(lobby, CFrame.new(O.x + offset[1], 0, O.z + offset[2]))
-		Shapes.pillar(lobby, 1, 16, CFrame.new(O.x + offset[1], 8, O.z + offset[2]), { color = PALETTE.white, collide = true })
-	end
-	stringLights(lobby, Vector3.new(O.x + 36, 16, O.z + 30), Vector3.new(O.x - 36, 16, O.z + 30))
-	stringLights(lobby, Vector3.new(O.x + 36, 16, O.z - 30), Vector3.new(O.x - 36, 16, O.z - 30))
-	stringLights(lobby, Vector3.new(O.x + 36, 16, O.z - 30), Vector3.new(O.x + 36, 16, O.z + 30))
-	stringLights(lobby, Vector3.new(O.x - 36, 16, O.z - 30), Vector3.new(O.x - 36, 16, O.z + 30))
+	local partySign = Shapes.box(pFolder, Vector3.new(28, 5, 0.4), facing(Vector3.new(pb.min.x + 30, 20, pb.min.z + 0.8), Vector3.zAxis), { color = C.navy })
+	text(partySign, "🎉 PARTY BAYS · hang out with your crew", C.pink, 12)
 
-	-- Practice loop: open track with boost tunnel, jump ramp and drift circle.
+	-- Practice circuit hall: track, drift circle, boost tunnel.
 	local area = LobbyLayout.PracticeArea
-	Shapes.box(lobby, Vector3.new(area.max.x - area.min.x, 0.3, area.max.z - area.min.z), CFrame.new((area.min.x + area.max.x) / 2, 0.1, (area.min.z + area.max.z) / 2), { color = Color3.fromRGB(150, 210, 140), collide = true })
+	local hFolder = roomFolders.practice
+	Shapes.box(hFolder, Vector3.new(area.max.x - area.min.x, 0.2, area.max.z - area.min.z), CFrame.new((area.min.x + area.max.x) / 2, 0.05, (area.min.z + area.max.z) / 2), { color = C.navy, collide = true })
 	local _, practice = TrackBuilder.build(LobbyLayout.PracticeTrack.id, { folderName = "PracticeTrack", ground = false, scenery = false })
 	local drift = LobbyLayout.DriftCircle
-	Shapes.disc(lobby, drift.radius * 2, 0.35, cf(drift.center, 0.12), { color = PALETTE.white, collide = true })
-	Shapes.disc(lobby, drift.radius * 2 - 4, 0.37, cf(drift.center, 0.13), { color = Color3.fromRGB(70, 72, 90), collide = true })
-	Shapes.disc(lobby, 10, 0.4, cf(drift.center, 0.14), { color = PALETTE.pink, collide = true })
-	local dTitle, dBody = sign(lobby, Vector3.new(16, 6, 1), cf(drift.center, 6) * CFrame.new(0, 0, -drift.radius - 4), PALETTE.purple, "DRIFT CIRCLE")
-	local _ = dTitle
-	dBody.Text = "Hold drift and go round!"
-	-- Boost tunnel arches over the boost pads.
+	rimDisc(hFolder, drift.radius * 2, 0.3, at(drift.center), C.wallLight, C.cyan, 1.5)
+	rimDisc(hFolder, 10, 0.4, at(drift.center), C.navy, C.pink, 1)
+	local driftSign = Shapes.box(hFolder, Vector3.new(16, 5, 0.5), facing(Vector3.new(drift.center.x, 7, drift.center.z), Vector3.zAxis), { color = C.navy })
+	text(driftSign, "DRIFT CIRCLE · hold drift and go round!", C.cyan, 12)
 	local padDistances = {}
 	for _, pad in Track.pads(practice) do
 		table.insert(padDistances, pad.distance)
 	end
 	if #padDistances > 0 then
 		local from, to = math.min(table.unpack(padDistances)) - 20, math.max(table.unpack(padDistances)) + 20
-		for d = from, to, 8 do
-			local p, tan = Track.at(practice, d)
+		for dist = from, to, 8 do
+			local p, tan = Track.at(practice, dist)
 			-- Arches are built across the local x/y plane, so facing along the road spans it.
-			local at = CFrame.lookAt(Vector3.new(p.x, p.y, p.z), Vector3.new(p.x + tan.x, p.y, p.z + tan.z))
-			local ring = math.floor(d / 8) % 2
-			Shapes.arch(lobby, LobbyLayout.PracticeTrack.width + 6, 2, 3, at, { color = if ring == 0 then PALETTE.pink else PALETTE.yellow, collide = false }, 12)
+			local archCf = CFrame.lookAt(Vector3.new(p.x, p.y, p.z), Vector3.new(p.x + tan.x, p.y, p.z + tan.z))
+			local ring = math.floor(dist / 8) % 2
+			Shapes.arch(hFolder, LobbyLayout.PracticeTrack.width + 6, 2, 3, archCf, { color = if ring == 0 then C.cyan else C.pink, material = NEON }, 12)
 		end
 	end
-	local practiceStart = Track.spot(practice, practice.length - 30, 0)
-	local practiceSign = Shapes.box(lobby, Vector3.new(4, 4, 4), CFrame.new(practiceStart.x, 2, practiceStart.z - 30), { color = PALETTE.dark, transparency = 1 })
-	local practicePrompt = prompt(practiceSign, "Drive practice kart", "Practice loop")
-	local pTitle, pBody = sign(lobby, Vector3.new(18, 7, 1.5), CFrame.lookAt(Vector3.new(practiceStart.x, 9, practiceStart.z - 32), Vector3.new(spawnSpot.x, 9, spawnSpot.z)), PALETTE.sky, "PRACTICE")
-	local _ = pTitle
-	pBody.Text = "Press E to drive"
+	local ps = LobbyLayout.PracticeStart
+	local practiceSpot = Shapes.box(hFolder, Vector3.new(3, 3, 3), at(ps, 3), { color = C.white, transparency = 1, name = "PracticePrompt" })
+	local practicePrompt = prompt(practiceSpot, "Drive practice kart", "Practice circuit")
+	local pKiosk = Shapes.roundedBox(hFolder, Vector3.new(3, 5, 6), 1, at(ps, 2.5) * CFrame.new(4, 0, 0), { color = C.wallLight, collide = true })
+	local _ = pKiosk
+	local pSign = Shapes.box(hFolder, Vector3.new(14, 4, 0.4), facing(Vector3.new(ps.x + 5.8, 8, ps.z), -Vector3.xAxis), { color = C.navy })
+	text(pSign, "🏁 PRACTICE · press E to drive", C.cyan, 14)
 
-	-- Hidden collectibles: spinning golden tokens.
+	-----------------------------------------------------------------------
+	-- Hidden golden tokens, ambience
+	-----------------------------------------------------------------------
 	local tokens = {}
 	local tokenFolder = Instance.new("Folder")
 	tokenFolder.Name = "Tokens"
 	tokenFolder.Parent = lobby
 	for i, spot in LobbyLayout.Collectibles do
-		local token = Shapes.tube(tokenFolder, 4, 0.8, cf(spot, 1.5) * CFrame.Angles(0, 0, 0), { color = PALETTE.gold, material = Enum.Material.Neon, name = `Token{i}` })
+		local token = Shapes.tube(tokenFolder, 4, 0.8, at(spot, 1.5), { color = C.gold, material = NEON, name = `Token{i}` })
 		token:SetAttribute("Spin", 2)
 		token:SetAttribute("TokenId", i)
 		table.insert(tokens, token)
 	end
 
+	if LobbyBuilder.AmbientSoundId ~= "" then
+		local hum = Shapes.box(lobby, Vector3.new(1, 1, 1), at(O, 30), { color = C.white, transparency = 1, name = "Ambience" })
+		local sound = Instance.new("Sound")
+		sound.SoundId = LobbyBuilder.AmbientSoundId
+		sound.Looped = true
+		sound.Volume = 0.25
+		sound.RollOffMaxDistance = 400
+		sound.Parent = hum
+		sound:Play()
+	end
+
 	lobby.Parent = Workspace
 
-	-- Handles -------------------------------------------------------------
+	-----------------------------------------------------------------------
+	-- Handles
+	-----------------------------------------------------------------------
 	local function setKartDisplay(slot: number, name: string?, kartId: string?, look: any?)
 		local existing = displays:FindFirstChild(`Slot{slot}`)
 		if existing then
@@ -5186,8 +5740,8 @@ function LobbyBuilder.build(): Handles
 		if not spot or not name then
 			return
 		end
-		local at = CFrame.new(spot.x, 1.3, spot.z) * CFrame.Angles(0, math.rad(90), 0) -- face the plaza
-		local kart = KartRig.build(kartId or Karts.Default, name, at, displays, look)
+		local kartCf = CFrame.new(spot.x, 1.3, spot.z) * CFrame.Angles(0, displayYaw[slot], 0)
+		local kart = KartRig.build(kartId or Karts.Default, name, kartCf, displays, look)
 		kart.Name = `Slot{slot}`
 		kart.PrimaryPart.Anchored = true
 		local tag = kart:FindFirstChild("NameTag")
@@ -5202,46 +5756,31 @@ function LobbyBuilder.build(): Handles
 		local lines = {}
 		for place = 1, math.min(3, #rows) do
 			local row = rows[place]
-			local h = stepHeights[place]
-			local at = podiumCf * CFrame.new(stepX[place], h + 0.1, 0)
-			local kart = KartRig.build(row.kartId or Karts.Default, row.name, at, podiumKarts, row.look)
+			local kartCf = podiumCf * CFrame.new(podiumX[place], podiumH[place] + 0.1, 0)
+			local kart = KartRig.build(row.kartId or Karts.Default, row.name, kartCf, podiumKarts, row.look)
 			kart.PrimaryPart.Anchored = true
 			table.insert(lines, `{place}. {row.name}`)
 		end
-		podiumBody.Text = if #lines > 0 then table.concat(lines, "   ") else "No races yet"
+		podiumText.Text = "🏆 LAST RACE\n" .. (if #lines > 0 then table.concat(lines, "   ") else "No races yet")
 	end
 
-	local function setVoteOption(index: number, info: any?)
-		local title, body = voteTitles[index], voteBodies[index]
-		local mini = miniFolder:FindFirstChild(`Pad{index}`)
-		if mini then
-			mini:Destroy()
+	-- Departure doors light up (and open on clients) when a track is chosen.
+	local function setDeparture(lit: boolean)
+		for _, door in departure:GetChildren() do
+			if door:GetAttribute("Departure") then
+				door:SetAttribute("Lit", lit)
+			end
 		end
-		if not info then
-			title.Text = `OPTION {index}`
-			body.Text = "Voting opens when someone is ready"
-			return
-		end
-		title.Text = `{info.icon or ""} {info.name}`
-		body.Text = `{info.difficulty}\n{info.feature}\n{info.votes} vote{if info.votes == 1 then "" else "s"}`
-		local holder = Instance.new("Folder")
-		holder.Name = `Pad{index}`
-		holder.Parent = miniFolder
-		local pad = LobbyLayout.VotePads[index]
-		miniature(holder, info.id, cf(pad, 5) * CFrame.new(0, 0, -20))
 	end
 
-	for i = 1, #LobbyLayout.VotePads do
-		setVoteOption(i, nil)
-	end
-
-	-- Top three players stand on their podium step, cheer, and get confetti.
+	-- Top three players stand on the pedestals in the middle of the chamber,
+	-- cheer, and get confetti.
 	local function celebrate(place: number, character: Model)
 		local h = stepHeights[place]
 		if not h or not character.Parent then
 			return
 		end
-		local spot = podiumCf * CFrame.new(stepX[place], h + 3, -3)
+		local spot = pedestalCf * CFrame.new(stepX[place], h + 3, 0) * CFrame.Angles(0, math.pi, 0)
 		local root = character:FindFirstChild("HumanoidRootPart") :: BasePart?
 		if root then
 			root.CFrame = spot
@@ -5252,14 +5791,14 @@ function LobbyBuilder.build(): Handles
 				humanoid:PlayEmote(if place == 1 then "cheer" else "wave")
 			end)
 		end
-		local burst = Shapes.box(lobby, Vector3.new(1, 1, 1), spot * CFrame.new(0, 10, 0), { color = PALETTE.white, transparency = 1 })
+		local burst = Shapes.box(lobby, Vector3.new(1, 1, 1), spot * CFrame.new(0, 12, 0), { color = C.white, transparency = 1 })
 		local confetti = Instance.new("ParticleEmitter")
 		confetti.Texture = "rbxasset://textures/particles/sparkles_main.dds"
 		confetti.Color = ColorSequence.new({
-			ColorSequenceKeypoint.new(0, PALETTE.pink),
-			ColorSequenceKeypoint.new(0.33, PALETTE.yellow),
-			ColorSequenceKeypoint.new(0.66, PALETTE.sky),
-			ColorSequenceKeypoint.new(1, PALETTE.mint),
+			ColorSequenceKeypoint.new(0, C.pink),
+			ColorSequenceKeypoint.new(0.33, C.gold),
+			ColorSequenceKeypoint.new(0.66, C.cyan),
+			ColorSequenceKeypoint.new(1, C.white),
 		})
 		confetti.Size = NumberSequence.new(0.6)
 		confetti.Lifetime = NumberRange.new(2, 3)
@@ -5279,19 +5818,10 @@ function LobbyBuilder.build(): Handles
 	end
 
 	return {
-		celebrate = celebrate,
-		setStatus = function(title: string, body: string)
-			statusTitle.Text = title
-			statusBody.Text = body
-		end,
-		setVoteOption = setVoteOption,
 		setPodium = setPodium,
-		setSpectator = function(title: string, body: string)
-			spectatorTitle.Text = title
-			spectatorBody.Text = body
-		end,
 		setKartDisplay = setKartDisplay,
-		readyPrompt = readyPrompt,
+		setDeparture = setDeparture,
+		celebrate = celebrate,
 		garagePrompt = garagePrompt,
 		spectatePrompt = spectatePrompt,
 		practicePrompt = practicePrompt,
@@ -6560,10 +7090,12 @@ return RaceService
           <string name="Name">RoundService</string>
           <string name="Source"><![CDATA[-- The round loop:
 --   lobby → (someone readies up) → ready countdown → map voting (20s)
---   → race → results → back to the lobby
+--   → winner announced (departure doors light up) → race → results → lobby
 --
--- Players explore the Kart Carnival freely. Only players who ready up race
--- and vote; everyone else can keep practising or watch. Late joiners spawn in
+-- Players explore Kart HQ freely. Only players who ready up race and vote
+-- (the READY button, or stepping onto a vote pad); everyone else can keep
+-- practising or watch. A Random vote counts for one of the offered tracks,
+-- picked at random once, and every screen shows which one. Late joiners spawn in
 -- the lobby and can ready up for the next race. Empty grid slots are filled
 -- with CPU drivers, so one player can race alone.
 
@@ -6597,12 +7129,14 @@ local TICK = 0.25
 
 type Choice = { ready: boolean }
 
-local phase: "lobby" | "voting" | "racing" | "results" = "lobby"
+local phase: "lobby" | "voting" | "announce" | "racing" | "results" = "lobby"
 local deadline: number? = nil
 local choices: { [Player]: Choice } = {}
 local options: { string } = {}
 local votes: { [number]: string } = {} -- UserId -> track id
 local voters: { [Player]: boolean } = {}
+local randomVoters: { [number]: boolean } = {} -- UserIds whose vote came from Random
+local onPad: { [Player]: number } = {} -- the vote pad each player stood on last tick
 local lastTrack: string? = nil
 local lastResults: { any } = {}
 local winner: string? = nil
@@ -6671,11 +7205,16 @@ local function roundState()
 	for _, id in options do
 		table.insert(opts, optionInfo(id))
 	end
+	local randomIds = {}
+	for userId in randomVoters do
+		table.insert(randomIds, userId)
+	end
 	return {
 		phase = phase,
 		deadline = deadline,
 		players = players,
 		options = opts,
+		randomVoters = randomIds,
 		winner = winner,
 		spectate = RaceService.spectatorInfo(),
 		lastResults = lastResults,
@@ -6695,51 +7234,9 @@ local function countReady(): (number, number)
 	return total, ready
 end
 
-local function secondsLeft(): number
-	return if deadline then math.max(0, math.ceil(deadline - now())) else 0
-end
-
-local function updateSigns()
-	local _, ready = countReady()
-	if phase == "lobby" then
-		if deadline then
-			handles.setStatus("GET READY!", `{ready} racer{if ready == 1 then "" else "s"} ready\nVoting opens in {secondsLeft()}s`)
-		else
-			handles.setStatus("KART CARNIVAL", "Step under the READY arch\n(or press READY) to join the next race")
-		end
-	elseif phase == "voting" then
-		handles.setStatus("VOTE FOR A TRACK!", `Stand on a pad or use the menu\n{secondsLeft()}s left`)
-	elseif phase == "racing" then
-		local info = RaceService.spectatorInfo()
-		handles.setStatus("RACE IN PROGRESS", if info then `{info.trackName}\nReady up to join the next one` else "")
-	elseif phase == "results" then
-		handles.setStatus("RESULTS", `Back to the lobby in {secondsLeft()}s`)
-	end
-
-	for i = 1, #LobbyLayout.VotePads do
-		local id = options[i]
-		handles.setVoteOption(i, if id and (phase == "voting" or phase == "racing") then optionInfo(id) else nil)
-	end
-
-	local info = RaceService.spectatorInfo()
-	if info then
-		local lines = {}
-		for place, row in info.rows do
-			if place > 8 then
-				break
-			end
-			table.insert(lines, `{place}. {row.name}{if row.finished then " ✓" else ""}`)
-		end
-		handles.setSpectator(`LIVE: {info.trackName}`, table.concat(lines, "\n"))
-	else
-		handles.setSpectator("LIVE RACE", "No race running.\nReady up to start one!")
-	end
-end
-
 local function broadcast()
 	dirty = false
 	Net.Round:FireAllClients(roundState())
-	updateSigns()
 end
 
 local function refreshDisplays()
@@ -6767,7 +7264,9 @@ local function toLobby()
 	options = {}
 	votes = {}
 	voters = {}
+	randomVoters = {}
 	winner = nil
+	handles.setDeparture(false)
 	dirty = true
 end
 
@@ -6776,6 +7275,7 @@ local function startVoting()
 	deadline = now() + Voting.VoteSeconds
 	votes = {}
 	voters = {}
+	randomVoters = {}
 	options = Voting.pickOptions(Tracks.VotePool, Voting.OptionCount, math.random, lastTrack)
 	for player, c in choices do
 		if c.ready and player.Parent then
@@ -6896,10 +7396,20 @@ local function onRaceEnded(rows: { any }, trackId: string)
 	dirty = true
 end
 
-local function startRace()
+-- Voting is over: reveal the winner on every screen and light the
+-- departure doors for a few seconds before the race loads.
+local function finishVoting()
 	-- Highest vote wins; ties are broken at random.
-	local trackId = Voting.winner(options, votes, math.random)
-	winner = trackId
+	winner = Voting.winner(options, votes, math.random)
+	phase = "announce"
+	deadline = now() + Voting.AnnounceSeconds
+	handles.setDeparture(true)
+	dirty = true
+end
+
+local function startRace()
+	local trackId = winner :: string
+	handles.setDeparture(false)
 	local entrants = {}
 	for player in voters do
 		if player.Parent then
@@ -6949,8 +7459,66 @@ local function startRace()
 	end
 end
 
+local function setReady(player: Player, isReady: boolean)
+	if RaceService.isRacing(player) then
+		return
+	end
+	local c = choiceOf(player)
+	if c.ready == isReady then
+		return
+	end
+	c.ready = isReady
+	if phase == "voting" then
+		if isReady then
+			voters[player] = true
+		else
+			voters[player] = nil
+			votes[player.UserId] = nil
+			randomVoters[player.UserId] = nil
+		end
+	end
+	Net.Notify:FireClient(player, if isReady then "You're in the next race!" else "You left the next race.")
+	dirty = true
+end
+
+-- A vote for an offered track, or Voting.Random. Random rolls once and keeps
+-- its pick until you choose something else, so standing on the pad is stable.
+local function castVote(player: Player, choice: string)
+	if phase ~= "voting" or not voters[player] then
+		return
+	end
+	local userId = player.UserId
+	if choice == Voting.Random then
+		if randomVoters[userId] and votes[userId] then
+			return
+		end
+		local pick = Voting.randomPick(options, math.random)
+		votes[userId] = pick
+		randomVoters[userId] = true
+		Net.Notify:FireClient(player, `🎲 Random picked {Tracks.get(pick).name} for you`)
+		dirty = true
+	elseif table.find(options, choice) and (votes[userId] ~= choice or randomVoters[userId]) then
+		votes[userId] = choice
+		randomVoters[userId] = nil
+		dirty = true
+	end
+end
+
 local function step()
 	local t = now()
+
+	-- Stepping onto a vote pad joins the next race, so voting is one walk
+	-- down the stairs from spawn.
+	for _, player in Players:GetPlayers() do
+		local root = rootOf(player)
+		local pad = if root then LobbyLayout.padAt(root.Position.X, root.Position.Z) else nil
+		local was = onPad[player]
+		onPad[player] = pad
+		if pad and pad ~= was and (phase == "lobby" or phase == "voting") and not choiceOf(player).ready then
+			setReady(player, true)
+		end
+	end
+
 	local _, ready = countReady()
 
 	if phase == "lobby" then
@@ -6976,21 +7544,23 @@ local function step()
 			end
 		end
 	elseif phase == "voting" then
-		-- Standing on a vote pad counts as a vote.
+		-- Standing on a vote pad counts as a vote (pad 4 is Random).
 		for player in voters do
-			local root = rootOf(player)
-			if root then
-				local pad = LobbyLayout.padAt(root.Position.X, root.Position.Z)
-				if pad and options[pad] and votes[player.UserId] ~= options[pad] then
-					votes[player.UserId] = options[pad]
-					dirty = true
-				end
+			local pad = onPad[player]
+			if pad == LobbyLayout.RandomPad then
+				castVote(player, Voting.Random)
+			elseif pad and options[pad] then
+				castVote(player, options[pad])
 			end
 		end
 		local anyVoter = next(voters) ~= nil
 		if not anyVoter then
 			toLobby()
 		elseif t >= (deadline :: number) then
+			finishVoting()
+		end
+	elseif phase == "announce" then
+		if t >= (deadline :: number) then
 			startRace()
 		end
 	elseif phase == "racing" then
@@ -7029,27 +7599,6 @@ end
 ---------------------------------------------------------------------------
 -- Remotes and setup
 ---------------------------------------------------------------------------
-local function setReady(player: Player, isReady: boolean)
-	if RaceService.isRacing(player) then
-		return
-	end
-	local c = choiceOf(player)
-	if c.ready == isReady then
-		return
-	end
-	c.ready = isReady
-	if phase == "voting" then
-		if isReady then
-			voters[player] = true
-		else
-			voters[player] = nil
-			votes[player.UserId] = nil
-		end
-	end
-	Net.Notify:FireClient(player, if isReady then "You're in the next race!" else "You left the next race.")
-	dirty = true
-end
-
 function RoundService.start()
 	handles = LobbyBuilder.build()
 	PracticeService.init()
@@ -7070,6 +7619,8 @@ function RoundService.start()
 		choices[player] = nil
 		voters[player] = nil
 		votes[player.UserId] = nil
+		randomVoters[player.UserId] = nil
+		onPad[player] = nil
 		dirty = true
 		task.defer(refreshDisplays)
 	end)
@@ -7077,13 +7628,9 @@ function RoundService.start()
 	Net.Ready.OnServerEvent:Connect(function(player, isReady)
 		setReady(player, isReady == true)
 	end)
-	handles.readyPrompt.Triggered:Connect(function(player)
-		setReady(player, not choiceOf(player).ready)
-	end)
-	Net.Vote.OnServerEvent:Connect(function(player, trackId)
-		if phase == "voting" and voters[player] and table.find(options, trackId) then
-			votes[player.UserId] = trackId
-			dirty = true
+	Net.Vote.OnServerEvent:Connect(function(player, choice)
+		if type(choice) == "string" then
+			castVote(player, choice)
 		end
 	end)
 	-- Garage: everything is checked here; the client only asks.
@@ -7170,7 +7717,7 @@ function RoundService.start()
 			if not ok then
 				warn("[RoundService]", err)
 			end
-			-- Rebroadcast on changes, and once a second so countdowns tick on signs.
+			-- Rebroadcast on changes, and once a second as a safety net.
 			local second = math.floor(now())
 			if dirty or second ~= lastSecond then
 				lastSecond = second
@@ -7514,7 +8061,7 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		wedge:SetAttribute("Surface", "ramp")
 		wedge.Parent = folder
 		for k = -1, 1, 2 do
-			local stripe = part(folder, "RampStripe", Vector3.new(1.2, 0.2, 18.6), cf * CFrame.new(k * (ramp.width / 2 - 1.5), 2.6, 0) * CFrame.Angles(math.atan2(5, 18), 0, 0), Color3.new(1, 1, 1), Enum.Material.Neon)
+			local stripe = part(folder, "RampStripe", Vector3.new(1.2, 0.2, 18.6), cf * CFrame.new(k * (ramp.width / 2 - 1.5), 2.6, 0) * CFrame.Angles(-math.atan2(5, 18), 0, 0), Color3.new(1, 1, 1), Enum.Material.Neon)
 			stripe.CanCollide = false
 			stripe.CanQuery = false
 		end
@@ -7543,6 +8090,10 @@ return TrackBuilder
   <Item class="StarterPlayer" referent="35">
     <Properties>
       <string name="Name">StarterPlayer</string>
+      <float name="CameraMaxZoomDistance">80</float>
+      <token name="DevCameraOcclusionMode">1</token>
+      <float name="HealthDisplayDistance">0</float>
+      <float name="NameDisplayDistance">45</float>
     </Properties>
     <Item class="StarterPlayerScripts" referent="36">
       <Properties>
@@ -7584,6 +8135,7 @@ local canSave = true
 local tab = "kart"
 
 local panel = UI.panel(UI.Screen, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 860, 0, 560), Visible = false })
+UI.fit(panel, Vector2.new(860, 560))
 UI.label(panel, { Position = UDim2.new(0, 20, 0, 10), Size = UDim2.new(0, 260, 0, 44), Text = "🔧 GARAGE", TextColor3 = UI.Colors.yellow, TextXAlignment = Enum.TextXAlignment.Left })
 local coinsLabel = UI.label(panel, { Position = UDim2.new(0, 280, 0, 14), Size = UDim2.new(0, 200, 0, 36), Text = "🪙 0", TextXAlignment = Enum.TextXAlignment.Left })
 local saveNote = UI.label(panel, { Position = UDim2.new(0, 480, 0, 18), Size = UDim2.new(0, 280, 0, 28), Text = "", TextColor3 = UI.Colors.red })
@@ -8062,6 +8614,7 @@ end
 -- Results
 ---------------------------------------------------------------------------
 local results = UI.panel(UI.Screen, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 520, 0, 580), Visible = false })
+UI.fit(results, Vector2.new(520, 580))
 local resultsTitle = UI.label(results, { Position = UDim2.new(0, 20, 0, 12), Size = UDim2.new(1, -40, 0, 40), TextColor3 = UI.Colors.yellow, Text = "" })
 local resultsBody = UI.label(results, {
 	Position = UDim2.new(0, 24, 0, 62),
@@ -8751,14 +9304,316 @@ return KartVisuals
         </Item>
         <Item class="ModuleScript" referent="42">
           <Properties>
+            <string name="Name">LobbyScreens</string>
+            <string name="Source"><![CDATA[-- Local wall displays and proximity doors for Kart HQ. SurfaceGuis belong
+-- to PlayerGui; the server supplies round data and departure authorization.
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local UI = require(script.Parent.UI)
+local TrackPreview = require(script.Parent.TrackPreview)
+local Tracks = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Tracks"))
+
+local LobbyScreens = {}
+local state: any = nil
+local lobby: Instance? = nil
+local surfaces = {}
+local doors = {}
+local faces = {}
+local nextScan, nextFaces = 0, 0
+local featured: string? = nil
+local randomFeatured: string? = nil
+local displayKey = ""
+local gold = Color3.fromRGB(255, 200, 60)
+
+local function clear(display)
+	for _, preview in display.previews do
+		preview:destroy()
+	end
+	display.previews = {}
+	for _, child in display.root:GetChildren() do
+		child:Destroy()
+	end
+end
+
+local function label(parent, text, x, y, w, h, color)
+	return UI.label(parent, {
+		Text = text, Position = UDim2.fromScale(x, y), Size = UDim2.fromScale(w, h),
+		TextColor3 = color or UI.Colors.text,
+	})
+end
+
+local function preview(display, parent, id, x, y, w, h)
+	local holder = Instance.new("Frame")
+	holder.BackgroundTransparency = 1
+	holder.Position = UDim2.fromScale(x, y)
+	holder.Size = UDim2.fromScale(w, h)
+	holder.Parent = parent
+	table.insert(display.previews, TrackPreview.new(holder, id))
+end
+
+local function addFaces(parent, ids, x, y, w, h)
+	local count = math.min(#ids, 6)
+	for i = 1, count do
+		local face = Instance.new("ImageLabel")
+		face.Name = "Voter"
+		face.BackgroundColor3 = UI.Colors.panelLight
+		face.Size = UDim2.fromScale(w / 7, h)
+		face.Position = UDim2.fromScale(x + (i - 1) * w / 7, y)
+		face.Image = UI.headshot(ids[i], true)
+		face.Parent = parent
+		local aspect = Instance.new("UIAspectRatioConstraint")
+		aspect.Parent = face
+		table.insert(faces, { image = face, id = ids[i] })
+	end
+	if #ids > count then
+		label(parent, `+{#ids - count}`, x + count * w / 7, y, w / 7, h)
+	end
+end
+
+local function standings(display, title, rows, limit)
+	label(display.root, title, 0.03, 0.02, 0.94, 0.13, gold)
+	local count = math.min(#rows, limit)
+	if count == 0 then
+		label(display.root, "No race yet · ready up to race", 0.05, 0.35, 0.9, 0.25)
+		return
+	end
+	local height = math.min(0.2, 0.76 / count)
+	for i = 1, count do
+		local row = rows[i]
+		local suffix = if row.finished then " · FINISHED" elseif row.isCpu then " · CPU" else ""
+		label(display.root, `{i}. {row.name}{suffix}`, 0.05, 0.19 + (i - 1) * height, 0.9, height * 0.86,
+			if i <= 3 then gold else UI.Colors.text)
+	end
+end
+
+local function trackTitle(id)
+	return Tracks.get(id).name
+end
+
+local function featuredTrack(display, id, announcing)
+	preview(display, display.root, id, 0.04, 0.04, 0.92, 0.69)
+	label(display.root, trackTitle(id), 0.03, 0.75, 0.94, 0.13, gold)
+	label(display.root, if announcing then "TRACK CHOSEN · head to departure" else "Step onto a pad to race",
+		0.03, 0.9, 0.94, 0.08)
+end
+
+local function render()
+	faces = {}
+	local s = state or { phase = "lobby", options = {}, players = {} }
+	for key, display in surfaces do
+		clear(display)
+		if key == "vote" then
+			if s.phase == "voting" then
+				for i = 1, 4 do
+					local opt = (s.options or {})[i]
+					local ids = if i == 4 then s.randomVoters or {} else (opt and opt.voters or {})
+					local x = (i - 1) / 4 + 0.012
+					local card = UI.panel(display.root, { Position = UDim2.fromScale(x, 0.025), Size = UDim2.fromScale(0.226, 0.95) })
+					if opt and i < 4 then
+						preview(display, card, opt.id, 0.04, 0.04, 0.92, 0.52)
+					elseif i == 4 and s.options and s.options[1] then
+						preview(display, card, randomFeatured or s.options[1].id, 0.04, 0.04, 0.92, 0.52)
+						label(card, "? ? ?", 0.05, 0.15, 0.9, 0.25, UI.Colors.purple)
+					else
+						label(card, "—", 0.05, 0.12, 0.9, 0.34, UI.Colors.purple)
+					end
+					label(card, if i == 4 then "RANDOM" else (opt and opt.name or "Waiting"), 0.04, 0.59, 0.92, 0.13)
+					local votes = if i == 4 then #ids else (opt and opt.votes or 0)
+					label(card, `{votes} vote{if votes == 1 then "" else "s"}`, 0.04, 0.75, 0.92, 0.08, gold)
+					addFaces(card, ids, 0.04, 0.86, 0.92, 0.1)
+				end
+			elseif s.phase == "announce" and s.winner then
+				featuredTrack(display, s.winner, true)
+			elseif s.phase == "racing" then
+				standings(display, `LIVE · {if s.spectate then s.spectate.trackName else "Race"}`, s.spectate and s.spectate.rows or {}, 8)
+			elseif s.phase == "results" then
+				standings(display, "RACE RESULTS · TOP 3", s.lastResults or {}, 3)
+			else
+				featuredTrack(display, featured or Tracks.VotePool[1], false)
+			end
+		elseif key == "lounge" then
+			standings(display, if s.spectate then `LIVE · {s.spectate.trackName}` else "RACE VIEWING LOUNGE",
+				s.spectate and s.spectate.rows or {}, 8)
+		elseif key == "status" then
+			display.title = label(display.root, "KART HQ", 0.02, 0.06, 0.96, 0.45, gold)
+			display.detail = label(display.root, "", 0.02, 0.56, 0.96, 0.36)
+		else
+			local index = tonumber(string.match(key, "%d+"))
+			local opt = (s.options or {})[index]
+			local votes = if index == 4 then #(s.randomVoters or {}) else (opt and opt.votes or 0)
+			label(display.root, `{index} · {if index == 4 then "RANDOM" else (opt and opt.name or "TRACK")}`, 0.02, 0.05, 0.96, 0.55)
+			label(display.root, if s.phase == "voting" then `{votes} votes` else "Step on pad to race", 0.02, 0.66, 0.96, 0.27, gold)
+		end
+	end
+end
+
+local function surface(key, part)
+	if not part or not part:IsA("BasePart") then return end
+	local gui = Instance.new("SurfaceGui")
+	gui.Name = `LobbyScreen_{key}`
+	gui.Adornee = part
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
+	gui.CanvasSize = Vector2.new(1920, math.floor(1920 * part.Size.Y / part.Size.X))
+	gui.LightInfluence = 0
+	gui.AlwaysOnTop = false
+	gui.ResetOnSpawn = false
+	gui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+	local root = Instance.new("Frame")
+	root.Size = UDim2.fromScale(1, 1)
+	root.BackgroundColor3 = UI.Colors.panel
+	root.BorderSizePixel = 0
+	root.Parent = gui
+	surfaces[key] = { gui = gui, root = root, previews = {} }
+end
+
+local function discover()
+	local found = Workspace:FindFirstChild("Lobby")
+	local chamber = found and found:FindFirstChild("Chamber")
+	local rooms = found and found:FindFirstChild("Rooms")
+	local lounge = rooms and rooms:FindFirstChild("lounge")
+	-- Wait for complete replication without blocking the Round event handler.
+	if not chamber or not chamber:FindFirstChild("PadSign4") or not lounge or not lounge:FindFirstChild("LoungeScreen") then return end
+	if found == lobby then return end
+	for _, display in surfaces do
+		clear(display)
+		display.gui:Destroy()
+	end
+	surfaces, doors = {}, {}
+	lobby = found
+	surface("vote", chamber:FindFirstChild("VoteScreen"))
+	surface("status", chamber:FindFirstChild("StatusBoard"))
+	for i = 1, 4 do surface(`pad{i}`, chamber:FindFirstChild(`PadSign{i}`)) end
+	surface("lounge", lounge:FindFirstChild("LoungeScreen"))
+	for _, model in found:GetDescendants() do
+		if model:IsA("Model") and model:GetAttribute("SlidingDoor") then
+			local parts, glows = {}, {}
+			local center = nil
+			for _, part in model:GetDescendants() do
+				if part:IsA("BasePart") then
+					if part:GetAttribute("Side") then
+						table.insert(parts, { part = part, closed = part.CFrame, side = part:GetAttribute("Side") })
+					end
+					if part.Name == "Glow" then table.insert(glows, { part = part, color = part.Color }) end
+					if part.Name == "Panel1" or part.Name == "Panel2" then
+						local foot = part.CFrame.Position - Vector3.new(0, part.Size.Y / 2, 0)
+						center = if center then (center + foot) / 2 else foot
+					end
+				end
+			end
+			if center then table.insert(doors, { model = model, parts = parts, glows = glows, center = center, amount = 0 }) end
+		end
+	end
+	render()
+end
+
+-- Round snapshots arrive regularly even when no visible content changed.
+-- Preserve the expensive viewport models and faces until display data changes.
+function LobbyScreens.setState(s)
+	state = s
+	local key = { s.phase, s.winner or "", s.spectate and s.spectate.trackName or "" }
+	for _, opt in s.options or {} do
+		table.insert(key, `{opt.id}:{opt.name}:{opt.votes}`)
+		for _, id in opt.voters or {} do table.insert(key, tostring(id)) end
+		table.insert(key, "/")
+	end
+	for _, id in s.randomVoters or {} do table.insert(key, `random:{id}`) end
+	for _, row in s.spectate and s.spectate.rows or {} do
+		table.insert(key, `{row.name}:{row.finished}:{row.isCpu}`)
+	end
+	for _, row in s.lastResults or {} do table.insert(key, `result:{row.name}`) end
+	local nextKey = table.concat(key, "|")
+	if displayKey ~= nextKey then
+		displayKey = nextKey
+		randomFeatured = nil
+		render()
+	end
+end
+
+function LobbyScreens.step(dt: number)
+	local t = Workspace:GetServerTimeNow()
+	if t >= nextScan then
+		nextScan = t + 0.5
+		discover()
+	end
+	if not lobby or not lobby.Parent then return end
+	if not state or state.phase == "lobby" then
+		local id = Tracks.VotePool[math.floor(t / 8) % #Tracks.VotePool + 1]
+		if featured ~= id then
+			featured = id
+			render()
+		end
+	elseif state.phase == "voting" and state.options and #state.options > 0 then
+		local id = state.options[math.floor(t / 4) % #state.options + 1].id
+		if randomFeatured ~= id then
+			randomFeatured = id
+			render()
+		end
+	end
+	local board = surfaces.status
+	if board and state then
+		local ready, voted = 0, 0
+		local voters = {}
+		for _, p in state.players or {} do if p.ready then ready += 1 end end
+		for _, opt in state.options or {} do
+			for _, id in opt.voters or {} do voters[id] = true end
+		end
+		for _, id in state.randomVoters or {} do voters[id] = true end
+		for _ in voters do voted += 1 end
+		local left = if state.deadline then ` · {math.max(0, math.ceil(state.deadline - t))}s` else ""
+		board.title.Text = string.upper(state.phase) .. left
+		board.detail.Text = `{ready} ready · {voted} voted`
+	end
+	for _, display in surfaces do for _, p in display.previews do p:step(t) end end
+	if t >= nextFaces then
+		nextFaces = t + 0.5
+		for _, face in faces do face.image.Image = UI.headshot(face.id, true) end
+	end
+	local character = Players.LocalPlayer.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	for _, door in doors do
+		if not door.model.Parent then continue end
+		local departure = door.model:GetAttribute("Departure") == true
+		local lit = door.model:GetAttribute("Lit") == true
+		local nearby = root ~= nil and (root.Position - door.center).Magnitude <= 18
+		local open = nearby and (not departure or lit)
+		door.amount += ((if open then 1 else 0) - door.amount) * (1 - math.exp(-10 * dt))
+		local travel = (door.model:GetAttribute("Width") / 2 - 0.8) * door.amount
+		for _, item in door.parts do item.part.CFrame = item.closed * CFrame.new(item.side * travel, 0, 0) end
+		for _, glow in door.glows do
+			glow.part.Color = if departure and lit then gold:Lerp(Color3.fromRGB(255, 245, 180), (math.sin(t * 5) + 1) * 0.25) else glow.color
+		end
+	end
+end
+
+return LobbyScreens
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="43">
+          <Properties>
             <string name="Name">LobbyUI</string>
-            <string name="Source"><![CDATA[-- Lobby screens: the status bar (phase + countdown, always visible), the
--- READY button, GARAGE and WATCH buttons, the map voting cards, the practice
--- "leave kart" button and spectator controls.
+            <string name="Source"><![CDATA[-- Lobby screens: the status bar (phase + countdown, always visible), coins,
+-- GARAGE / WATCH buttons, the READY button, the map voting row (three track
+-- cards + Random), the winner reveal, the practice "leave kart" button and
+-- spectator controls.
+--
+-- Layout keeps the bottom-left (thumbstick) and bottom-right (jump) corners
+-- free on phones: side buttons sit top-left, and the vote row is centred.
+-- The vote row matches the chamber's wall screen and pads (same colours,
+-- numbers and previews), and both draw from the same round state.
 
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local LobbyLayout = require(Shared:WaitForChild("LobbyLayout"))
+local Voting = require(Shared:WaitForChild("Voting"))
+
+local TrackPreview = require(script.Parent.TrackPreview)
 local UI = require(script.Parent.UI)
 
 local LobbyUI = {}
@@ -8775,6 +9630,16 @@ local me = Players.LocalPlayer
 local state: any = nil
 local hidden = false -- hidden while racing
 
+local CYAN = Color3.fromRGB(0, 225, 255)
+local function rgb(c: { number }): Color3
+	return Color3.fromRGB(c[1], c[2], c[3])
+end
+local PAD_COLORS = {}
+for i, c in LobbyLayout.PadColors do
+	PAD_COLORS[i] = rgb(c)
+end
+local DIFFICULTY_COLORS = { Easy = UI.Colors.green, Medium = UI.Colors.yellow, Hard = UI.Colors.red }
+
 local root = Instance.new("Frame")
 root.Name = "Lobby"
 root.BackgroundTransparency = 1
@@ -8783,10 +9648,11 @@ root.Parent = UI.Screen
 
 -- Status bar ---------------------------------------------------------------
 local status = UI.panel(root, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 10), Size = UDim2.new(0, 460, 0, 70) })
-local statusTitle = UI.label(status, { Position = UDim2.new(0, 14, 0, 4), Size = UDim2.new(1, -28, 0, 36), Text = "KART CARNIVAL", TextColor3 = UI.Colors.yellow })
+UI.stroke(status, CYAN, 2, 0.4)
+local statusTitle = UI.label(status, { Position = UDim2.new(0, 14, 0, 4), Size = UDim2.new(1, -28, 0, 36), Text = "KART HQ", TextColor3 = UI.Colors.yellow })
 local statusSub = UI.label(status, { Position = UDim2.new(0, 14, 0, 40), Size = UDim2.new(1, -28, 0, 24), Text = "", TextColor3 = UI.Colors.muted })
 
--- Coins (top left) -----------------------------------------------------------
+-- Left column: coins, garage, watch ------------------------------------------
 local coinPanel = UI.panel(root, { Position = UDim2.new(0, 14, 0, 14), Size = UDim2.new(0, 150, 0, 50) })
 local coinLabel = UI.label(coinPanel, { Position = UDim2.new(0, 10, 0, 6), Size = UDim2.new(1, -20, 1, -12), Text = "🪙 0" })
 
@@ -8794,21 +9660,22 @@ function LobbyUI.setCoins(coins: number)
 	coinLabel.Text = `🪙 {coins}`
 end
 
--- Bottom buttons -------------------------------------------------------------
-local isReady = false
-local readyButton = UI.button(root, "READY UP", UI.Colors.green, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -18), Size = UDim2.new(0, 260, 0, 66) }, function()
-	if LobbyUI.onReady then
-		LobbyUI.onReady(not isReady)
-	end
-end)
-local garageButton = UI.button(root, "🔧 GARAGE", UI.Colors.blue, { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 18, 1, -18), Size = UDim2.new(0, 170, 0, 58) }, function()
+local garageButton = UI.button(root, "🔧 GARAGE", UI.Colors.blue, { Position = UDim2.new(0, 14, 0, 74), Size = UDim2.new(0, 150, 0, 50) }, function()
 	if LobbyUI.onGarage then
 		LobbyUI.onGarage()
 	end
 end)
-local watchButton = UI.button(root, "📺 WATCH", UI.Colors.purple, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -18, 1, -18), Size = UDim2.new(0, 170, 0, 58), Visible = false }, function()
+local watchButton = UI.button(root, "📺 WATCH", UI.Colors.purple, { Position = UDim2.new(0, 14, 0, 132), Size = UDim2.new(0, 150, 0, 50), Visible = false }, function()
 	if LobbyUI.onWatch then
 		LobbyUI.onWatch()
+	end
+end)
+
+-- Bottom centre: ready / leave kart ------------------------------------------
+local isReady = false
+local readyButton = UI.button(root, "READY UP", UI.Colors.green, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -18), Size = UDim2.new(0, 260, 0, 66) }, function()
+	if LobbyUI.onReady then
+		LobbyUI.onReady(not isReady)
 	end
 end)
 local leaveButton = UI.button(root, "🚪 LEAVE KART", UI.Colors.red, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -92), Size = UDim2.new(0, 220, 0, 52), Visible = false }, function()
@@ -8817,52 +9684,103 @@ local leaveButton = UI.button(root, "🚪 LEAVE KART", UI.Colors.red, { AnchorPo
 	end
 end)
 
--- Voting cards ---------------------------------------------------------------
-local votePanel = UI.panel(root, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 90), Size = UDim2.new(0, 720, 0, 300), Visible = false })
-local voteTitle = UI.label(votePanel, { Position = UDim2.new(0, 16, 0, 8), Size = UDim2.new(1, -32, 0, 34), Text = "VOTE FOR A TRACK", TextColor3 = UI.Colors.yellow })
+-- Vote row: three tracks + Random -------------------------------------------
+local CARD_W, CARD_H, GAP = 152, 196, 12
+local ROW_W = CARD_W * 4 + GAP * 3 + 20
+local votePanel = UI.panel(root, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -12), Size = UDim2.new(0, ROW_W, 0, CARD_H + 64), Visible = false })
+UI.stroke(votePanel, CYAN, 2, 0.35)
+local voteTitle = UI.label(votePanel, { Position = UDim2.new(0, 14, 0, 6), Size = UDim2.new(0, 300, 0, 30), Text = "VOTE FOR A TRACK", TextColor3 = UI.Colors.yellow, TextXAlignment = Enum.TextXAlignment.Left })
+UI.label(votePanel, { Position = UDim2.new(0, 14, 0, 36), Size = UDim2.new(1, -130, 0, 18), Text = "Tap a card or stand on its pad · 🎲 Random votes for one of these three, picked for you", TextColor3 = UI.Colors.muted, TextXAlignment = Enum.TextXAlignment.Left })
+local leaveRace = UI.button(votePanel, "Leave race", UI.Colors.panelLight, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 8), Size = UDim2.new(0, 110, 0, 34) }, function()
+	if LobbyUI.onReady then
+		LobbyUI.onReady(false)
+	end
+end)
 local cardHolder = Instance.new("Frame")
 cardHolder.BackgroundTransparency = 1
-cardHolder.Position = UDim2.new(0, 14, 0, 50)
-cardHolder.Size = UDim2.new(1, -28, 1, -62)
+cardHolder.Position = UDim2.new(0, 10, 0, 58)
+cardHolder.Size = UDim2.new(1, -20, 0, CARD_H)
 cardHolder.Parent = votePanel
-UI.list(cardHolder, true, 12)
+UI.list(cardHolder, true, GAP)
 
-local THEME_COLORS = {
-	sunny = Color3.fromRGB(90, 170, 80),
-	canyon = Color3.fromRGB(200, 120, 70),
-	neon = Color3.fromRGB(120, 60, 200),
-	toyroom = Color3.fromRGB(70, 80, 170),
-	kitchen = Color3.fromRGB(230, 140, 90),
-	backyard = Color3.fromRGB(100, 170, 70),
-	carnival = Color3.fromRGB(240, 90, 140),
+type Card = {
+	index: number,
+	button: TextButton,
+	art: Frame,
+	badge: TextLabel,
+	mine: TextLabel,
+	name: TextLabel,
+	chip: TextLabel,
+	votes: TextLabel,
+	faces: Frame,
+	choice: string?,
+	preview: TrackPreview.Preview?,
 }
-local DIFFICULTY_COLORS = { Easy = UI.Colors.green, Medium = UI.Colors.yellow, Hard = UI.Colors.red }
 
-type Card = { button: TextButton, icon: TextLabel, name: TextLabel, chip: TextLabel, feature: TextLabel, votes: TextLabel, faces: Frame, id: string? }
-local cards: { Card } = {}
-for i = 1, 3 do
-	local card: Card = {} :: any
-	card.button = UI.button(cardHolder, "", UI.Colors.panelLight, { Size = UDim2.new(1 / 3, -8, 1, 0), LayoutOrder = i }, function()
-		if card.id and LobbyUI.onVote then
-			LobbyUI.onVote(card.id)
+local function makeCard(index: number): Card
+	local card: Card = { index = index } :: any
+	card.button = UI.button(cardHolder, "", UI.Colors.panelLight, { Size = UDim2.new(0, CARD_W, 1, 0), LayoutOrder = index, AutoButtonColor = true }, function()
+		if card.choice and LobbyUI.onVote then
+			LobbyUI.onVote(card.choice)
 		end
 	end)
-	card.icon = UI.label(card.button, { Size = UDim2.new(1, 0, 0, 56), Text = "" })
-	card.name = UI.label(card.button, { Position = UDim2.new(0, 0, 0, 58), Size = UDim2.new(1, 0, 0, 28), Text = "" })
-	card.chip = UI.label(card.button, { Position = UDim2.new(0.25, 0, 0, 90), Size = UDim2.new(0.5, 0, 0, 22), Text = "", BackgroundTransparency = 0, TextColor3 = Color3.fromRGB(30, 30, 40), TextStrokeTransparency = 1 })
+	card.art = Instance.new("Frame")
+	card.art.Name = "Art"
+	card.art.Position = UDim2.new(0, -4, 0, -2)
+	card.art.Size = UDim2.new(1, 8, 0, 84)
+	card.art.BackgroundColor3 = Color3.fromRGB(14, 18, 36)
+	card.art.BorderSizePixel = 0
+	card.art.Parent = card.button
+	local artCorner = Instance.new("UICorner")
+	artCorner.CornerRadius = UDim.new(0, 10)
+	artCorner.Parent = card.art
+	card.badge = UI.label(card.button, { Position = UDim2.new(0, -6, 0, -6), Size = UDim2.new(0, 28, 0, 28), Text = if index == LobbyLayout.RandomPad then "?" else tostring(index), BackgroundTransparency = 0, BackgroundColor3 = PAD_COLORS[index], TextColor3 = Color3.fromRGB(16, 22, 44), TextStrokeTransparency = 1, ZIndex = 3 })
+	local badgeCorner = Instance.new("UICorner")
+	badgeCorner.CornerRadius = UDim.new(1, 0)
+	badgeCorner.Parent = card.badge
+	card.mine = UI.label(card.button, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 62), Size = UDim2.new(0.86, 0, 0, 20), Text = "✓ YOUR VOTE", BackgroundTransparency = 0, BackgroundColor3 = UI.Colors.yellow, TextColor3 = Color3.fromRGB(30, 30, 40), TextStrokeTransparency = 1, Visible = false, ZIndex = 3 })
+	local mineCorner = Instance.new("UICorner")
+	mineCorner.CornerRadius = UDim.new(1, 0)
+	mineCorner.Parent = card.mine
+	card.name = UI.label(card.button, { Position = UDim2.new(0, 0, 0, 86), Size = UDim2.new(1, 0, 0, 24), Text = "" })
+	card.chip = UI.label(card.button, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 112), Size = UDim2.new(0.62, 0, 0, 18), Text = "", BackgroundTransparency = 0, TextColor3 = Color3.fromRGB(30, 30, 40), TextStrokeTransparency = 1 })
 	local chipCorner = Instance.new("UICorner")
 	chipCorner.CornerRadius = UDim.new(1, 0)
 	chipCorner.Parent = card.chip
-	card.feature = UI.label(card.button, { Position = UDim2.new(0, 0, 0, 116), Size = UDim2.new(1, 0, 0, 40), TextScaled = false, TextSize = 15, Text = "", TextColor3 = UI.Colors.muted })
-	card.votes = UI.label(card.button, { Position = UDim2.new(0, 0, 1, -66), Size = UDim2.new(1, 0, 0, 26), Text = "" })
+	card.votes = UI.label(card.button, { Position = UDim2.new(0, 0, 0, 134), Size = UDim2.new(1, 0, 0, 20), Text = "" })
 	card.faces = Instance.new("Frame")
 	card.faces.BackgroundTransparency = 1
-	card.faces.Position = UDim2.new(0, 0, 1, -36)
-	card.faces.Size = UDim2.new(1, 0, 0, 30)
+	card.faces.Position = UDim2.new(0, 0, 1, -28)
+	card.faces.Size = UDim2.new(1, 0, 0, 24)
 	card.faces.Parent = card.button
-	UI.list(card.faces, true, 4, true)
-	cards[i] = card
+	UI.list(card.faces, true, 3, true)
+	return card
 end
+
+local cards: { Card } = {}
+for i = 1, 4 do
+	cards[i] = makeCard(i)
+end
+-- The Random card's art: a big die on the Random colour.
+local dice = UI.label(cards[4].art, { Size = UDim2.fromScale(1, 1), Text = "🎲", TextScaled = true })
+local diceGradient = Instance.new("UIGradient")
+diceGradient.Color = ColorSequence.new(PAD_COLORS[4], Color3.fromRGB(60, 40, 120))
+diceGradient.Rotation = 90
+diceGradient.Parent = cards[4].art
+cards[4].art.BackgroundColor3 = Color3.new(1, 1, 1)
+
+-- Winner reveal ----------------------------------------------------------------
+local announce = UI.panel(root, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -12), Size = UDim2.new(0, 460, 0, 268), Visible = false })
+UI.stroke(announce, UI.Colors.yellow, 3, 0.1)
+UI.label(announce, { Position = UDim2.new(0, 0, 0, 6), Size = UDim2.new(1, 0, 0, 26), Text = "NEXT TRACK", TextColor3 = UI.Colors.yellow })
+local announceArt = Instance.new("Frame")
+announceArt.BackgroundTransparency = 1
+announceArt.Position = UDim2.new(0, 14, 0, 36)
+announceArt.Size = UDim2.new(1, -28, 0, 168)
+announceArt.Parent = announce
+local announceName = UI.label(announce, { Position = UDim2.new(0, 10, 0, 206), Size = UDim2.new(1, -20, 0, 34), Text = "" })
+local announceSub = UI.label(announce, { Position = UDim2.new(0, 10, 0, 240), Size = UDim2.new(1, -20, 0, 20), Text = "Head for the departure doors!", TextColor3 = UI.Colors.muted })
+local announcePreview: TrackPreview.Preview? = nil
 
 -- Spectator controls ---------------------------------------------------------
 local spectateBar = UI.panel(root, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -18), Size = UDim2.new(0, 460, 0, 70), Visible = false })
@@ -8942,6 +9860,38 @@ function LobbyUI.setState(s: any)
 	LobbyUI.refresh()
 end
 
+local function setFaces(holder: Frame, userIds: { number }, max: number)
+	for _, child in holder:GetChildren() do
+		if child:IsA("ImageLabel") or child:IsA("TextLabel") then
+			child:Destroy()
+		end
+	end
+	for n, userId in userIds do
+		if n > max then
+			UI.label(holder, { Size = UDim2.new(0, 26, 0, 24), Text = `+{#userIds - max}`, LayoutOrder = n })
+			break
+		end
+		local face = Instance.new("ImageLabel")
+		face.Size = UDim2.new(0, 24, 0, 24)
+		face.BackgroundColor3 = Color3.new(1, 1, 1)
+		face.Image = UI.headshot(userId)
+		face.LayoutOrder = n
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(1, 0)
+		corner.Parent = face
+		face.Parent = holder
+	end
+end
+
+local function optionById(s: any, id: string?): any?
+	for _, opt in s.options do
+		if opt.id == id then
+			return opt
+		end
+	end
+	return nil
+end
+
 function LobbyUI.refresh()
 	local s = state
 	local mine = myEntry()
@@ -8951,17 +9901,27 @@ function LobbyUI.refresh()
 		return
 	end
 
-	readyButton.Visible = not racing and not spectating and s.phase ~= "results"
+	local voter = mine ~= nil and mine.voter
+	local voting = s.phase == "voting" and voter and not spectating
+	local announcing = s.phase == "announce" and not racing and not spectating
+
+	readyButton.Visible = not racing and not spectating and not voting and not announcing and s.phase ~= "results"
 	readyButton.Text = if isReady then "✓ READY (tap to cancel)" else "READY UP"
 	readyButton.BackgroundColor3 = if isReady then UI.Colors.yellow else UI.Colors.green
 	readyButton.TextColor3 = if isReady then Color3.fromRGB(40, 40, 50) else UI.Colors.text
 	garageButton.Visible = not spectating
 	watchButton.Visible = s.phase == "racing" and s.spectate ~= nil and not racing and not spectating
-	leaveButton.Visible = practicing and not spectating
+	leaveButton.Visible = practicing and not spectating and not voting
 	spectateBar.Visible = spectating
 
-	local voting = s.phase == "voting" and mine ~= nil and mine.voter
-	votePanel.Visible = voting
+	-- Vote row.
+	if voting ~= votePanel.Visible then
+		votePanel.Visible = voting
+		if voting then
+			UI.pop(votePanel)
+		end
+	end
+	leaveRace.Visible = voting
 	if voting then
 		local myVote = nil
 		for _, opt in s.options do
@@ -8969,43 +9929,71 @@ function LobbyUI.refresh()
 				myVote = opt.id
 			end
 		end
-		for i, card in cards do
+		local myRandom = table.find(s.randomVoters or {}, me.UserId) ~= nil
+		for i = 1, 3 do
+			local card = cards[i]
 			local opt = s.options[i]
 			card.button.Visible = opt ~= nil
 			if opt then
-				card.id = opt.id
-				card.button.BackgroundColor3 = (THEME_COLORS[opt.theme] or UI.Colors.panelLight):Lerp(Color3.new(0, 0, 0), 0.35)
-				card.icon.Text = opt.icon
-				card.name.Text = opt.name
+				card.choice = opt.id
+				if not card.preview or card.preview.trackId ~= opt.id then
+					if card.preview then
+						card.preview:destroy()
+					end
+					card.preview = TrackPreview.new(card.art, opt.id)
+				end
+				card.button.BackgroundColor3 = UI.Colors.panelLight
+				card.name.Text = `{opt.icon} {opt.name}`
 				card.chip.Text = opt.difficulty
 				card.chip.BackgroundColor3 = DIFFICULTY_COLORS[opt.difficulty] or UI.Colors.muted
-				card.feature.Text = opt.feature
 				card.votes.Text = `{opt.votes} vote{if opt.votes == 1 then "" else "s"}`
-				UI.highlight(card.button, opt.id == myVote)
-				for _, child in card.faces:GetChildren() do
-					if child:IsA("ImageLabel") then
-						child:Destroy()
-					end
-				end
-				for n, userId in opt.voters do
-					if n > 6 then
-						break
-					end
-					local face = Instance.new("ImageLabel")
-					face.Size = UDim2.new(0, 28, 0, 28)
-					face.BackgroundColor3 = Color3.new(1, 1, 1)
-					face.Image = UI.headshot(userId)
-					local corner = Instance.new("UICorner")
-					corner.CornerRadius = UDim.new(1, 0)
-					corner.Parent = face
-					face.Parent = card.faces
-				end
+				local selected = opt.id == myVote and not myRandom
+				card.mine.Visible = selected
+				UI.highlight(card.button, selected)
+				card.button.BackgroundColor3 = if selected then PAD_COLORS[i]:Lerp(Color3.new(0, 0, 0), 0.55) else UI.Colors.panelLight
+				setFaces(card.faces, opt.voters, 4)
 			end
 		end
+		local random = cards[4]
+		random.choice = Voting.Random
+		random.name.Text = "RANDOM"
+		random.chip.Text = "Surprise!"
+		random.chip.BackgroundColor3 = PAD_COLORS[4]
+		local picked = if myRandom then optionById(s, myVote) else nil
+		random.votes.Text = if picked then `🎲 → {picked.name}` else "One of these 3"
+		random.votes.TextColor3 = if picked then UI.Colors.yellow else UI.Colors.muted
+		random.mine.Visible = myRandom
+		UI.highlight(random.button, myRandom)
+		random.button.BackgroundColor3 = if myRandom then PAD_COLORS[4]:Lerp(Color3.new(0, 0, 0), 0.55) else UI.Colors.panelLight
+		setFaces(random.faces, s.randomVoters or {}, 4)
+	end
+
+	-- Winner reveal (everyone in the lobby sees it, like the wall screen).
+	if announcing ~= announce.Visible then
+		announce.Visible = announcing
+		if announcing then
+			UI.pop(announce)
+		end
+	end
+	if announcing and s.winner then
+		local opt = optionById(s, s.winner)
+		if not announcePreview or announcePreview.trackId ~= s.winner then
+			if announcePreview then
+				announcePreview:destroy()
+			end
+			announcePreview = TrackPreview.new(announceArt, s.winner)
+			-- The winning preview grows into place.
+			local grow = Instance.new("UIScale")
+			grow.Scale = 0.55
+			grow.Parent = announcePreview.frame
+			TweenService:Create(grow, TweenInfo.new(0.6, Enum.EasingStyle.Back), { Scale = 1 }):Play()
+		end
+		announceName.Text = if opt then `{opt.icon} {opt.name}!` else ""
+		announceSub.Text = if voter then "Head for the departure doors!" else "Ready up to race the next one"
 	end
 end
 
--- Called every frame for the countdowns.
+-- Called every frame for countdowns and animated previews.
 function LobbyUI.update()
 	local s = state
 	if not s then
@@ -9024,13 +10012,18 @@ function LobbyUI.update()
 			statusTitle.Text = `RACE STARTING · {left}s`
 			statusSub.Text = `{readyCount} ready · voting opens soon`
 		else
-			statusTitle.Text = "KART CARNIVAL"
-			statusSub.Text = "Ready up to race · practice loop is south of spawn"
+			statusTitle.Text = "KART HQ"
+			statusSub.Text = "Press READY or step onto a vote pad to race"
 		end
 	elseif s.phase == "voting" then
 		statusTitle.Text = `VOTING · {left or 0}s`
-		statusSub.Text = if myEntry() and myEntry().voter then "Tap a card or stand on a pad" else "Ready up to vote and race"
+		local mine = myEntry()
+		statusSub.Text = if mine and mine.voter then "Pick a track below or stand on its pad" else "Step onto a pad to join this race"
 		voteTitle.Text = `VOTE FOR A TRACK · {left or 0}s`
+	elseif s.phase == "announce" then
+		local opt = optionById(s, s.winner)
+		statusTitle.Text = "TRACK LOCKED IN!"
+		statusSub.Text = if opt then `{opt.name} · starting in {left or 0}s` else ""
 	elseif s.phase == "racing" then
 		statusTitle.Text = "RACE IN PROGRESS"
 		statusSub.Text = if s.spectate then `{s.spectate.trackName} · ready up for the next race` else ""
@@ -9038,13 +10031,24 @@ function LobbyUI.update()
 		statusTitle.Text = "RESULTS"
 		statusSub.Text = `Next round in {left or 0}s`
 	end
+
+	if votePanel.Visible then
+		for _, card in cards do
+			if card.preview and card.button.Visible then
+				card.preview:step(os.clock())
+			end
+		end
+	end
+	if announce.Visible and announcePreview then
+		announcePreview:step(os.clock())
+	end
 end
 
 return LobbyUI
 ]]></string>
           </Properties>
         </Item>
-        <Item class="LocalScript" referent="43">
+        <Item class="LocalScript" referent="44">
           <Properties>
             <string name="Name">Main</string>
             <string name="Source"><![CDATA[-- Client entry point: wires remotes to the lobby screens, garage, race HUD,
@@ -9063,12 +10067,13 @@ local Hud = require(script.Parent.Hud)
 local KartVisuals = require(script.Parent.KartVisuals)
 local KartController = require(script.Parent.KartController)
 local LobbyUI = require(script.Parent.LobbyUI)
+local LobbyScreens = require(script.Parent.LobbyScreens)
 local Spectate = require(script.Parent.Spectate)
 local TrackAnimator = require(script.Parent.TrackAnimator)
 
 local roundState: any = nil
 
-Atmos.apply("carnival")
+Atmos.apply("hq")
 KartController.start()
 
 local function namesOf(rows: { any }): { string }
@@ -9083,7 +10088,7 @@ local function stopSpectating()
 	Spectate.stop()
 	LobbyUI.setSpectating(false)
 	if not KartController.isRacing() then
-		Atmos.apply("carnival")
+		Atmos.apply("hq")
 	end
 end
 
@@ -9187,6 +10192,7 @@ end)
 Remotes.Round.OnClientEvent:Connect(function(state)
 	roundState = state
 	LobbyUI.setState(state)
+	LobbyScreens.setState(state)
 	if Spectate.isActive() and not KartController.isRacing() then
 		if state.spectate then
 			Spectate.setOrder(namesOf(state.spectate.rows))
@@ -9253,7 +10259,7 @@ Remotes.Results.OnClientEvent:Connect(function(info)
 	Hud.setDriving(false)
 	Hud.showResults(info)
 	LobbyUI.setHidden(false)
-	Atmos.apply("carnival")
+	Atmos.apply("hq")
 end)
 Remotes.Notify.OnClientEvent:Connect(function(message)
 	if Hud.isRacing() then
@@ -9295,6 +10301,7 @@ Workspace.DescendantAdded:Connect(track)
 
 RunService.RenderStepped:Connect(function(dt)
 	LobbyUI.update()
+	LobbyScreens.step(dt)
 	Hud.update()
 	KartVisuals.step(dt)
 	TrackAnimator.step()
@@ -9323,7 +10330,7 @@ end)
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="44">
+        <Item class="ModuleScript" referent="45">
           <Properties>
             <string name="Name">Spectate</string>
             <string name="Source"><![CDATA[-- Spectator camera: follows a racer's kart from behind. Used by lobby players
@@ -9425,7 +10432,7 @@ return Spectate
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="45">
+        <Item class="ModuleScript" referent="46">
           <Properties>
             <string name="Name">TrackAnimator</string>
             <string name="Source"><![CDATA[-- Animates the current track on this client: crossers (toy robot, toy train,
@@ -9540,7 +10547,151 @@ return TrackAnimator
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="46">
+        <Item class="ModuleScript" referent="47">
+          <Properties>
+            <string name="Name">TrackPreview</string>
+            <string name="Source"><![CDATA[-- Animated mini-map of a track, drawn from the same track data the race
+-- uses: the road as a ribbon on a little plate in a ViewportFrame, slowly
+-- turning, with a glowing kart dot running laps. Used on the vote cards and
+-- the chamber's wall screen in place of uploaded track images.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Track = require(Shared:WaitForChild("Track"))
+local Tracks = require(Shared:WaitForChild("Tracks"))
+
+local TrackPreview = {}
+
+local FIT = 40 -- the track is scaled to fit a plate this many studs across
+local built: { [string]: any } = {}
+
+local function rgb(c: { number }): Color3
+	return Color3.fromRGB(c[1], c[2], c[3])
+end
+
+local function part(parent: Instance, size: Vector3, cf: CFrame, color: Color3, neon: boolean?): Part
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.Size = size
+	p.CFrame = cf
+	p.Color = color
+	p.Material = if neon then Enum.Material.Neon else Enum.Material.SmoothPlastic
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Parent = parent
+	return p
+end
+
+export type Preview = {
+	frame: ViewportFrame,
+	trackId: string,
+	step: (self: Preview, t: number) -> (),
+	destroy: (self: Preview) -> (),
+}
+
+-- Fills `parent` with a preview of `trackId`. Call :step(time) every frame.
+function TrackPreview.new(parent: GuiObject, trackId: string): Preview
+	local def = Tracks.get(trackId)
+	local theme = Tracks.Themes[def.theme] or Tracks.Themes.hq
+	local track = built[trackId]
+	if not track then
+		track = Track.build(def)
+		built[trackId] = track
+	end
+
+	-- Fit the layout onto the plate.
+	local minX, maxX, minZ, maxZ, minY = math.huge, -math.huge, math.huge, -math.huge, math.huge
+	for _, p in track.points do
+		minX, maxX = math.min(minX, p.x), math.max(maxX, p.x)
+		minZ, maxZ = math.min(minZ, p.z), math.max(maxZ, p.z)
+		minY = math.min(minY, p.y)
+	end
+	local cx, cz = (minX + maxX) / 2, (minZ + maxZ) / 2
+	local s = FIT / math.max(maxX - minX, maxZ - minZ, 1)
+	local function map(p: Track.Vec): Vector3
+		-- Hills are exaggerated a little so they read at this size.
+		return Vector3.new((p.x - cx) * s, (p.y - minY) * s * 1.6 + 0.4, (p.z - cz) * s)
+	end
+
+	local frame = Instance.new("ViewportFrame")
+	frame.Name = "TrackPreview"
+	frame.Size = UDim2.fromScale(1, 1)
+	frame.BackgroundColor3 = rgb(theme.ground):Lerp(Color3.fromRGB(10, 14, 30), 0.55)
+	frame.BorderSizePixel = 0
+	frame.Ambient = Color3.fromRGB(170, 175, 195)
+	frame.LightColor = Color3.fromRGB(255, 250, 240)
+	frame.LightDirection = Vector3.new(-1, -2, -0.6)
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = frame
+
+	local model = Instance.new("Model")
+	model.Parent = frame
+	local plate = part(model, Vector3.new(0.8, FIT + 10, FIT + 10), CFrame.new(0, -0.4, 0) * CFrame.Angles(0, 0, math.rad(90)), rgb(theme.ground))
+	plate.Shape = Enum.PartType.Cylinder
+	local rim = part(model, Vector3.new(0.6, FIT + 11, FIT + 11), CFrame.new(0, -0.6, 0) * CFrame.Angles(0, 0, math.rad(90)), rgb(theme.accent), true)
+	rim.Shape = Enum.PartType.Cylinder
+
+	-- Road ribbon (about 90 pieces) with a thin edge colour underneath.
+	local roadWidth = math.max(1.4, (def.width or 30) * s)
+	local n = #track.points
+	local stride = math.max(1, math.floor(n / 90))
+	for i = 1, n, stride do
+		local a = map(track.points[i])
+		local b = map(track.points[(i + stride - 1) % n + 1])
+		local length = (b - a).Magnitude
+		if length > 0.01 then
+			local cf = CFrame.lookAt((a + b) / 2, b)
+			part(model, Vector3.new(roadWidth, 0.4, length + roadWidth * 0.35), cf, rgb(theme.road))
+			part(model, Vector3.new(roadWidth + 0.6, 0.3, length + roadWidth * 0.35), cf * CFrame.new(0, -0.12, 0), rgb(theme.wall))
+		end
+	end
+	-- Start line and the running kart.
+	local p0, t0 = Track.at(track, 0)
+	local start = map(p0)
+	part(model, Vector3.new(roadWidth, 0.45, 0.5), CFrame.lookAt(start, start + Vector3.new(t0.x, 0, t0.z)) * CFrame.new(0, 0.05, 0), Color3.new(1, 1, 1))
+	local dot = part(model, Vector3.one * math.max(1.4, roadWidth * 0.8), CFrame.new(start), rgb(theme.accent), true)
+	dot.Shape = Enum.PartType.Ball
+
+	local camera = Instance.new("Camera")
+	camera.FieldOfView = 34
+	camera.Parent = frame
+	frame.CurrentCamera = camera
+	frame.Parent = parent
+
+	local lapSeconds = 9
+	local offset = math.random() * 10 -- previews side by side don't move in step
+	local preview = {
+		frame = frame,
+		trackId = trackId,
+	} :: any
+
+	function preview.step(_self: Preview, t: number)
+		local time = t + offset
+		local d = (time / lapSeconds % 1) * track.length
+		local p = Track.at(track, d)
+		dot.CFrame = CFrame.new(map(p) + Vector3.new(0, 0.7, 0))
+		local a = time * 0.18
+		camera.CFrame = CFrame.lookAt(Vector3.new(math.sin(a) * 58, 46, math.cos(a) * 58), Vector3.new(0, -2, 0))
+	end
+
+	function preview.destroy(_self: Preview)
+		frame:Destroy()
+	end
+
+	preview:step(0)
+	return preview
+end
+
+return TrackPreview
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="48">
           <Properties>
             <string name="Name">UI</string>
             <string name="Source"><![CDATA[-- Shared look for every screen: rounded panels, chunky buttons sized for
@@ -9571,7 +10722,77 @@ screen.ResetOnSpawn = false
 screen.IgnoreGuiInset = false
 screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screen.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
-UI.Screen = screen
+UI.Gui = screen
+
+-- Every screen is laid out in "design pixels" for a 1600x900 window and
+-- scaled to fit: crisp and roomy at 1080p, compact on phones. The root frame
+-- is grown by 1/scale so scale-based sizes (full-screen frames) still fill
+-- the window after the UIScale shrinks or grows them.
+UI.DesignSize = Vector2.new(1600, 900)
+UI.MinScale = 0.72 -- below this, buttons get too small for thumbs
+UI.MaxScale = 1.3
+UI.scale = 1
+
+local root = Instance.new("Frame")
+root.Name = "Root"
+root.BackgroundTransparency = 1
+root.Size = UDim2.fromScale(1, 1)
+root.Parent = screen
+local rootScale = Instance.new("UIScale")
+rootScale.Parent = root
+UI.Screen = root
+
+-- Panels that must fit the window (garage, results) get their own scale.
+type Fit = { gui: GuiObject, size: Vector2 }
+local fits: { Fit } = {}
+
+local function fitScaleOf(fit: Fit): number
+	local available = screen.AbsoluteSize / UI.scale
+	if available.X <= 0 or available.Y <= 0 then
+		return 1
+	end
+	return math.min(1, available.X * 0.96 / fit.size.X, available.Y * 0.94 / fit.size.Y)
+end
+
+local function rescale()
+	local size = screen.AbsoluteSize
+	if size.X <= 0 or size.Y <= 0 then
+		return
+	end
+	local s = math.min(size.X / UI.DesignSize.X, size.Y / UI.DesignSize.Y)
+	s = math.clamp(s, UI.MinScale, UI.MaxScale)
+	UI.scale = s
+	rootScale.Scale = s
+	root.Size = UDim2.fromScale(1 / s, 1 / s)
+	for _, fit in fits do
+		local f = fitScaleOf(fit)
+		fit.gui:SetAttribute("FitScale", f)
+		local scale = fit.gui:FindFirstChildOfClass("UIScale")
+		if scale then
+			scale.Scale = f
+		end
+	end
+end
+screen:GetPropertyChangedSignal("AbsoluteSize"):Connect(rescale)
+task.defer(rescale)
+
+-- Keeps a fixed-size panel inside the window (it shrinks, never grows).
+function UI.fit(gui: GuiObject, designSize: Vector2)
+	local fit = { gui = gui, size = designSize }
+	table.insert(fits, fit)
+	local scale = gui:FindFirstChildOfClass("UIScale") or Instance.new("UIScale")
+	scale.Parent = gui
+	local f = fitScaleOf(fit)
+	scale.Scale = f
+	gui:SetAttribute("FitScale", f)
+end
+
+-- True on phones and tablets (touch with no keyboard): keep the thumbstick
+-- and jump corners clear.
+function UI.isTouch(): boolean
+	local UserInputService = game:GetService("UserInputService")
+	return UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+end
 
 local function round(gui: GuiObject, radius: number)
 	local c = Instance.new("UICorner")
@@ -9680,25 +10901,29 @@ function UI.highlight(gui: GuiObject, on: boolean)
 	s.Enabled = on
 end
 
--- Pops a panel in with a quick scale bounce.
+-- Pops a panel in with a quick scale bounce (respecting UI.fit).
 function UI.pop(gui: GuiObject)
 	local scale = gui:FindFirstChildOfClass("UIScale") or Instance.new("UIScale")
 	scale.Parent = gui
-	scale.Scale = 0.85
-	TweenService:Create(scale, TweenInfo.new(0.25, Enum.EasingStyle.Back), { Scale = 1 }):Play()
+	local target = gui:GetAttribute("FitScale") or 1
+	scale.Scale = target * 0.85
+	TweenService:Create(scale, TweenInfo.new(0.25, Enum.EasingStyle.Back), { Scale = target }):Play()
 end
 
-local thumbs: { [number]: string } = {}
--- Avatar headshot for a user (cached). Empty string until it loads.
-function UI.headshot(userId: number): string
-	if thumbs[userId] then
-		return thumbs[userId]
+local thumbs: { [string]: string } = {}
+-- Avatar headshot for a user (cached). Empty string until it loads. `big`
+-- fetches a sharper one for the wall screen.
+function UI.headshot(userId: number, big: boolean?): string
+	local key = `{userId}:{if big then 150 else 48}`
+	if thumbs[key] then
+		return thumbs[key]
 	end
-	thumbs[userId] = ""
+	thumbs[key] = ""
 	task.spawn(function()
-		local ok, content = pcall(Players.GetUserThumbnailAsync, Players, userId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
+		local size = if big then Enum.ThumbnailSize.Size150x150 else Enum.ThumbnailSize.Size48x48
+		local ok, content = pcall(Players.GetUserThumbnailAsync, Players, userId, Enum.ThumbnailType.HeadShot, size)
 		if ok then
-			thumbs[userId] = content
+			thumbs[key] = content
 		end
 	end)
 	return ""
@@ -9727,11 +10952,12 @@ return UI
       </Item>
     </Item>
   </Item>
-  <Item class="Workspace" referent="47">
+  <Item class="Workspace" referent="49">
     <Properties>
       <string name="Name">Workspace</string>
       <float name="Gravity">150</float>
       <bool name="NeedsPivotMigration">false</bool>
+      <bool name="StreamingEnabled">false</bool>
     </Properties>
   </Item>
 </roblox>

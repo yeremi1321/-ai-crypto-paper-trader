@@ -211,21 +211,184 @@ check("ItemService: boxes, and every item used in a fake race", function()
 	end
 end)
 
-check("LobbyBuilder builds the Kart Carnival", function()
+check("LobbyBuilder builds Kart HQ", function()
 	local LobbyBuilder = load(server.LobbyBuilder)
 	local handles = LobbyBuilder.build()
 	local lobby = game:GetService("Workspace"):FindFirstChild("Lobby")
 	assert(lobby, "no lobby")
 	assert(game:GetService("Workspace"):FindFirstChild("PracticeTrack"), "no practice loop")
 	assert(#handles.collectibles == 6, "tokens")
-	handles.setStatus("TEST", "body")
-	handles.setVoteOption(1, { id = "sunny", name = "Sunny Loop", icon = "x", difficulty = "Easy", feature = "f", votes = 2 })
-	handles.setVoteOption(2, nil)
 	handles.setPodium({ { name = "A", kartId = "classic", look = { body = "classic", main = 1, accent = 2 } }, { name = "B" } })
 	handles.setKartDisplay(1, "Tester", "zippy", { body = "racer", main = 3, accent = 4 })
 	handles.setKartDisplay(1, nil)
-	handles.setSpectator("LIVE", "1. A")
+	assert(lobby.Chamber:FindFirstChild("VoteScreen"), "vote screen")
+	assert(lobby.Chamber:FindFirstChild("StatusBoard"), "status board")
+	for i = 1, 4 do assert(lobby.Chamber:FindFirstChild(`PadSign{i}`), "pad sign") end
+	assert(lobby.Rooms.lounge:FindFirstChild("LoungeScreen"), "lounge screen")
+	for _, key in { "garagePrompt", "spectatePrompt", "practicePrompt" } do
+		assert(handles[key]:IsA("ProximityPrompt"), key)
+	end
+	for _, lit in { true, false } do
+		handles.setDeparture(lit)
+		for _, door in lobby.Departure:GetChildren() do
+			if door:GetAttribute("Departure") then
+				assert(door:GetAttribute("Lit") == lit, "departure authorization")
+				assert(door:GetAttribute("SlidingDoor") and door:GetAttribute("Width"), "door metadata")
+			end
+		end
+	end
+	-- A detached character exercises the safe early return (Lune has no signals/particles).
+	handles.celebrate(1, Instance.new("Model"))
 	print(`     {#lobby:GetDescendants()} lobby objects`)
+end)
+
+-- Client display logic with real DOM instances and explicit service/preview
+-- doubles: Lune cannot run Roblox thumbnail services or render ViewportFrames.
+check("LobbyScreens: phases, headshots, countdown and local doors", function()
+	local ws = game:GetService("Workspace")
+	local lobby = ws.Lobby
+	local gui = Instance.new("Folder")
+	local rootPosition = roblox.Vector3.new(0, 3, 5000)
+	local fakeRoot = {}
+	local character = { FindFirstChild = function(_, name)
+		if name == "HumanoidRootPart" then
+			fakeRoot.Position = rootPosition
+			return fakeRoot
+		end
+		return nil
+	end }
+	local player = { Character = character, WaitForChild = function() return gui end }
+	local clock = 120
+	local workspaceProxy = {
+		FindFirstChild = function(_, name) return ws:FindFirstChild(name) end,
+		GetServerTimeNow = function() return clock end,
+	}
+	local thumbnails, previewSteps = 0, 0
+	local fakeUI = { Colors = {
+		panel = roblox.Color3.fromRGB(20, 25, 40), panelLight = roblox.Color3.fromRGB(45, 50, 70),
+		text = roblox.Color3.new(1, 1, 1), purple = roblox.Color3.fromRGB(150, 100, 240),
+	} }
+	local function element(class, parent, props)
+		local instance = Instance.new(class)
+		for key, value in props do instance[key] = value end
+		instance.Parent = parent
+		return instance
+	end
+	fakeUI.label = function(parent, props) return element("TextLabel", parent, props) end
+	fakeUI.panel = function(parent, props) return element("Frame", parent, props) end
+	fakeUI.headshot = function(id, big)
+		assert(big == true, "wall headshots must be sharp")
+		thumbnails += 1
+		return if thumbnails > 2 then `rbxassetid://{id}` else ""
+	end
+	local fakePreview = { new = function(parent, id)
+		local frame = Instance.new("ViewportFrame")
+		frame.Name = "TrackPreview"
+		frame.Parent = parent
+		return { frame = frame, trackId = id,
+			step = function() previewSteps += 1 end,
+			destroy = function() frame:Destroy() end,
+		}
+	end }
+	local module = luau.load(fs.readFile("src/client/LobbyScreens.luau"), {
+		environment = setmetatable({
+			game = { GetService = function(_, service)
+				if service == "Players" then return { LocalPlayer = player } end
+				if service == "Workspace" then return workspaceProxy end
+				if service == "ReplicatedStorage" then
+					return { WaitForChild = function() return {
+						WaitForChild = function(_, name) return shared:FindFirstChild(name) end,
+					} end }
+				end
+				return game:GetService(service)
+			end },
+			script = { Parent = { UI = "UI", TrackPreview = "TrackPreview" } },
+			require = function(target)
+				if target == "UI" then return fakeUI end
+				if target == "TrackPreview" then return fakePreview end
+				return load(target)
+			end,
+			Instance = Instance, Vector2 = roblox.Vector2, Vector3 = roblox.Vector3,
+			CFrame = roblox.CFrame, Color3 = roblox.Color3, UDim2 = roblox.UDim2, Enum = roblox.Enum,
+		}, { __index = _G }),
+	})()
+	local function texts(surface)
+		local text = {}
+		for _, child in gui:FindFirstChild(`LobbyScreen_{surface}`):GetDescendants() do
+			if child:IsA("TextLabel") then table.insert(text, child.Text) end
+		end
+		return table.concat(text, " | ")
+	end
+	local s = { phase = "lobby", players = { { ready = true } }, options = {}, deadline = 125 }
+	module.setState(s) -- before world discovery must not lose the snapshot
+	module.step(0.1)
+	assert(#gui:GetChildren() == 7, "seven local screens")
+	for _, screen in gui:GetChildren() do
+		assert(screen:IsA("SurfaceGui") and screen.Adornee:IsA("BasePart"), "local adornee")
+		assert(screen.ResetOnSpawn == false, "screens survive respawn")
+	end
+	assert(string.find(texts("vote"), "Step onto a pad to race", 1, true), "lobby instruction")
+	assert(string.find(texts("status"), "5s", 1, true), "server deadline countdown")
+	clock = 126
+	module.step(0.1)
+	assert(string.find(texts("status"), "0s", 1, true), "countdown clamps to zero")
+	s.phase = "voting"
+	s.options = {
+		{ id = "toyroom", name = "Midnight Toy Room", votes = 1, voters = { 11 } },
+		{ id = "kitchen", name = "Kitchen Chaos", votes = 0, voters = {} },
+		{ id = "backyard", name = "Backyard Bug Rally", votes = 1, voters = { 22 } },
+	}
+	s.randomVoters = { 22 } -- counted in track tally too, but only once on status
+	module.setState(s)
+	clock += 1
+	module.step(0.1)
+	assert(string.find(texts("vote"), "RANDOM", 1, true), "random column")
+	assert(string.find(texts("pad4"), "RANDOM", 1, true), "random pad")
+	assert(string.find(texts("status"), "1 ready · 2 voted", 1, true), "distinct voters")
+	assert(thumbnails > 2 and previewSteps > 0, "previews and cached thumbnail retry")
+	for _, child in gui.LobbyScreen_vote:GetDescendants() do
+		if child.Name == "Voter" then assert(child.Image ~= "", "thumbnail eventually loads") end
+	end
+	s.phase, s.winner = "announce", "kitchen"
+	module.setState(s)
+	assert(string.find(texts("vote"), "Kitchen Chaos", 1, true), "winner reveal")
+	s.phase = "racing"
+	s.spectate = { trackName = "Kitchen Chaos", rows = { { name = "Leader", finished = true }, { name = "CPU", isCpu = true } } }
+	module.setState(s)
+	assert(string.find(texts("vote"), "1. Leader", 1, true), "wall standings")
+	assert(string.find(texts("lounge"), "1. Leader", 1, true), "lounge standings")
+	s.phase, s.spectate = "results", nil
+	s.lastResults = { { name = "First" }, { name = "Second" }, { name = "Third" }, { name = "Fourth" } }
+	module.setState(s)
+	assert(string.find(texts("vote"), "3. Third", 1, true), "podium top three")
+	assert(not string.find(texts("vote"), "Fourth", 1, true), "results limited to three")
+	local checked = 0
+	for _, door in lobby:GetDescendants() do
+		if not door:IsA("Model") or not door:GetAttribute("SlidingDoor") then continue end
+		local panel = door.Panel1
+		local closed = panel.CFrame
+		rootPosition = (panel.CFrame.Position + door.Panel2.CFrame.Position) / 2 - roblox.Vector3.new(0, panel.Size.Y / 2 - 3, 0)
+		local departure = door:GetAttribute("Departure")
+		if departure then
+			module.step(1)
+			assert((panel.CFrame.Position - closed.Position).Magnitude < 0.001, "unlit departure stays shut")
+			door:SetAttribute("Lit", true)
+		end
+		module.step(1)
+		local target = closed * roblox.CFrame.new(panel:GetAttribute("Side") * (door:GetAttribute("Width") / 2 - 0.8), 0, 0)
+		assert((panel.CFrame.Position - target.Position).Magnitude < 0.02, "door moves on local X")
+		if departure then
+			door:SetAttribute("Lit", false)
+			module.step(1)
+			assert((panel.CFrame.Position - closed.Position).Magnitude < 0.02, "authorization revoked closes door")
+		end
+		rootPosition = roblox.Vector3.new(0, 3, 5000)
+		module.step(1)
+		assert((panel.CFrame.Position - closed.Position).Magnitude < 0.02, "door returns to stored position")
+		checked += 1
+	end
+	assert(checked >= 7, "room and departure doors exercised")
+	gui:Destroy()
 end)
 
 print(if failures == 0 then "smoke ok" else `{failures} smoke failure(s)`)

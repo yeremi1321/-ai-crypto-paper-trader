@@ -18,10 +18,12 @@ All six stages of the first playable build are written:
 - **None of it has been run in Roblox Studio.** It was written in a cloud
   container.
 - **What was checked there:** the pure rules (`src/shared`), and building every
-  track, kart, item and the lobby in Lune's Roblox DOM.
+  track, kart, item and the lobby in Lune's Roblox DOM. The lobby screen
+  smoke check uses service/preview doubles to exercise phases, headshot retry,
+  countdowns, unique voter counts and door transforms; it cannot render UI.
 - **What hasn't been checked:** physics, input, UI layout, networking,
   DataStores and text filtering.
-- **Checks:** `lune run tests/run` (78 tests), `tests/syntax` and `tests/smoke`
+- **Checks:** `lune run tests/run` (80 tests), `tests/syntax` and `tests/smoke`
   all pass.
 
 ## Setup on this PC
@@ -35,15 +37,19 @@ All six stages of the first playable build are written:
 
 ## Verify in Studio, in this order
 
-1. **Boot.** No errors in Output. You spawn in the Kart Carnival, and the status
-   board and HUD show.
+1. **Boot.** No errors in Output. You spawn on the raised entrance in indoor Kart HQ. The wall screen
+   cycles track previews; the status board, four pad signs and HUD show.
 2. **Practice loop.** Press E at the PRACTICE sign. The kart drives forward on
    W (if it goes backwards, check `KartPhysics.forward` and the yaw maths in
    `KartRig.apply`). Space drifts and doesn't jump you out of the seat. The
    ramp launches you, and a trick in the air gives a boost. R resets.
-3. **Ready → vote → race.** READY starts a 10-second countdown, then voting
-   (cards and pads), then the race. The grid, countdown, laps and results all
-   work, and you're returned to the lobby.
+3. **Ready → vote → race.** READY or stepping onto a pad starts the countdown.
+   Check all four pads (three tracks plus Random), card votes, wall counts and
+   headshots, the winner reveal, gold departure glow, live standings on both
+   screens, results top three, and return to the lobby. Confirm countdowns
+   use server time and names/health labels and the Invisicam camera behave.
+   Walk toward and away from room doors: panels, glass and strips slide
+   together without drifting. Departure doors stay shut unless Lit is true.
 4. **Each new track:** the toy room bed tunnel, robot and train; the kitchen
    toaster launch up to the shelf, the conveyors and syrup; the backyard hose,
    sprinklers and beetles. Try the shortcuts.
@@ -55,6 +61,20 @@ All six stages of the first playable build are written:
 8. **Mobile:** device emulator. Touch buttons, auto-accelerate, readable UI.
 9. **Performance:** each track is 2,800–6,000 parts. If it's slow on phones,
    lower the counts in `Scenery.Themes` first.
+
+## Kart HQ client integration
+
+- `LobbyBuilder` builds chamber/rooms and exposes `setPodium`, `setKartDisplay`,
+  `setDeparture`, `celebrate`, the three room prompts, and collectibles.
+- `LobbyScreens` owns PlayerGui SurfaceGuis with Adornee references to the
+  chamber vote screen/status board/four pad signs and lounge screen. Round
+  events call `setState`; RenderStepped calls `step(dt)` for previews,
+  countdowns, thumbnail loading, and local sliding doors.
+- Door movement stores closed CFrames and offsets every Side-marked part on
+  its local X axis. Departure Lit is server-owned; proximity is local.
+- Lobby lighting uses `Atmos.apply("hq")`, including after spectating/results.
+- Streaming is disabled; walking camera uses Invisicam, zoom max 80, avatar
+  name distance 45, health distance 0.
 
 ## Known gaps and next steps
 

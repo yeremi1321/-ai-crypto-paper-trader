@@ -14,12 +14,13 @@ local Hud = require(script.Parent.Hud)
 local KartVisuals = require(script.Parent.KartVisuals)
 local KartController = require(script.Parent.KartController)
 local LobbyUI = require(script.Parent.LobbyUI)
+local LobbyScreens = require(script.Parent.LobbyScreens)
 local Spectate = require(script.Parent.Spectate)
 local TrackAnimator = require(script.Parent.TrackAnimator)
 
 local roundState: any = nil
 
-Atmos.apply("carnival")
+Atmos.apply("hq")
 KartController.start()
 
 local function namesOf(rows: { any }): { string }
@@ -34,7 +35,7 @@ local function stopSpectating()
 	Spectate.stop()
 	LobbyUI.setSpectating(false)
 	if not KartController.isRacing() then
-		Atmos.apply("carnival")
+		Atmos.apply("hq")
 	end
 end
 
@@ -138,6 +139,7 @@ end)
 Remotes.Round.OnClientEvent:Connect(function(state)
 	roundState = state
 	LobbyUI.setState(state)
+	LobbyScreens.setState(state)
 	if Spectate.isActive() and not KartController.isRacing() then
 		if state.spectate then
 			Spectate.setOrder(namesOf(state.spectate.rows))
@@ -204,7 +206,7 @@ Remotes.Results.OnClientEvent:Connect(function(info)
 	Hud.setDriving(false)
 	Hud.showResults(info)
 	LobbyUI.setHidden(false)
-	Atmos.apply("carnival")
+	Atmos.apply("hq")
 end)
 Remotes.Notify.OnClientEvent:Connect(function(message)
 	if Hud.isRacing() then
@@ -246,6 +248,7 @@ Workspace.DescendantAdded:Connect(track)
 
 RunService.RenderStepped:Connect(function(dt)
 	LobbyUI.update()
+	LobbyScreens.step(dt)
 	Hud.update()
 	KartVisuals.step(dt)
 	TrackAnimator.step()

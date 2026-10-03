@@ -19,7 +19,7 @@ and you're told so.
 ## How a round works
 
 **Lobby** → **ready up** (button or the READY arch) → **map voting** (20s, three
-tracks, use pads or cards, change your vote any time, ties are random) →
+tracks plus Random, use pads or cards, change your vote any time, ties are random) →
 **race** on the starting grid with a 3-2-1-GO countdown → **results** with coins
 and awards → **back to the lobby**.
 
@@ -30,17 +30,29 @@ and awards → **back to the lobby**.
 - Finished racers spectate the rest. Once the first player finishes, the others
   get 30 seconds, so one slow racer can't hold up the round.
 
-## The Kart Carnival lobby
+## The indoor Kart HQ lobby
 
-- Spawn plaza with a status board showing the phase and countdown
-- Voting pads with miniature track displays
-- READY arch
-- Garage with display spots for players' karts
-- Podium for the last race's top three (they get confetti)
-- Live spectator screen
-- Photo spot and Ferris wheel
-- Practice loop with a drift circle, a jump ramp and a boost tunnel
-- Six hidden golden tokens
+- Tall enclosed voting chamber with a raised entrance, stairs, side ramps,
+  walkways, rounded panels, and cyan accent lights
+- Giant wall screen: cycling animated track previews while waiting; three
+  track columns plus Random with counts and voter headshots during voting;
+  a full-screen winner reveal; live standings; and the results top three
+- Overhead phase/countdown board and four numbered pad signs; stepping onto
+  a pad readies you up, and pads/cards choose a track during voting
+- Connected garage, viewing lounge with live standings, trophy room,
+  party bays, and enclosed practice hall (drift, ramp, and boost sections)
+- Proximity sliding doors; departure doors unlock only when the server lights
+  them and pulse gold while lit
+- Player kart displays, podium celebration, and six hidden golden tokens
+
+`LobbyScreens` draws wall SurfaceGuis in each player's PlayerGui and animates
+local doors. Server round state drives all displays; clients do not choose
+results or authorize departure. Random votes resolve to one of the three
+tracks and count toward that track; the Random column also shows who used it.
+
+Streaming is disabled so the distant lobby and race tracks remain available.
+Avatar names are visible within 45 studs, health labels are hidden, and the
+walking camera uses Invisicam with an 80-stud maximum zoom.
 
 ## Driving
 
@@ -141,13 +153,13 @@ src/client/
   KartController  your kart, camera, input
   KartVisuals     lean, wheels, character animations
   TrackAnimator   crossers, sprinklers
-  LobbyUI / GarageUI / Hud / UI / Spectate   screens
+  LobbyUI / LobbyScreens / GarageUI / Hud / UI / Spectate   screens
 ```
 
 ## Tests
 
 ```sh
-lune run tests/run      # 78 tests, including an 8-CPU race on every track
+lune run tests/run      # 80 tests, including an 8-CPU race on every track
 lune run tests/syntax   # every file compiles
 lune run tests/smoke    # builds every track, kart, item and the lobby in Lune's Roblox DOM
 ```
@@ -167,6 +179,7 @@ uploads. These will look much better as custom meshes or sounds:
   - item sounds: `ItemService.Sounds`;
   - horns: `Cosmetics.Horns[].soundId`;
   - countdown, music: no slots yet.
-- **Track images** for the voting cards. They use emoji and theme colours for now.
+- **Track images:** vote cards and wall displays currently use animated 3D
+  track previews generated from track data; uploaded artwork is optional.
 
 Keep everything original: no Nintendo names, characters, items or tracks.

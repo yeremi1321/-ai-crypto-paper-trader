@@ -15,19 +15,20 @@ T.test("lobby is far away from every race track", function()
 end)
 
 T.test("vote pads are found by position and don't overlap", function()
+	T.eq(#LobbyLayout.VotePads, 4)
 	for i, pad in LobbyLayout.VotePads do
 		T.eq(LobbyLayout.padAt(pad.x, pad.z), i)
 	end
 	T.eq(LobbyLayout.padAt(LobbyLayout.Spawn.x, LobbyLayout.Spawn.z), nil)
-	T.ok(LobbyLayout.inPlaza(LobbyLayout.Spawn.x, LobbyLayout.Spawn.z))
+	T.ok(LobbyLayout.inChamber(LobbyLayout.Spawn.x, LobbyLayout.Spawn.z))
 end)
 
-T.test("practice loop sits inside the practice area, away from the plaza", function()
+T.test("practice loop sits inside the practice area, away from the chamber", function()
 	local track = Track.build(LobbyLayout.PracticeTrack)
 	local area = LobbyLayout.PracticeArea
 	for _, p in track.points do
 		T.ok(p.x > area.min.x and p.x < area.max.x and p.z > area.min.z and p.z < area.max.z, "loop leaves the practice area")
-		T.ok(not LobbyLayout.inPlaza(p.x, p.z), "loop crosses the plaza")
+		T.ok(not LobbyLayout.inChamber(p.x, p.z), "loop crosses the chamber")
 	end
 	T.eq(Tracks.get("practice"), LobbyLayout.PracticeTrack)
 	T.ok(#LobbyLayout.PracticeTrack.ramps >= 1, "practice has a jump ramp")

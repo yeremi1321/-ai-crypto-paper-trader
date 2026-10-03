@@ -20,6 +20,12 @@
         "Client": {
           "$path": "src/client"
         }
+      },
+      "$properties": {
+        "NameDisplayDistance": 45,
+        "HealthDisplayDistance": 0,
+        "DevCameraOcclusionMode": "Invisicam",
+        "CameraMaxZoomDistance": 80
       }
     },
     "Lighting": {
@@ -33,7 +39,8 @@
     },
     "Workspace": {
       "$properties": {
-        "Gravity": 150
+        "Gravity": 150,
+        "StreamingEnabled": false
       }
     }
   }

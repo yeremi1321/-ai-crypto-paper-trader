@@ -57,6 +57,11 @@ function Atmos.applyTheme(theme: any, seconds: number?)
 	Lighting.EnvironmentDiffuseScale = if theme.realistic then 1 else 0.5
 	Lighting.EnvironmentSpecularScale = if theme.realistic then 1 else 0.5
 	Lighting.ShadowSoftness = if theme.realistic then 0.15 else 0.2
+	-- Roblox's realistic lighting style for the realistic themes (stronger
+	-- sky light and shading); the toy worlds keep the softer style.
+	pcall(function()
+		(Lighting :: any).LightingStyle = if theme.realistic then Enum.LightingStyle.Realistic else Enum.LightingStyle.Soft
+	end)
 	tween(Lighting, fade, {
 		Brightness = theme.brightness,
 		Ambient = rgb(theme.ambient),

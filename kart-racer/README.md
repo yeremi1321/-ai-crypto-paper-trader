@@ -81,6 +81,7 @@ walking camera uses Invisicam with an 80-stud maximum zoom.
 
 | Track | Feature |
 | --- | --- |
+| 🍂 Ridgeline Grand Prix | The big one (5,800 studs, 2 laps): a figure-eight that crosses OVER its own start straight, autumn highlands, a river bridge, rocky tors, two ranges of peaks and three skill shortcuts (quarry cut, ridge gap, riverside dash) |
 | 🏔️ Pinewater Pass | Mountain-lake circuit: a long bridge over the water, a climb through pine forest, snow-capped peaks all round |
 | 🔥 Emberstone Citadel | Cobblestone gates, stone arches, battlement towers, lava canals, warm torches, basalt spires, raised bridge and ramp |
 | 🧸 Midnight Toy Room | Ruler bridge, block ramps, a dash under the bed, toy robot and train crossings, corner shortcut |
@@ -92,11 +93,15 @@ walking camera uses Invisicam with an 80-stud maximum zoom.
 
 ### Realistic tracks
 
-Pinewater Pass, Sunny Loop, Canyon Climb, Backyard Bug Rally and Emberstone
-Citadel are built on **Roblox Terrain**: textured grass, sand, rock and snow,
+Ridgeline Grand Prix, Pinewater Pass, Sunny Loop, Canyon Climb, Backyard Bug
+Rally and Emberstone Citadel are built on **Roblox Terrain**: textured grass, sand, rock and snow,
 lakes of real water with sandy shores, hills, mesas and distant mountains.
 Raised road sits on earth banks instead of floating, and trees and rocks
-stand on the land. Lighting adds soft shadows, sky reflections (PBR) and
+stand on the land. Sunny Loop and Canyon Climb are 25% bigger than before
+and Pinewater Pass 19%; behind the first ring of mountains there's a second,
+hazier range, and a cheap distant forest fills the middle distance. Terrain
+always stays 3.5 studs under the 4-stud road and verge slabs, and grass
+decoration is off, so grass can't poke through the road. Lighting adds soft shadows, sky reflections (PBR) and
 volumetric clouds. The toy room, kitchen and neon city stay stylised on
 purpose.
 
@@ -106,8 +111,12 @@ Each road is one continuous cross-section built from the same frames:
 - a solid asphalt slab made of triangles, so curves and hills have no gaps,
   steps or flickering overlaps;
 - red-and-white curbs on corners, painted edge lines and a dashed centre line;
-- shoulders, or the terrain itself as the verge;
+- grass (or sand) verges out past the barriers, gravel run-off on the outside
+  of corners, and a concrete deck on bridges;
 - concrete jersey barriers laid end to end, with gaps only for shortcuts.
+
+Road, verge and barrier pieces each span two 12-stud segments and share the
+same corner points, which roughly halves the part count without gaps.
 
 Shortcuts are skill-based (narrow gaps in the wall) and can never skip a lap
 checkpoint.
@@ -131,7 +140,14 @@ on traps per racer and on active hazards.
 
 ## Karts
 
-Eighteen bodies:
+Twenty-three bodies:
+- **Big-motor cars** with exposed engines that rumble (harder on the
+  throttle), glossy paint, chrome and rubber tyres on six-spoke rims:
+  Blower Rod (supercharged hot rod, fat rear tyres), Thunder Muscle (wide
+  convertible, blower through the hood, side pipes), Twin-Turbo Dragster
+  (long nose, huge slicks, big wing), Dune Hauler (trophy truck with a roll
+  cage and light bar) and Midnight V12 (mid-engine speedster, V12 under
+  glass). CPU drivers race the realistic cars;
 - Ember GT, Arrow Sprint, and Rally Comet: low open cockpits, wide wheels,
   spoilers, grille details, and twin chrome exhausts;
 - Classic, Toaster Terror (toast pops up when boosting), Bubble Buggy (bubble
@@ -191,7 +207,7 @@ src/client/
 ## Tests
 
 ```sh
-lune run tests/run      # 90 tests, including an 8-CPU race on every track
+lune run tests/run      # 93 tests, including an 8-CPU race on every track
 lune run tests/syntax   # every file compiles
 lune run tests/smoke    # builds every track, kart, item and the lobby in Lune's Roblox DOM
 ```

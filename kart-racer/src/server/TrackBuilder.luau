@@ -208,17 +208,21 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		local pa, pb = v3(sa), v3(sb)
 		local length = (pb - pa).Magnitude + sc.width
 		local scCf = CFrame.lookAt((pa + pb) / 2, pb)
-		local road = part(folder, "ShortcutRoad", Vector3.new(sc.width, 1, length), scCf * CFrame.new(0, -0.5, 0), roadColor:Lerp(rgb(theme.accent), 0.25), shortcutMaterial)
+		-- As thick as the main road, so terrain under it stays hidden.
+		local road = part(folder, "ShortcutRoad", Vector3.new(sc.width, 4, length), scCf * CFrame.new(0, -2, 0), roadColor:Lerp(rgb(theme.accent), 0.25), shortcutMaterial)
 		road:SetAttribute("Surface", sc.surface or "road")
 		-- Connect each end to the road edge across the grass shoulder.
 		for _, endpoint in { { at = sc.from, p = pa }, { at = sc.to, p = pb } } do
 			local edge = v3(Track.spot(track, endpoint.at * track.length, sc.side * half))
 			local link = (endpoint.p - edge)
-			part(folder, "ShortcutLink", Vector3.new(sc.width, 1, link.Magnitude + sc.width), CFrame.lookAt((edge + endpoint.p) / 2, endpoint.p) * CFrame.new(0, -0.49, 0), roadColor:Lerp(rgb(theme.accent), 0.25), shortcutMaterial)
+			part(folder, "ShortcutLink", Vector3.new(sc.width, 4, link.Magnitude + sc.width), CFrame.lookAt((edge + endpoint.p) / 2, endpoint.p) * CFrame.new(0, -1.99, 0), roadColor:Lerp(rgb(theme.accent), 0.25), shortcutMaterial)
 		end
-		-- Little arrows hint the way in.
+		-- Posts either side of the entry hint the way in (shortcut blue on
+		-- realistic tracks, the theme's glow elsewhere).
+		local postColor = if theme.realistic then Color3.fromRGB(60, 150, 255) else rgb(theme.accent)
+		local postMaterial = if theme.realistic then Enum.Material.SmoothPlastic else Enum.Material.Neon
 		for _, side in { -1, 1 } do
-			Shapes.box(folder, Vector3.new(0.8, 6, 0.8), scCf * CFrame.new(side * (sc.width / 2 + 1), 3, -length / 2 + 2), { color = rgb(theme.accent), material = Enum.Material.Neon })
+			Shapes.box(folder, Vector3.new(0.8, 6, 0.8), scCf * CFrame.new(side * (sc.width / 2 + 1), 3, -length / 2 + 2), { color = postColor, material = postMaterial })
 		end
 		if def.theme == "backyard" then
 			-- The shortcut runs through a hollow log.

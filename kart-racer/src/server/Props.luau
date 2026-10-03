@@ -59,7 +59,10 @@ builders.tree = function(prop, theme, parent)
 			part(parent, Vector3.new(0.8, 6 * s, 0.8), base * CFrame.new(math.cos(a) * 1.6 * s, 11 * s, math.sin(a) * 1.6 * s) * CFrame.Angles(math.sin(a) * 0.6, 0, -math.cos(a) * 0.6), Color3.fromRGB(96, 70, 48), Enum.Material.Wood)
 		end
 	end
-	local leaf = vary(if theme.realistic then Color3.fromRGB(66, 104, 44) else Color3.fromRGB(70, 150, 60), 0.25, prop.x + prop.z)
+	-- A theme can list its own leaf colours (autumn reds and golds).
+	local leaves = theme.leaves
+	local tone = if leaves then rgb(leaves[math.floor(math.abs(prop.x * 7 + prop.z * 3)) % #leaves + 1]) elseif theme.realistic then Color3.fromRGB(66, 104, 44) else Color3.fromRGB(70, 150, 60)
+	local leaf = vary(tone, 0.25, prop.x + prop.z)
 	part(parent, Vector3.one * 12 * s, base * CFrame.new(0, 16 * s, 0), leaf, leafMaterial, Enum.PartType.Ball)
 	part(parent, Vector3.one * 8 * s, base * CFrame.new(3 * s, 13 * s, 1 * s), leaf, leafMaterial, Enum.PartType.Ball)
 	if theme.realistic then
@@ -85,6 +88,23 @@ builders.pine = function(prop, theme, parent)
 		mesh.Parent = p
 	end
 	part(parent, Vector3.new(1.2, 3 * s, 1.2), base * CFrame.new(0, 29 * s, 0), needles, mat(theme, Enum.Material.Grass))
+end
+
+-- A cheap tree for the distant forest: two parts, no shadow. From the road
+-- it reads as a dense treeline; up close it would look plain, so it is only
+-- placed far away (Scenery rule `farTree`).
+builders.farTree = function(prop, theme, parent)
+	local s = prop.size
+	local base = CFrame.new(prop.x, prop.y, prop.z)
+	local leaves = theme.leaves
+	local tone = if leaves and (math.floor(prop.x) % 3 ~= 0) then rgb(leaves[math.floor(math.abs(prop.z)) % #leaves + 1]) else Color3.fromRGB(40, 74, 46)
+	local trunk = part(parent, Vector3.new(1.4, 10 * s, 1.4), base * CFrame.new(0, 5 * s, 0), Color3.fromRGB(84, 62, 46), mat(theme, Enum.Material.Wood))
+	trunk.CastShadow = false
+	local crown = part(parent, Vector3.new(11 * s, 22 * s, 11 * s), base * CFrame.new(0, 17 * s, 0), vary(tone, 0.2, prop.x), mat(theme, Enum.Material.Grass))
+	crown.CastShadow = false
+	local mesh = Instance.new("SpecialMesh")
+	mesh.MeshType = Enum.MeshType.Sphere
+	mesh.Parent = crown
 end
 
 builders.bush = function(prop, theme, parent)

@@ -41,7 +41,7 @@ Tracks.Themes = {
 			drop = 3.5, -- terrain stays 3.5 studs under the road, hidden inside its 4-stud slab
 			hills = { count = 16, min = 50, max = 140, material = "LeafyGrass" },
 			lakes = { count = 2, min = 55, max = 120, shore = "Sand", liquid = "Water" },
-			mountains = { count = 10, min = 170, max = 280, ring = 520, material = "Rock", cap = "Snow" },
+			mountains = { count = 10, min = 170, max = 280, ring = 520, material = "Rock", cap = "Snow", outer = { count = 5, min = 240, max = 300, ring = 1100 } },
 			colors = { Grass = { 82, 124, 52 }, LeafyGrass = { 72, 110, 46 }, Rock = { 104, 100, 96 }, Sand = { 196, 180, 140 }, Snow = { 238, 242, 246 }, Ground = { 102, 88, 66 }, Mud = { 70, 58, 46 } },
 			water = { color = { 28, 74, 86 }, transparency = 0.35, reflectance = 0.6, waveSize = 0.1, waveSpeed = 7 },
 		},
@@ -74,7 +74,7 @@ Tracks.Themes = {
 			hills = { count = 10, min = 60, max = 150, material = "Sand" },
 			mesas = { count = 14, min = 50, max = 120, minHeight = 60, maxHeight = 150, material = "Sandstone", band = "Rock", ring = 420 },
 			lakes = { count = 1, min = 45, max = 70, shore = "Grass", liquid = "Water" },
-			mountains = { count = 8, min = 180, max = 280, ring = 650, material = "Sandstone" },
+			mountains = { count = 8, min = 180, max = 280, ring = 650, material = "Sandstone", outer = { count = 5, min = 220, max = 300, ring = 1200 } },
 			colors = { Sand = { 206, 164, 112 }, Sandstone = { 176, 108, 72 }, Rock = { 120, 82, 62 }, Grass = { 110, 128, 60 }, Mud = { 90, 70, 50 } },
 			water = { color = { 40, 90, 92 }, transparency = 0.35, reflectance = 0.5, waveSize = 0.08, waveSpeed = 6 },
 		},
@@ -182,6 +182,43 @@ Tracks.Themes = {
 		saturation = 0.02,
 		clouds = { cover = 0.45, density = 0.7 }, -- seen through the lobby window
 	},
+	-- Ridgeline Grand Prix: autumn highlands, a river valley and rocky tors,
+	-- with a second, hazier range of peaks far behind the first.
+	highland = {
+		realistic = true,
+		road = { 60, 61, 64 },
+		shoulder = { 104, 116, 58 },
+		shoulderMaterial = "Grass",
+		ground = { 104, 116, 58 },
+		wall = { 205, 204, 198 },
+		accent = { 255, 170, 40 },
+		curb = { { 196, 38, 34 }, { 236, 236, 232 } },
+		line = { 236, 236, 228 },
+		clock = 16.2,
+		ambient = { 104, 98, 96 },
+		brightness = 2.9,
+		atmosphere = { density = 0.32, haze = 1.5, glare = 0.6, color = { 230, 210, 185 }, decay = { 150, 120, 100 } },
+		bloom = 0.25,
+		tint = { 255, 246, 232 },
+		saturation = 0.08,
+		contrast = 0.12,
+		clouds = { cover = 0.5, density = 0.75 },
+		leaves = { { 196, 92, 36 }, { 214, 150, 40 }, { 160, 50, 36 }, { 120, 128, 50 }, { 226, 178, 70 } },
+		terrain = {
+			ground = "Grass",
+			bank = "Grass",
+			drop = 3.5,
+			hills = { count = 20, min = 60, max = 170, material = "LeafyGrass" },
+			mesas = { count = 10, min = 30, max = 60, minHeight = 25, maxHeight = 70, material = "Rock", ring = 300 },
+			lakes = { count = 1, min = 60, max = 100, shore = "Pebble", liquid = "Water" },
+			mountains = {
+				count = 10, min = 200, max = 300, ring = 520, material = "Rock", cap = "Snow",
+				outer = { count = 6, min = 240, max = 320, ring = 1150 },
+			},
+			colors = { Grass = { 104, 116, 58 }, LeafyGrass = { 116, 110, 52 }, Rock = { 110, 104, 98 }, Snow = { 238, 240, 244 }, Pebble = { 140, 132, 120 }, Mud = { 70, 58, 46 }, Ground = { 100, 86, 64 } },
+			water = { color = { 30, 70, 80 }, transparency = 0.35, reflectance = 0.6, waveSize = 0.1, waveSpeed = 8 },
+		},
+	},
 	-- Pinewater Pass: a mountain lake, pine forest and snowy peaks.
 	alpine = {
 		realistic = true,
@@ -208,7 +245,7 @@ Tracks.Themes = {
 			drop = 3.5, -- terrain stays 3.5 studs under the road, hidden inside its 4-stud slab
 			hills = { count = 18, min = 50, max = 150, material = "LeafyGrass" },
 			lakes = { count = 1, min = 60, max = 100, shore = "Ground", liquid = "Water" },
-			mountains = { count = 11, min = 200, max = 320, ring = 480, material = "Rock", cap = "Snow" },
+			mountains = { count = 11, min = 200, max = 320, ring = 480, material = "Rock", cap = "Snow", outer = { count = 5, min = 260, max = 320, ring = 1100 } },
 			colors = { Grass = { 74, 112, 52 }, LeafyGrass = { 60, 96, 44 }, Rock = { 98, 96, 94 }, Snow = { 240, 244, 248 }, Ground = { 96, 84, 64 }, Sand = { 170, 160, 130 }, Mud = { 62, 54, 44 } },
 			water = { color = { 22, 70, 92 }, transparency = 0.3, reflectance = 0.7, waveSize = 0.08, waveSpeed = 6 },
 		},
@@ -264,6 +301,54 @@ Tracks.List = {
 	},
 
 	{
+		id = "ridgeline",
+		name = "Ridgeline Grand Prix",
+		theme = "highland",
+		difficulty = "Hard",
+		feature = "A figure-eight overpass, a river bridge and three skill shortcuts",
+		icon = "🍂",
+		width = 58,
+		scale = 1.8,
+		laps = 2,
+		-- Opening straight, then the east loop climbs through S-bends and a
+		-- hairpin, crosses OVER the start straight, descends over the river and
+		-- finishes with the tight west loop.
+		controls = {
+			v(-300, 0, 200),
+			v(-150, 0, 150),
+			v(0, 0, 0),
+			v(150, 0, -150),
+			v(280, 4, -260),
+			v(430, 10, -280),
+			v(540, 14, -180),
+			v(520, 18, -40),
+			v(600, 20, 80),
+			v(540, 20, 200),
+			v(400, 20, 240),
+			v(260, 18, 180),
+			v(130, 16, 80),
+			v(0, 16, 0),
+			v(-130, 13, -100),
+			v(-260, 9, -180),
+			v(-400, 4, -200),
+			v(-520, 0, -120),
+			v(-560, 0, 20),
+			v(-500, 0, 140),
+			v(-400, 0, 230),
+		},
+		-- The river runs north-south and is crossed once, on a bridge.
+		rivers = { { r = 22, points = { { -330, -420 }, { -320, -200 }, { -345, 40 } } } },
+		boostPads = { { t = 0.06, offset = 0 }, { t = 0.5, offset = 0.3 }, { t = 0.88, offset = -0.3 } },
+		itemRows = { 0.2, 0.58 },
+		ramps = { { t = 0.85, offset = 0, width = 20 } },
+		-- Quarry cut (S-bends), ridge gap (hairpin), riverside dash (final corner).
+		shortcuts = {
+			{ from = 0.29, to = 0.34, side = 1, width = 16 },
+			{ from = 0.4, to = 0.44, side = 1, width = 16 },
+			{ from = 0.94, to = 0.98, side = -1, width = 16 },
+		},
+	},
+	{
 		id = "alpine",
 		name = "Pinewater Pass",
 		theme = "alpine",
@@ -271,7 +356,7 @@ Tracks.List = {
 		feature = "A long bridge over a mountain lake, pine forest and snowy peaks",
 		icon = "🏔️",
 		width = 54,
-		scale = 1.6,
+		scale = 1.9,
 		laps = 3,
 		controls = {
 			v(0, 0, 0),
@@ -303,7 +388,7 @@ Tracks.List = {
 		feature = "Wide, fast corners and a big crowd",
 		icon = "🌳",
 		width = 56,
-		scale = 1.6,
+		scale = 2,
 		laps = 3,
 		controls = {
 			v(0, 0, 0),
@@ -333,7 +418,7 @@ Tracks.List = {
 		feature = "Rolling hills under giant mesas",
 		icon = "🏜️",
 		width = 52,
-		scale = 1.6,
+		scale = 2,
 		laps = 3,
 		controls = {
 			v(0, 0, 0),
@@ -524,7 +609,7 @@ Tracks.List = {
 } :: { Track.TrackDef }
 
 -- Tracks that can come up in map voting.
-Tracks.VotePool = { "alpine", "emberfort", "toyroom", "kitchen", "backyard", "sunny", "canyon", "neon" }
+Tracks.VotePool = { "ridgeline", "alpine", "emberfort", "toyroom", "kitchen", "backyard", "sunny", "canyon", "neon" }
 
 -- A Grand Prix is every track in order (kept for a future cup mode).
 Tracks.Cup = { name = "Starter Cup", tracks = { "sunny", "canyon", "neon" } }

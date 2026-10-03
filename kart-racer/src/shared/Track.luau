@@ -41,6 +41,8 @@ export type TrackDef = {
 	-- Lakes the road may cross on a bridge (realistic themes with terrain).
 	-- Same units as the control points: scaled by `scale`.
 	lakes: { { x: number, z: number, r: number } }?,
+	-- Rivers: a radius and a polyline of { x, z } points, same units.
+	rivers: { { r: number, points: { { number } } } }?,
 }
 
 export type Zone = { kind: string, t: number, length: number, offset: number?, width: number?, period: number?, duty: number? }

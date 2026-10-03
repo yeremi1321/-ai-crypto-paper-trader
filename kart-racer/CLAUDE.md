@@ -23,7 +23,7 @@ All six stages of the first playable build are written:
   countdowns, unique voter counts and door transforms; it cannot render UI.
 - **What hasn't been checked:** physics, input, UI layout, networking,
   DataStores and text filtering.
-- **Checks:** `lune run tests/run` (90 tests), `tests/syntax` and `tests/smoke`
+- **Checks:** `lune run tests/run` (93 tests), `tests/syntax` and `tests/smoke`
   all pass.
 
 ## Setup on this PC
@@ -55,17 +55,24 @@ All six stages of the first playable build are written:
    banks, the Pinewater bridge crosses real water on pillars, and lakes,
    mountains and clouds show. Drive the seams: no bumps between road pieces,
    barriers continuous. Through the lobby's back window: lake, pines, peaks.
-5. **Each new track:** Emberstone Citadel gates, clear road under arches,
+5. **Ridgeline Grand Prix and the big-motor cars:** the overpass (the high
+   road crosses over the start straight on pillars, clear headroom below),
+   the river bridge over real water, the three blue-posted shortcuts and the
+   final-sector jump; how long the land takes to build (two mountain ranges;
+   lower `mountains.outer` counts in `Tracks.Themes` if it hitches). Cars:
+   engines rumble, rear tyres sized right, rims spin, drivers sit in the
+   seats, nothing clips badly through the body.
+6. **Each new track:** Emberstone Citadel gates, clear road under arches,
    lava channels outside barriers, elevated bridge and ramp; the toy room bed tunnel, robot and train; the kitchen
    toaster launch up to the shelf, the conveyors and syrup; the backyard hose,
    sprinklers and beetles. Try the shortcuts.
-6. **Items:** each of the six, warnings, the shield blocking, and hit protection.
-7. **Garage:** the preview rotates, buying and equipping work, coins update,
+7. **Items:** each of the six, warnings, the shield blocking, and hit protection.
+8. **Garage:** the preview rotates, buying and equipping work, coins update,
    and name and plate get filtered. Rejoin to check saving.
-8. **Multiplayer:** Test → Clients and Servers with 2–3 players. Voting, items
+9. **Multiplayer:** Test → Clients and Servers with 2–3 players. Voting, items
    hitting other players, spectating, and the podium celebration.
-9. **Mobile:** device emulator. Touch buttons, auto-accelerate, readable UI.
-10. **Performance:** each track is about 4,600–6,900 objects plus terrain. If it's slow on phones,
+10. **Mobile:** device emulator. Touch buttons, auto-accelerate, readable UI.
+11. **Performance:** each track is about 3,300–8,200 objects plus terrain. If it's slow on phones,
    lower the counts in `Scenery.Themes` first.
 
 ## Kart HQ client integration
@@ -158,3 +165,21 @@ crypto bot and the separate `open-world-racer/` game, so don't touch them.
 - Unverified until Studio: terrain build time on a live server, terrain
   surface accuracy at road edges (ground is planned 0.7 studs under the
   road), how water, clouds and PBR materials look on phones.
+
+## Bigger maps and big-motor cars
+
+- Terrain drop is 3.5 studs (themes' `terrain.drop`); road, verge and
+  shortcut slabs are 4 studs thick; `TerrainBuilder` turns grass
+  decoration off. The Landscape test demands ground 2.5+ studs under the
+  road across road and verge width. This was the "grass through the road"
+  bug.
+- Road, verge and barrier pieces span two segments (`pairEnd` keeps odd
+  point counts from overlapping); verges tuck 1 stud under the road edge.
+- Landscape: `def.rivers` (chains of bridged pools), banks under raised
+  shortcuts, `mountains.outer` second ring; Scenery `farTree` (two parts,
+  no shadows) for distant forest; `theme.leaves` for autumn colours.
+- Cars: `Body.realistic` (gloss, chrome, rubber, metal rims),
+  `rearWheelRadius/Width`, anim `"engine"`; `KartBodies.CpuBodies` = the
+  realistic bodies the CPUs drive. Wheel `SpinScale` keeps big rear wheels
+  turning at the right rate.
+- `Atmos` sets `Lighting.LightingStyle` (Realistic for realistic themes).

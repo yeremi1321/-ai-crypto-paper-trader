@@ -1,7 +1,8 @@
 -- Builds the road and everything alongside it from one set of frames
 -- (shared/RoadGeometry), so every piece meets the next exactly:
---   * road: a solid 2-stud slab built from triangles (two wedges each), so
---     curves and hills have no gaps, steps or overlapping, flickering slabs
+--   * road: a solid slab built from triangles (two wedges each), one piece
+--     per two segments, so curves and hills have no gaps, steps or
+--     overlapping, flickering slabs
 --   * verges: the same triangle strips either side, out past the barrier,
 --     grass (or the theme's material), gravel run-off on the outside of
 --     corners, and a concrete deck on bridges
@@ -101,6 +102,13 @@ local function chordBox(parent: Instance, a: Vector3, b: Vector3, width: number,
 	return p
 end
 
+-- Pieces span two segments; the last one stops at the start line, so with
+-- an odd number of points no two pieces ever overlap (overlapping coplanar
+-- pieces would flicker).
+local function pairEnd(i: number, n: number): number
+	return if i + 2 > n then 1 else i + 2
+end
+
 export type Options = {
 	theme: any,
 	walled: boolean,
@@ -156,33 +164,14 @@ function RoadSurface.build(track: any, frames: { any }, parent: Instance, opts: 
 	for i = 1, n do
 		local j = i % n + 1
 		local a, b = frames[i], frames[j]
-		local aL, aR = v3(RoadGeometry.edge(a, -half)), v3(RoadGeometry.edge(a, half))
-		local bL, bR = v3(RoadGeometry.edge(b, -half)), v3(RoadGeometry.edge(b, half))
-		triangle(surface, aL, aR, bL, th, road, "Road")
-		triangle(surface, aR, bR, bL, th, road, "Road")
-
-		-- Verges on both sides, out past the barrier, covering the terrain.
-		local plan = opts.plan
-		local onBridge = plan and not (plan.bankAt[i] and plan.bankAt[j])
-		if opts.walled then
-			local outer = half + sw + RoadSurface.VergeExtra
-			-- Turning right (turn > 0) puts the outside of the bend on the left.
-			local outside = if a.turn > 0 then -1 else 1
-			local corner = RoadGeometry.isCorner(a) and RoadGeometry.isCorner(b)
-			for _, side in { -1, 1 } do
-				local style = shoulder
-				if realistic and onBridge then
-					style = deck
-				elseif realistic and corner and side == outside then
-					style = gravel
-				end
-				local ai = v3(RoadGeometry.edge(a, side * half, -SHOULDER_DROP))
-				local ao = v3(RoadGeometry.edge(a, side * outer, -SHOULDER_DROP))
-				local bi = v3(RoadGeometry.edge(b, side * half, -SHOULDER_DROP))
-				local bo = v3(RoadGeometry.edge(b, side * outer, -SHOULDER_DROP))
-				triangle(verge, ai, ao, bi, th, style, "Shoulder")
-				triangle(verge, ao, bo, bi, th, style, "Shoulder")
-			end
+		-- The road slab spans two segments per piece, with the same corner
+		-- points as the verges, so the two always meet.
+		if i % 2 == 1 then
+			local c = frames[pairEnd(i, n)]
+			local aL, aR = v3(RoadGeometry.edge(a, -half)), v3(RoadGeometry.edge(a, half))
+			local cL, cR = v3(RoadGeometry.edge(c, -half)), v3(RoadGeometry.edge(c, half))
+			triangle(surface, aL, aR, cL, th, road, "Road")
+			triangle(surface, aR, cR, cL, th, road, "Road")
 		end
 
 		-- Curbs on corners (both sides), edge lines on straights.
@@ -203,8 +192,41 @@ function RoadSurface.build(track: any, frames: { any }, parent: Instance, opts: 
 		end
 	end
 
-	-- Barriers, one piece per segment, skipping shortcut gaps and the rare
-	-- inside-of-a-hairpin segment that would run backwards.
+	-- Verges on both sides, out past the barrier, covering the terrain. One
+	-- piece spans two segments (half the parts; on a 300-stud bend the chord
+	-- strays about 0.25 studs), and the inner edge tucks 1 stud under the
+	-- road so no gap can open at the road's edge.
+	if opts.walled then
+		local plan = opts.plan
+		local outer = half + sw + RoadSurface.VergeExtra
+		for i = 1, n, 2 do
+			local mid = i % n + 1
+			local j = pairEnd(i, n)
+			local a, b = frames[i], frames[j]
+			local onBridge = plan and not (plan.bankAt[i] and plan.bankAt[mid] and plan.bankAt[j])
+			-- Turning right (turn > 0) puts the outside of the bend on the left.
+			local outside = if a.turn > 0 then -1 else 1
+			local corner = RoadGeometry.isCorner(a) and RoadGeometry.isCorner(b)
+			for _, side in { -1, 1 } do
+				local style = shoulder
+				if realistic and onBridge then
+					style = deck
+				elseif realistic and corner and side == outside then
+					style = gravel
+				end
+				local ai = v3(RoadGeometry.edge(a, side * (half - 1), -SHOULDER_DROP))
+				local ao = v3(RoadGeometry.edge(a, side * outer, -SHOULDER_DROP))
+				local bi = v3(RoadGeometry.edge(b, side * (half - 1), -SHOULDER_DROP))
+				local bo = v3(RoadGeometry.edge(b, side * outer, -SHOULDER_DROP))
+				triangle(verge, ai, ao, bi, th, style, "Shoulder")
+				triangle(verge, ao, bo, bi, th, style, "Shoulder")
+			end
+		end
+	end
+
+	-- Barriers, one piece per two segments (like the verges), skipping
+	-- shortcut gaps and the rare inside-of-a-hairpin stretch that would run
+	-- backwards.
 	if opts.walled then
 		local wallAt = half + sw + 0.9
 		local folded = {}
@@ -216,13 +238,14 @@ function RoadSurface.build(track: any, frames: { any }, parent: Instance, opts: 
 		end
 		local wallColor = rgb(theme.wall)
 		local wallMaterial = theme.wallMaterial and Enum.Material[theme.wallMaterial] or (if neon then Enum.Material.Neon else Enum.Material.SmoothPlastic)
-		for i = 1, n do
-			local j = i % n + 1
+		for i = 1, n, 2 do
+			local j = pairEnd(i, n)
 			local a, b = frames[i], frames[j]
 			local segLen = (v3(b) - v3(a)).Magnitude
 			local distance = track.cum[i] + segLen / 2
 			for _, side in { -1, 1 } do
-				if not folded[side][i] and not opts.wallOpen(side, distance, segLen) then
+				local foldedHere = folded[side][i] or folded[side][i % n + 1]
+				if not foldedHere and not opts.wallOpen(side, distance, segLen) then
 					local p0 = v3(RoadGeometry.edge(a, side * wallAt))
 					local p1 = v3(RoadGeometry.edge(b, side * wallAt))
 					if realistic then

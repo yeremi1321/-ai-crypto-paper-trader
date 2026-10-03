@@ -86,20 +86,22 @@ local function rgb(c: { number }): Color3
 	return Color3.fromRGB(c[1], c[2], c[3])
 end
 
--- Colour and material for each body part role.
-local function roleStyle(role: string, main: Color3, accent: Color3): (Color3, Enum.Material, number)
+-- Colour, material, transparency and default reflectance for each body
+-- part role. Realistic bodies get a clear-coat gloss on the paint, polished
+-- chrome and darker, matte trim; cartoon bodies stay smooth and flat.
+local function roleStyle(role: string, main: Color3, accent: Color3, realistic: boolean?): (Color3, Enum.Material, number, number)
 	if role == "main" then
-		return main, Enum.Material.SmoothPlastic, 0
+		return main, Enum.Material.SmoothPlastic, 0, if realistic then 0.12 else 0
 	elseif role == "accent" then
-		return accent, Enum.Material.SmoothPlastic, 0
+		return accent, Enum.Material.SmoothPlastic, 0, if realistic then 0.1 else 0
 	elseif role == "glass" then
-		return Color3.fromRGB(150, 210, 255), Enum.Material.Glass, 0.45
+		return if realistic then Color3.fromRGB(70, 90, 105) else Color3.fromRGB(150, 210, 255), Enum.Material.Glass, if realistic then 0.35 else 0.45, if realistic then 0.2 else 0
 	elseif role == "chrome" then
-		return Color3.fromRGB(205, 210, 220), Enum.Material.Metal, 0
+		return Color3.fromRGB(205, 210, 220), Enum.Material.Metal, 0, if realistic then 0.35 else 0
 	elseif role == "light" then
-		return Color3.fromRGB(255, 250, 220), Enum.Material.Neon, 0
+		return Color3.fromRGB(255, 250, 220), Enum.Material.Neon, 0, 0
 	end
-	return Color3.fromRGB(35, 35, 40), Enum.Material.SmoothPlastic, 0
+	return if realistic then Color3.fromRGB(28, 28, 32) else Color3.fromRGB(35, 35, 40), if realistic then Enum.Material.Plastic else Enum.Material.SmoothPlastic, 0, 0
 end
 
 -- `cf` is where the kart should sit on the road (position on the surface).
@@ -163,7 +165,7 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	motor("BodyJoint", root, bodyRoot, drop)
 
 	for i, part in body.parts do
-		local color, material, transparency = roleStyle(part.role, main, accent)
+		local color, material, transparency, reflectance = roleStyle(part.role, main, accent, body.realistic)
 		if part.color then
 			color = Color3.fromRGB(part.color[1], part.color[2], part.color[3])
 		end
@@ -176,7 +178,7 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 			* CFrame.Angles(math.rad(rot[1]), math.rad(rot[2]), math.rad(rot[3]))
 		local p = visual(model, root, `Body{i}`, Vector3.new(part.size[1], part.size[2], part.size[3]), drop * localCf, color, material, part.shape, bodyRoot)
 		p.Transparency = transparency
-		p.Reflectance = part.reflectance or 0
+		p.Reflectance = part.reflectance or reflectance
 
 		if part.anim then
 			-- Swap the weld for a Motor6D so the client can animate this part.
@@ -256,24 +258,26 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	-- Wheel style (cosmetic): scales the body's own wheels.
 	local wheelStyle = Cosmetics.find("wheels", (chosen :: any).wheels) or Cosmetics.Wheels[1]
 	local wheelRadius = body.wheelRadius * wheelStyle.radius
-	local wheelWidth = body.wheelWidth * wheelStyle.width
 	local tyreColor = Color3.fromRGB(wheelStyle.color[1], wheelStyle.color[2], wheelStyle.color[3])
-	local wheelY = wheelRadius - groundToBody
 	local rearZ = -math.huge
 	for _, w in body.wheels do
 		rearZ = math.max(rearZ, w[2])
 	end
 	for i, w in body.wheels do
-		local name = if w[2] >= rearZ then (if w[1] < 0 then "WheelRL" else "WheelRR") else `Wheel{i}`
-		local d = wheelRadius * 2
-		local wheelCf = drop * CFrame.new(w[1], wheelY, w[2])
+		local rear = w[2] >= rearZ
+		-- Rear wheels can be bigger (hot rods, dragsters); each sits on the road.
+		local radius = (if rear then body.rearWheelRadius or body.wheelRadius else body.wheelRadius) * wheelStyle.radius
+		local width = (if rear then body.rearWheelWidth or body.wheelWidth else body.wheelWidth) * wheelStyle.width
+		local name = if rear then (if w[1] < 0 then "WheelRL" else "WheelRR") else `Wheel{i}`
+		local d = radius * 2
+		local wheelCf = drop * CFrame.new(w[1], radius - groundToBody, w[2])
 		local wheel = Instance.new("Part")
 		wheel.Name = name
 		wheel.Shape = Enum.PartType.Cylinder
-		wheel.Size = Vector3.new(wheelWidth, d, d)
+		wheel.Size = Vector3.new(width, d, d)
 		wheel.CFrame = root.CFrame * wheelCf
 		wheel.Color = tyreColor
-		wheel.Material = Enum.Material.SmoothPlastic
+		wheel.Material = Enum.Material.Rubber
 		wheel.CanCollide = false
 		wheel.CanQuery = false
 		wheel.CanTouch = false
@@ -281,11 +285,22 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 		wheel.Parent = model
 		-- Wheels turn on their own joint: front ones steer, all of them spin.
 		local joint = motor("WheelJoint", root, wheel, wheelCf)
-		joint:SetAttribute("Front", w[2] < rearZ)
-		visual(model, root, `{name}Hub`, Vector3.new(wheelWidth + 0.06, d * 0.55, d * 0.55), wheelCf, accent, if wheelStyle.glow then Enum.Material.Neon else Enum.Material.SmoothPlastic, "Cylinder", wheel)
-		-- A spoke so you can see the wheel turning.
-		visual(model, root, `{name}Spoke`, Vector3.new(wheelWidth + 0.08, d * 0.5, d * 0.14), wheelCf, Color3.fromRGB(240, 240, 245), Enum.Material.SmoothPlastic, nil, wheel)
-		if w[2] >= rearZ then
+		joint:SetAttribute("Front", not rear)
+		-- Bigger wheels turn slower for the same road speed.
+		joint:SetAttribute("SpinScale", wheelRadius / radius)
+		if body.realistic and not wheelStyle.glow then
+			-- Polished rim with six spokes and a dark centre cap.
+			visual(model, root, `{name}Hub`, Vector3.new(width + 0.04, d * 0.62, d * 0.62), wheelCf, Color3.fromRGB(200, 204, 212), Enum.Material.Metal, "Cylinder", wheel).Reflectance = 0.3
+			for k = 0, 2 do
+				visual(model, root, `{name}Spoke`, Vector3.new(width + 0.08, d * 0.56, d * 0.09), wheelCf * CFrame.Angles(math.rad(k * 60), 0, 0), Color3.fromRGB(150, 154, 162), Enum.Material.Metal, nil, wheel)
+			end
+			visual(model, root, `{name}Cap`, Vector3.new(width + 0.12, d * 0.16, d * 0.16), wheelCf, Color3.fromRGB(35, 35, 40), Enum.Material.Metal, "Cylinder", wheel)
+		else
+			visual(model, root, `{name}Hub`, Vector3.new(width + 0.06, d * 0.55, d * 0.55), wheelCf, accent, if wheelStyle.glow then Enum.Material.Neon else Enum.Material.SmoothPlastic, "Cylinder", wheel)
+			-- A spoke so you can see the wheel turning.
+			visual(model, root, `{name}Spoke`, Vector3.new(width + 0.08, d * 0.5, d * 0.14), wheelCf, Color3.fromRGB(240, 240, 245), Enum.Material.SmoothPlastic, nil, wheel)
+		end
+		if rear then
 			local sparks = Instance.new("ParticleEmitter")
 			sparks.Name = "DriftSparks"
 			sparks.Texture = "rbxasset://textures/particles/sparkles_main.dds"

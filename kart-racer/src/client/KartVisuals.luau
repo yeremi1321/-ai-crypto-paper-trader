@@ -84,7 +84,8 @@ local function animate(kart: Model, dt: number, t: number)
 		if joint:IsA("Motor6D") and joint.Name == "WheelJoint" then
 			local steer = if joint:GetAttribute("Front") then anim.steer else 0
 			-- Rolling forward (-z) turns the wheel's top toward the front.
-			joint.Transform = CFrame.Angles(0, -steer, 0) * CFrame.Angles(-anim.spin, 0, 0)
+			local spin = anim.spin * (joint:GetAttribute("SpinScale") or 1)
+			joint.Transform = CFrame.Angles(0, -steer, 0) * CFrame.Angles(-spin, 0, 0)
 		end
 	end
 
@@ -117,6 +118,10 @@ local function animate(kart: Model, dt: number, t: number)
 					cf = CFrame.new(0, math.sin(t * 9) * 0.05 * k, 0) * CFrame.Angles(math.sin(t * 7) * 0.05 * k, 0, math.cos(t * 6) * 0.05 * k)
 				elseif kind == "rattle" then
 					cf = CFrame.Angles(math.sin(t * 30 + anim.seed) * 0.06 * speedFrac - anim.squash * 0.4, 0, 0)
+				elseif kind == "engine" then
+					-- An exposed motor rumbles at idle and shakes harder on the throttle.
+					local k = 0.5 + math.clamp(accel / 40, 0, 1) * 0.8 + speedFrac * 0.3
+					cf = CFrame.new(0, math.sin(t * 47 + anim.seed) * 0.03 * k, 0) * CFrame.Angles(0, 0, math.sin(t * 39 + anim.seed) * 0.015 * k)
 				elseif kind == "orbit" then
 					cf = CFrame.Angles(0, t * 2.5, 0)
 				end

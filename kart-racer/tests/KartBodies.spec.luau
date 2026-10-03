@@ -47,7 +47,7 @@ T.test("CPU drivers get varied looks", function()
 end)
 
 T.test("creative karts: valid animations, prices and free choices", function()
-	local anims = { blink = true, toast = true, flap = true, flutter = true, claw = true, wobble = true, rattle = true, orbit = true }
+	local anims = { blink = true, toast = true, flap = true, flutter = true, claw = true, wobble = true, rattle = true, orbit = true, engine = true }
 	local free = 0
 	for _, body in KartBodies.List do
 		T.ok((body.price or 0) >= 0, `{body.id} price`)
@@ -68,4 +68,27 @@ T.test("creative karts: valid animations, prices and free choices", function()
 	end
 	T.ok(free >= 3, "need a few free karts to start with")
 	T.ok(#KartBodies.List >= 10, "creative kart roster")
+end)
+
+T.test("big-motor cars: exposed rumbling engines, chunky rear tyres, realistic finish", function()
+	local bigMotor = { "blowerrod", "thunder", "dragster", "dunehauler", "v12" }
+	for _, id in bigMotor do
+		local body = KartBodies.get(id)
+		T.eq(body.id, id, `{id} missing`)
+		T.ok(body.realistic, `{id} realistic finish`)
+		local rumbling = 0
+		for _, part in body.parts do
+			if part.anim == "engine" then
+				rumbling += 1
+			end
+		end
+		T.ok(rumbling >= 1, `{id} has no exposed engine`)
+		T.ok((body.rearWheelRadius or body.wheelRadius) >= body.wheelRadius, `{id} rear wheels smaller than front`)
+		T.ok((body.rearWheelRadius or 0) <= 1.6, `{id} rear wheels too big`)
+		T.ok(#body.parts <= 60, `{id}: {#body.parts} parts is too many for an 8-kart grid`)
+	end
+	-- CPU grids show the realistic cars.
+	for n = 1, 8 do
+		T.ok(KartBodies.get(KartBodies.cpuLook(n).body).realistic, `cpu {n} body`)
+	end
 end)

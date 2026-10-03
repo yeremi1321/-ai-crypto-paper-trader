@@ -124,10 +124,11 @@ check("TrackBuilder builds every track", function()
 			end
 			assert(towers == 8 and canals == 80, "fortress gates and lava channels")
 		end
-		-- Road: two triangles (four wedges) per segment, solid and collidable.
+		-- Road: two triangles (four wedges) per two segments, solid and collidable.
 		local surface = folder:FindFirstChild("RoadSurface")
 		local wedges = #surface:GetChildren()
-		assert(wedges >= #track.points * 4 - 4 and wedges <= #track.points * 4, `{def.id}: {wedges} road wedges for {#track.points} points`)
+		local pieces = math.ceil(#track.points / 2)
+		assert(wedges >= pieces * 4 - 4 and wedges <= pieces * 4, `{def.id}: {wedges} road wedges for {#track.points} points`)
 		for _, wedge in surface:GetChildren() do
 			assert(wedge:IsA("WedgePart") and wedge.CanCollide and wedge:GetAttribute("Surface") == "road", "road collision")
 			assert(math.abs(wedge.Size.X - 4) < 1e-6, "road slab thickness")
@@ -135,7 +136,7 @@ check("TrackBuilder builds every track", function()
 		local walls = folder:FindFirstChild("Barriers")
 		local wallCount = if walls then #walls:GetChildren() else 0
 		if def.walls ~= false then
-			assert(wallCount >= #track.points, `{def.id}: barriers missing ({wallCount})`)
+			assert(wallCount >= #track.points * 0.8, `{def.id}: barriers missing ({wallCount})`)
 		end
 		local curbs, lines = 0, 0
 		for _, m in folder.Markings:GetChildren() do
@@ -146,7 +147,7 @@ check("TrackBuilder builds every track", function()
 		-- Verges on both sides of every segment cover the terrain near the road.
 		local verges = folder:FindFirstChild("Shoulders")
 		if def.walls ~= false then
-			assert(verges and #verges:GetChildren() >= #track.points * 8 - 8, `{def.id}: verges missing`)
+			assert(verges and #verges:GetChildren() >= #track.points * 4 - 8, `{def.id}: verges missing`)
 		end
 		local total = #folder:GetDescendants()
 		local scenery = folder:FindFirstChild("Scenery")

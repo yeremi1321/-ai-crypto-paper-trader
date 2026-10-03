@@ -5,8 +5,11 @@
 -- server/TerrainBuilder turns the plan into Roblox Terrain.
 --
 -- Each theme's `terrain` table (in Tracks.Themes) sets the materials and
--- counts. A track can also place its own lakes (`lakes = { { x, z, r } }`, in
--- the same units as its control points); the road may cross those on a bridge.
+-- counts. A track can also place its own lakes (`lakes = { { x, z, r } }`)
+-- and rivers (`rivers = { { r, points = { { x, z }, ... } } }`), in the same
+-- units as its control points; the road may cross those on a bridge. A
+-- river is a chain of overlapping round pools, which gives it natural,
+-- wavy banks.
 -- Placement is seeded by the track id, so every server builds the same land.
 
 local RoadGeometry = require("./RoadGeometry")
@@ -127,7 +130,22 @@ function Landscape.plan(track: Track.Built): Plan?
 
 	-- Lakes the track asks for (the road may bridge them), then random ones.
 	local scale = def.scale or 1
-	for _, l in (def :: any).lakes or {} do
+	local ownLakes = table.clone((def :: any).lakes or {})
+	for _, river in (def :: any).rivers or {} do
+		local pts = river.points
+		for k = 1, #pts - 1 do
+			local ax, az, bx, bz = pts[k][1], pts[k][2], pts[k + 1][1], pts[k + 1][2]
+			local length = math.sqrt((bx - ax) ^ 2 + (bz - az) ^ 2)
+			local steps = math.max(1, math.ceil(length / (river.r * 0.9)))
+			for step = 0, steps - (if k < #pts - 1 then 1 else 0) do
+				local f = step / steps
+				-- Alternate the width a little so the banks aren't ruler-straight.
+				local wobble = 1 + 0.18 * math.sin((k * 7 + step) * 1.7)
+				table.insert(ownLakes, { x = ax + (bx - ax) * f, z = az + (bz - az) * f, r = river.r * wobble })
+			end
+		end
+	end
+	for _, l in ownLakes do
 		table.insert(plan.lakes, {
 			x = l.x * scale,
 			z = l.z * scale,
@@ -218,6 +236,16 @@ function Landscape.plan(track: Track.Built): Plan?
 		end
 	end
 
+	-- Earth under shortcut paths, so a shortcut across a valley sits on a
+	-- ridge instead of floating.
+	for _, sc in def.shortcuts or {} do
+		local a, b = Track.shortcutEnds(track, sc)
+		local top = math.min(a.y, b.y) - drop
+		if top > groundTop + 0.5 then
+			table.insert(plan.banks, { ax = a.x, ay = a.y - drop, az = a.z, bx = b.x, by = b.y - drop, bz = b.z, width = sc.width + 12, depth = top - groundTop + 6 })
+		end
+	end
+
 	-- Rolling hills, clear of the road and its banks.
 	local hillRule = spec.hills
 	if hillRule then
@@ -255,9 +283,19 @@ function Landscape.plan(track: Track.Built): Plan?
 	end
 
 	-- Distant mountains in a ring: a main mass, two shoulders, a peak and a cap.
-	local mountainRule = spec.mountains
+	-- An optional `outer` ring sits further out: bigger, hazier peaks behind.
 	local reach = extent + 200
-	if mountainRule then
+	local rings = {}
+	if spec.mountains then
+		table.insert(rings, spec.mountains)
+		if spec.mountains.outer then
+			local outer = table.clone(spec.mountains.outer)
+			outer.material = outer.material or spec.mountains.material
+			outer.cap = if outer.cap ~= nil then outer.cap else spec.mountains.cap
+			table.insert(rings, outer)
+		end
+	end
+	for _, mountainRule in rings do
 		local count = mountainRule.count
 		for k = 0, count - 1 do
 			local r = mountainRule.min + random() * (mountainRule.max - mountainRule.min)

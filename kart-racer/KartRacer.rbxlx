@@ -79,6 +79,11 @@ function Atmos.applyTheme(theme: any, seconds: number?)
 	Lighting.EnvironmentDiffuseScale = if theme.realistic then 1 else 0.5
 	Lighting.EnvironmentSpecularScale = if theme.realistic then 1 else 0.5
 	Lighting.ShadowSoftness = if theme.realistic then 0.15 else 0.2
+	-- Roblox's realistic lighting style for the realistic themes (stronger
+	-- sky light and shading); the toy worlds keep the softer style.
+	pcall(function()
+		(Lighting :: any).LightingStyle = if theme.realistic then Enum.LightingStyle.Realistic else Enum.LightingStyle.Soft
+	end)
 	tween(Lighting, fade, {
 		Brightness = theme.brightness,
 		Ambient = rgb(theme.ambient),
@@ -228,20 +233,22 @@ local function rgb(c: { number }): Color3
 	return Color3.fromRGB(c[1], c[2], c[3])
 end
 
--- Colour and material for each body part role.
-local function roleStyle(role: string, main: Color3, accent: Color3): (Color3, Enum.Material, number)
+-- Colour, material, transparency and default reflectance for each body
+-- part role. Realistic bodies get a clear-coat gloss on the paint, polished
+-- chrome and darker, matte trim; cartoon bodies stay smooth and flat.
+local function roleStyle(role: string, main: Color3, accent: Color3, realistic: boolean?): (Color3, Enum.Material, number, number)
 	if role == "main" then
-		return main, Enum.Material.SmoothPlastic, 0
+		return main, Enum.Material.SmoothPlastic, 0, if realistic then 0.12 else 0
 	elseif role == "accent" then
-		return accent, Enum.Material.SmoothPlastic, 0
+		return accent, Enum.Material.SmoothPlastic, 0, if realistic then 0.1 else 0
 	elseif role == "glass" then
-		return Color3.fromRGB(150, 210, 255), Enum.Material.Glass, 0.45
+		return if realistic then Color3.fromRGB(70, 90, 105) else Color3.fromRGB(150, 210, 255), Enum.Material.Glass, if realistic then 0.35 else 0.45, if realistic then 0.2 else 0
 	elseif role == "chrome" then
-		return Color3.fromRGB(205, 210, 220), Enum.Material.Metal, 0
+		return Color3.fromRGB(205, 210, 220), Enum.Material.Metal, 0, if realistic then 0.35 else 0
 	elseif role == "light" then
-		return Color3.fromRGB(255, 250, 220), Enum.Material.Neon, 0
+		return Color3.fromRGB(255, 250, 220), Enum.Material.Neon, 0, 0
 	end
-	return Color3.fromRGB(35, 35, 40), Enum.Material.SmoothPlastic, 0
+	return if realistic then Color3.fromRGB(28, 28, 32) else Color3.fromRGB(35, 35, 40), if realistic then Enum.Material.Plastic else Enum.Material.SmoothPlastic, 0, 0
 end
 
 -- `cf` is where the kart should sit on the road (position on the surface).
@@ -305,7 +312,7 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	motor("BodyJoint", root, bodyRoot, drop)
 
 	for i, part in body.parts do
-		local color, material, transparency = roleStyle(part.role, main, accent)
+		local color, material, transparency, reflectance = roleStyle(part.role, main, accent, body.realistic)
 		if part.color then
 			color = Color3.fromRGB(part.color[1], part.color[2], part.color[3])
 		end
@@ -318,7 +325,7 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 			* CFrame.Angles(math.rad(rot[1]), math.rad(rot[2]), math.rad(rot[3]))
 		local p = visual(model, root, `Body{i}`, Vector3.new(part.size[1], part.size[2], part.size[3]), drop * localCf, color, material, part.shape, bodyRoot)
 		p.Transparency = transparency
-		p.Reflectance = part.reflectance or 0
+		p.Reflectance = part.reflectance or reflectance
 
 		if part.anim then
 			-- Swap the weld for a Motor6D so the client can animate this part.
@@ -398,24 +405,26 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	-- Wheel style (cosmetic): scales the body's own wheels.
 	local wheelStyle = Cosmetics.find("wheels", (chosen :: any).wheels) or Cosmetics.Wheels[1]
 	local wheelRadius = body.wheelRadius * wheelStyle.radius
-	local wheelWidth = body.wheelWidth * wheelStyle.width
 	local tyreColor = Color3.fromRGB(wheelStyle.color[1], wheelStyle.color[2], wheelStyle.color[3])
-	local wheelY = wheelRadius - groundToBody
 	local rearZ = -math.huge
 	for _, w in body.wheels do
 		rearZ = math.max(rearZ, w[2])
 	end
 	for i, w in body.wheels do
-		local name = if w[2] >= rearZ then (if w[1] < 0 then "WheelRL" else "WheelRR") else `Wheel{i}`
-		local d = wheelRadius * 2
-		local wheelCf = drop * CFrame.new(w[1], wheelY, w[2])
+		local rear = w[2] >= rearZ
+		-- Rear wheels can be bigger (hot rods, dragsters); each sits on the road.
+		local radius = (if rear then body.rearWheelRadius or body.wheelRadius else body.wheelRadius) * wheelStyle.radius
+		local width = (if rear then body.rearWheelWidth or body.wheelWidth else body.wheelWidth) * wheelStyle.width
+		local name = if rear then (if w[1] < 0 then "WheelRL" else "WheelRR") else `Wheel{i}`
+		local d = radius * 2
+		local wheelCf = drop * CFrame.new(w[1], radius - groundToBody, w[2])
 		local wheel = Instance.new("Part")
 		wheel.Name = name
 		wheel.Shape = Enum.PartType.Cylinder
-		wheel.Size = Vector3.new(wheelWidth, d, d)
+		wheel.Size = Vector3.new(width, d, d)
 		wheel.CFrame = root.CFrame * wheelCf
 		wheel.Color = tyreColor
-		wheel.Material = Enum.Material.SmoothPlastic
+		wheel.Material = Enum.Material.Rubber
 		wheel.CanCollide = false
 		wheel.CanQuery = false
 		wheel.CanTouch = false
@@ -423,11 +432,22 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 		wheel.Parent = model
 		-- Wheels turn on their own joint: front ones steer, all of them spin.
 		local joint = motor("WheelJoint", root, wheel, wheelCf)
-		joint:SetAttribute("Front", w[2] < rearZ)
-		visual(model, root, `{name}Hub`, Vector3.new(wheelWidth + 0.06, d * 0.55, d * 0.55), wheelCf, accent, if wheelStyle.glow then Enum.Material.Neon else Enum.Material.SmoothPlastic, "Cylinder", wheel)
-		-- A spoke so you can see the wheel turning.
-		visual(model, root, `{name}Spoke`, Vector3.new(wheelWidth + 0.08, d * 0.5, d * 0.14), wheelCf, Color3.fromRGB(240, 240, 245), Enum.Material.SmoothPlastic, nil, wheel)
-		if w[2] >= rearZ then
+		joint:SetAttribute("Front", not rear)
+		-- Bigger wheels turn slower for the same road speed.
+		joint:SetAttribute("SpinScale", wheelRadius / radius)
+		if body.realistic and not wheelStyle.glow then
+			-- Polished rim with six spokes and a dark centre cap.
+			visual(model, root, `{name}Hub`, Vector3.new(width + 0.04, d * 0.62, d * 0.62), wheelCf, Color3.fromRGB(200, 204, 212), Enum.Material.Metal, "Cylinder", wheel).Reflectance = 0.3
+			for k = 0, 2 do
+				visual(model, root, `{name}Spoke`, Vector3.new(width + 0.08, d * 0.56, d * 0.09), wheelCf * CFrame.Angles(math.rad(k * 60), 0, 0), Color3.fromRGB(150, 154, 162), Enum.Material.Metal, nil, wheel)
+			end
+			visual(model, root, `{name}Cap`, Vector3.new(width + 0.12, d * 0.16, d * 0.16), wheelCf, Color3.fromRGB(35, 35, 40), Enum.Material.Metal, "Cylinder", wheel)
+		else
+			visual(model, root, `{name}Hub`, Vector3.new(width + 0.06, d * 0.55, d * 0.55), wheelCf, accent, if wheelStyle.glow then Enum.Material.Neon else Enum.Material.SmoothPlastic, "Cylinder", wheel)
+			-- A spoke so you can see the wheel turning.
+			visual(model, root, `{name}Spoke`, Vector3.new(width + 0.08, d * 0.5, d * 0.14), wheelCf, Color3.fromRGB(240, 240, 245), Enum.Material.SmoothPlastic, nil, wheel)
+		end
+		if rear then
 			local sparks = Instance.new("ParticleEmitter")
 			sparks.Name = "DriftSparks"
 			sparks.Texture = "rbxasset://textures/particles/sparkles_main.dds"
@@ -1094,7 +1114,8 @@ export type BodyPart = {
 	reflectance: number?,
 	-- Animated parts (client/KartVisuals): "blink" eyelids, "toast" pops up
 	-- when boosting, "flap" wings, "flutter" laces, "claw" snips, "wobble"
-	-- jelly, "rattle" lid, "orbit" lights circling the kart.
+	-- jelly, "rattle" lid, "orbit" lights circling the kart, "engine" an
+	-- exposed motor's rumble (harder on the throttle).
 	anim: string?,
 	text: string?, -- marker drawing on both sides of this part
 	bubbles: boolean?, -- this part blows bubbles
@@ -1107,6 +1128,12 @@ export type Body = {
 	price: number?, -- coins to unlock (0 or nil = free)
 	wheelRadius: number,
 	wheelWidth: number,
+	-- Bigger rear wheels (dragsters, hot rods). Default: same as the front.
+	rearWheelRadius: number?,
+	rearWheelWidth: number?,
+	-- Realistic finish: glossy paint, polished chrome, rubber tyres on
+	-- metal rims (KartRig). Cartoon bodies leave it off.
+	realistic: boolean?,
 	wheels: { { number } }, -- x, z of each wheel; the two with the largest z are rear wheels
 	seat: { number }, -- where the driver sits
 	exhaust: { number },
@@ -1543,6 +1570,236 @@ for index, design in racingBodies do
   seat = { 0, 0.55, 0.6 }, exhaust = { 0, 1.1, 4.1 }, parts = parts,
  })
 end
+
+---------------------------------------------------------------------------
+-- Big-motor cars: realistic paint, chrome and rubber, with exposed engines
+-- that rumble. Original designs, built from small helpers so each stays short.
+---------------------------------------------------------------------------
+local function P(parts: { BodyPart }, size: { number }, offset: { number }, role: any, shape: any?, extra: { [string]: any }?)
+	local part: any = { size = size, offset = offset, role = role, shape = shape }
+	for k, v in extra or {} do
+		part[k] = v
+	end
+	table.insert(parts, part)
+end
+
+local GLOSS = { reflectance = 0.12 }
+local RED_LIGHT = { color = { 255, 40, 30 } }
+
+-- An exposed V8: block, chrome valve covers, a supercharger with its belt
+-- pulley, eight velocity stacks (or a scoop) and four-into-one headers.
+-- The blower and stacks rumble.
+type EngineOptions = { stacks: boolean?, headers: boolean?, length: number? }
+local function v8(parts: { BodyPart }, x: number, y: number, z: number, options: EngineOptions?)
+	local o: EngineOptions = options or {}
+	local L = o.length or 2.4
+	P(parts, { 1.8, 1, L }, { x, y, z }, "accent", nil, { material = "Metal", reflectance = 0.1 })
+	for _, side in { -1, 1 } do
+		P(parts, { 0.7, 0.45, L - 0.2 }, { x + side * 0.75, y + 0.6, z }, "chrome", nil, { rotation = { 0, 0, side * -25 } })
+	end
+	P(parts, { 1.3, 0.75, L * 0.65 }, { x, y + 1.05, z }, "chrome", nil, { anim = "engine" })
+	P(parts, { 0.5, 0.9, 0.9 }, { x, y + 0.95, z - L / 2 - 0.1 }, "dark", "Cylinder", { rotation = { 0, 90, 0 } })
+	if o.stacks ~= false then
+		for k = 0, 3 do
+			for _, side in { -1, 1 } do
+				P(parts, { 0.75, 0.34, 0.34 }, { x + side * 0.32, y + 1.75, z - L * 0.25 + k * L * 0.17 }, "chrome", "Cylinder", { rotation = { 0, 0, 90 }, anim = "engine" })
+			end
+		end
+	else
+		P(parts, { 1.2, 0.6, 1.1 }, { x, y + 1.7, z }, "dark", nil, { anim = "engine" })
+	end
+	if o.headers ~= false then
+		for _, side in { -1, 1 } do
+			for k = 0, 3 do
+				P(parts, { 1.3, 0.24, 0.24 }, { x + side * 1.35, y - 0.05, z - L * 0.35 + k * L * 0.23 }, "chrome", "Cylinder", { rotation = { 0, 0, side * -40 } })
+			end
+		end
+	end
+end
+
+local bigMotor: { Body } = {}
+
+do -- Blower Rod: an open hot rod, supercharged V8 out front, fat rear tyres.
+	local parts: { BodyPart } = {}
+	for _, side in { -1, 1 } do
+		P(parts, { 0.35, 0.4, 8.6 }, { side * 1.05, -0.15, -0.3 }, "dark")
+	end
+	P(parts, { 4.4, 0.28, 0.28 }, { 0, -0.2, -3.7 }, "dark", "Cylinder")
+	P(parts, { 3.2, 1.5, 3.4 }, { 0, 0.55, 1.5 }, "main", "Ellipsoid", GLOSS)
+	P(parts, { 3.4, 0.35, 3.6 }, { 0, 1.2, 1.5 }, "accent", "Ellipsoid")
+	for _, side in { -1, 1 } do
+		P(parts, { 1.5, 1.1, 3.2 }, { side * 2.55, 1.3, 2.6 }, "main", "Ellipsoid", GLOSS)
+	end
+	P(parts, { 2.2, 2, 0.5 }, { 0, 0.75, -4.3 }, "chrome")
+	P(parts, { 1.8, 1.6, 0.2 }, { 0, 0.75, -4.6 }, "dark")
+	for k = -3, 3 do
+		P(parts, { 0.1, 1.5, 0.25 }, { k * 0.22, 0.75, -4.62 }, "chrome")
+	end
+	v8(parts, 0, 0.35, -2.1)
+	P(parts, { 2.6, 1, 0.12 }, { 0, 1.9, 0.1 }, "glass", nil, { rotation = { -15, 0, 0 } })
+	P(parts, { 2.8, 0.15, 0.2 }, { 0, 2.45, 0.25 }, "chrome")
+	for _, side in { -1, 1 } do
+		P(parts, { 0.18, 0.9, 0.18 }, { side * 1.45, 0.6, -3.9 }, "chrome")
+		P(parts, { 0.4, 0.8, 0.8 }, { side * 1.45, 1.2, -3.95 }, "chrome", "Cylinder", { rotation = { 0, 90, 0 } })
+		P(parts, { 0.06, 0.65, 0.65 }, { side * 1.45, 1.2, -4.38 }, "light", "Cylinder", { rotation = { 0, 90, 0 } })
+		P(parts, { 0.5, 0.35, 0.12 }, { side * 2.55, 1.2, 4.25 }, "light", nil, RED_LIGHT)
+	end
+	table.insert(bigMotor, {
+		id = "blowerrod", name = "Blower Rod", icon = "🔥", price = 0, realistic = true,
+		wheelRadius = 0.75, wheelWidth = 0.8, rearWheelRadius = 1.3, rearWheelWidth = 1.9,
+		wheels = { { -2.3, -3.7 }, { 2.3, -3.7 }, { -2.55, 2.6 }, { 2.55, 2.6 } },
+		seat = { 0, 0.35, 1.6 }, exhaust = { 0, 0, 4.3 }, parts = parts,
+	})
+end
+
+do -- Thunder Muscle: a wide convertible muscle car, blower through the hood.
+	local parts: { BodyPart } = {}
+	P(parts, { 4.2, 1.1, 8.8 }, { 0, 0.25, 0 }, "main", nil, GLOSS)
+	P(parts, { 4.2, 0.9, 1.6 }, { 0, 0.15, -4.3 }, "main", "Ellipsoid", GLOSS)
+	P(parts, { 4.2, 0.9, 1.4 }, { 0, 0.2, 4.3 }, "main", "Ellipsoid", GLOSS)
+	for _, side in { -1, 1 } do
+		P(parts, { 0.55, 0.06, 8.8 }, { side * 0.45, 0.82, 0 }, "accent")
+		for _, z in { -2.9, 2.8 } do
+			P(parts, { 0.9, 0.9, 2.8 }, { side * 2.3, 0.6, z }, "main", "Ellipsoid", GLOSS)
+		end
+		P(parts, { 5.2, 0.42, 0.42 }, { side * 2.25, -0.4, 0 }, "chrome", "Cylinder", { rotation = { 0, 90, 0 } })
+		P(parts, { 1.4, 0.3, 0.1 }, { side * 1.3, 0.45, 4.98 }, "light", nil, RED_LIGHT)
+		for k = 0, 1 do
+			P(parts, { 0.12, 0.45, 0.45 }, { side * (1.2 + k * 0.6), 0.35, -5.05 }, "light", "Cylinder", { rotation = { 0, 90, 0 } })
+		end
+		P(parts, { 0.2, 0.6, 0.2 }, { side * 1.8, 1.05, 4.2 }, "dark")
+	end
+	P(parts, { 3.4, 0.3, 2.6 }, { 0, 0.85, 1.2 }, "dark")
+	P(parts, { 3.8, 1, 0.12 }, { 0, 1.35, -0.3 }, "glass", nil, { rotation = { -25, 0, 0 } })
+	P(parts, { 3.9, 0.12, 0.2 }, { 0, 1.85, -0.1 }, "chrome")
+	P(parts, { 2.2, 0.35, 3.4 }, { 0, 0.9, -2.4 }, "main", "Ellipsoid", GLOSS)
+	v8(parts, 0, 0, -2.5, { headers = false })
+	P(parts, { 4.2, 0.2, 0.9 }, { 0, 1.35, 4.2 }, "accent")
+	P(parts, { 3.4, 0.6, 0.15 }, { 0, 0.25, -5.0 }, "dark")
+	P(parts, { 4.4, 0.25, 0.3 }, { 0, -0.25, -5.05 }, "chrome")
+	P(parts, { 4.4, 0.25, 0.3 }, { 0, -0.15, 5.0 }, "chrome")
+	table.insert(bigMotor, {
+		id = "thunder", name = "Thunder Muscle", icon = "⚡", price = 300, realistic = true,
+		wheelRadius = 0.95, wheelWidth = 1.3, rearWheelRadius = 1.1, rearWheelWidth = 1.7,
+		wheels = { { -2.45, -2.9 }, { 2.45, -2.9 }, { -2.45, 2.8 }, { 2.45, 2.8 } },
+		seat = { 0, 0.3, 1.3 }, exhaust = { 0, -0.2, 5.1 }, parts = parts,
+	})
+end
+
+do -- Twin-Turbo Dragster: long nose, tiny front wheels, huge slicks, a wing.
+	local parts: { BodyPart } = {}
+	for _, side in { -1, 1 } do
+		P(parts, { 0.25, 0.25, 10.5 }, { side * 0.6, -0.1, -1.6 }, "dark")
+	end
+	P(parts, { 1.4, 0.9, 5 }, { 0, 0.15, -4.3 }, "main", "Ellipsoid", { reflectance = 0.15 })
+	P(parts, { 1, 0.5, 1.6 }, { 0, 0.2, -6.9 }, "accent", "Ellipsoid")
+	P(parts, { 2.6, 0.12, 0.6 }, { 0, -0.1, -6.9 }, "accent")
+	P(parts, { 2, 1.2, 2.4 }, { 0, 0.5, -0.6 }, "main", "Ellipsoid", { reflectance = 0.15 })
+	P(parts, { 1.8, 0.18, 0.18 }, { 0, 2.6, 0.2 }, "chrome")
+	P(parts, { 2.2, 1, 2 }, { 0, 0.3, 3.3 }, "main", "Ellipsoid", GLOSS)
+	v8(parts, 0, 0.4, 1.9, { headers = false })
+	for _, side in { -1, 1 } do
+		P(parts, { 0.18, 2, 0.18 }, { side * 0.8, 1.6, 0.2 }, "chrome")
+		P(parts, { 0.9, 1.1, 1.1 }, { side * 1.45, 1.3, 1.6 }, "chrome", "Cylinder", { rotation = { 0, 90, 0 } })
+		P(parts, { 0.1, 0.75, 0.75 }, { side * 1.45, 1.3, 1.03 }, "dark", "Cylinder", { rotation = { 0, 90, 0 } })
+		for k = 0, 1 do
+			P(parts, { 1.4, 0.3, 0.3 }, { side * 1.3, 1.1, 2.2 + k * 0.6 }, "chrome", "Cylinder", { rotation = { 0, 0, side * 35 } })
+		end
+		P(parts, { 0.15, 1.1, 1.7 }, { side * 2.7, 4.1, 3.9 }, "accent")
+		P(parts, { 0.2, 3.2, 0.2 }, { side * 1, 2.7, 3.6 }, "dark")
+	end
+	P(parts, { 5.4, 0.25, 1.8 }, { 0, 4.3, 3.9 }, "accent", nil, { rotation = { -8, 0, 0 } })
+	table.insert(bigMotor, {
+		id = "dragster", name = "Twin-Turbo Dragster", icon = "🚀", price = 500, realistic = true,
+		wheelRadius = 0.6, wheelWidth = 0.6, rearWheelRadius = 1.55, rearWheelWidth = 2.3,
+		wheels = { { -1.5, -6.2 }, { 1.5, -6.2 }, { -2.65, 2.9 }, { 2.65, 2.9 } },
+		seat = { 0, 0.15, -0.4 }, exhaust = { 0, 1.6, 3.4 }, parts = parts,
+	})
+end
+
+do -- Dune Hauler: a long-travel trophy truck with a roll cage and light bar.
+	local parts: { BodyPart } = {}
+	P(parts, { 4.2, 1.1, 7.2 }, { 0, 0.9, -0.2 }, "main", nil, GLOSS)
+	P(parts, { 4.2, 0.9, 1.4 }, { 0, 0.8, -3.9 }, "main", "Ellipsoid", GLOSS)
+	P(parts, { 4.4, 0.3, 0.5 }, { 0, 0.2, -4.4 }, "chrome")
+	v8(parts, 0, 1.1, -2.2, { headers = false })
+	for _, side in { -1, 1 } do
+		for _, z in { -0.4, 1.6 } do
+			P(parts, { 0.2, 2.2, 0.2 }, { side * 1.6, 2.5, z }, "chrome")
+		end
+		P(parts, { 0.2, 0.2, 2.2 }, { side * 1.6, 3.6, 0.6 }, "chrome")
+		for _, z in { -2.7, 2.8 } do
+			P(parts, { 1.1, 0.45, 3 }, { side * 2.4, 1.65, z }, "accent", "Ellipsoid")
+			P(parts, { 1.8, 0.3, 0.3 }, { side * 1.7, 1.3, z }, "chrome", "Cylinder", { rotation = { 0, 0, side * -50 } })
+		end
+		P(parts, { 0.4, 0.8, 0.1 }, { side * 1.6, 1.0, 3.45 }, "light", nil, RED_LIGHT)
+	end
+	for _, z in { -0.4, 1.6 } do
+		P(parts, { 3.4, 0.2, 0.2 }, { 0, 3.6, z }, "chrome")
+	end
+	P(parts, { 3, 0.4, 0.4 }, { 0, 3.85, -0.45 }, "dark")
+	for k = -3, 3, 2 do
+		P(parts, { 0.12, 0.3, 0.3 }, { k * 0.4, 3.85, -0.7 }, "light", "Cylinder", { rotation = { 0, 90, 0 } })
+	end
+	P(parts, { 3.8, 0.5, 2.6 }, { 0, 1.6, 2.7 }, "dark")
+	P(parts, { 0.9, 1.8, 1.8 }, { 0, 2.3, 2.7 }, "dark", "Cylinder", { rotation = { 0, 0, 90 }, material = "Rubber" })
+	table.insert(bigMotor, {
+		id = "dunehauler", name = "Dune Hauler", icon = "🛻", price = 300, realistic = true,
+		wheelRadius = 1.2, wheelWidth = 1.5,
+		wheels = { { -2.6, -2.7 }, { 2.6, -2.7 }, { -2.6, 2.8 }, { 2.6, 2.8 } },
+		seat = { 0, 0.9, 0.6 }, exhaust = { 0, 0.8, 4 }, parts = parts,
+	})
+end
+
+do -- Midnight V12: a low mid-engine speedster, the V12 under a glass cover.
+	local parts: { BodyPart } = {}
+	P(parts, { 4.4, 0.8, 8.4 }, { 0, 0.05, 0 }, "main", "Ellipsoid", { reflectance = 0.18 })
+	P(parts, { 4.2, 0.7, 3.2 }, { 0, 0.35, -2.6 }, "main", "Wedge", { reflectance = 0.18 })
+	P(parts, { 2.8, 0.4, 2.2 }, { 0, 0.5, 0 }, "dark")
+	P(parts, { 3, 0.6, 0.1 }, { 0, 0.95, -1 }, "glass", nil, { rotation = { -35, 0, 0 } })
+	P(parts, { 2.2, 0.7, 2.6 }, { 0, 0.6, 2.4 }, "accent", nil, { material = "Metal", reflectance = 0.1 })
+	for k = 0, 5 do
+		for _, side in { -1, 1 } do
+			P(parts, { 0.5, 0.26, 0.26 }, { side * 0.5, 1.05, 1.4 + k * 0.4 }, "chrome", "Cylinder", { rotation = { 0, 0, 90 }, anim = "engine" })
+		end
+	end
+	P(parts, { 3, 0.15, 3 }, { 0, 1.3, 2.4 }, "glass", nil, { transparency = 0.5 })
+	for _, side in { -1, 1 } do
+		P(parts, { 0.3, 0.6, 1.6 }, { side * 2.15, 0.4, 1.2 }, "dark")
+		P(parts, { 1, 0.15, 0.1 }, { side * 1.4, 0.35, -4.15 }, "light")
+		P(parts, { 0.2, 0.7, 0.2 }, { side * 1.6, 1.05, 3.9 }, "dark")
+		for k = 0, 1 do
+			P(parts, { 0.5, 0.35, 0.35 }, { side * (0.35 + k * 0.5), -0.1, 4.2 }, "chrome", "Cylinder", { rotation = { 0, 90, 0 } })
+		end
+	end
+	P(parts, { 3.6, 0.12, 0.1 }, { 0, 0.55, 4.2 }, "light", nil, RED_LIGHT)
+	P(parts, { 4.2, 0.15, 0.8 }, { 0, 1.4, 4 }, "accent")
+	table.insert(bigMotor, {
+		id = "v12", name = "Midnight V12", icon = "🌙", price = 600, realistic = true,
+		wheelRadius = 0.9, wheelWidth = 1.2, rearWheelRadius = 1, rearWheelWidth = 1.6,
+		wheels = { { -2.3, -2.7 }, { 2.3, -2.7 }, { -2.35, 2.6 }, { 2.35, 2.6 } },
+		seat = { 0, -0.1, 0.2 }, exhaust = { 0, 0, 4.4 }, parts = parts,
+	})
+end
+
+for _, body in bigMotor do
+	table.insert(KartBodies.List, body)
+end
+-- The racing-style bodies get the realistic finish too.
+for _, body in KartBodies.List do
+	if table.find({ "embergt", "arrowsprint", "rallycomet", "racer", "buggy", "muscle", "formula" }, body.id) then
+		body.realistic = true
+	end
+end
+
+-- CPU drivers race the realistic cars so every grid shows them off.
+KartBodies.CpuBodies = {}
+for _, body in KartBodies.List do
+	if body.realistic then
+		table.insert(KartBodies.CpuBodies, body.id)
+	end
+end
+
 -- Give the familiar starter body the same visible exhaust detail.
 local starter = nil
 for _, body in KartBodies.List do if body.id == "classic" then starter = body end end
@@ -1582,7 +1839,8 @@ end
 
 -- A varied look for CPU driver number n (the same every race).
 function KartBodies.cpuLook(n: number): Look
-	local body = KartBodies.List[(n - 1) % #KartBodies.List + 1].id
+	local pool = KartBodies.CpuBodies
+	local body = pool[(n * 5 - 1) % #pool + 1]
 	local main = (n * 5) % #KartBodies.Palette + 1
 	local accent = (n * 7 + 4) % #KartBodies.Palette + 1
 	if accent == main then
@@ -1973,8 +2231,11 @@ return Karts
 -- server/TerrainBuilder turns the plan into Roblox Terrain.
 --
 -- Each theme's `terrain` table (in Tracks.Themes) sets the materials and
--- counts. A track can also place its own lakes (`lakes = { { x, z, r } }`, in
--- the same units as its control points); the road may cross those on a bridge.
+-- counts. A track can also place its own lakes (`lakes = { { x, z, r } }`)
+-- and rivers (`rivers = { { r, points = { { x, z }, ... } } }`), in the same
+-- units as its control points; the road may cross those on a bridge. A
+-- river is a chain of overlapping round pools, which gives it natural,
+-- wavy banks.
 -- Placement is seeded by the track id, so every server builds the same land.
 
 local RoadGeometry = require("./RoadGeometry")
@@ -2095,7 +2356,22 @@ function Landscape.plan(track: Track.Built): Plan?
 
 	-- Lakes the track asks for (the road may bridge them), then random ones.
 	local scale = def.scale or 1
-	for _, l in (def :: any).lakes or {} do
+	local ownLakes = table.clone((def :: any).lakes or {})
+	for _, river in (def :: any).rivers or {} do
+		local pts = river.points
+		for k = 1, #pts - 1 do
+			local ax, az, bx, bz = pts[k][1], pts[k][2], pts[k + 1][1], pts[k + 1][2]
+			local length = math.sqrt((bx - ax) ^ 2 + (bz - az) ^ 2)
+			local steps = math.max(1, math.ceil(length / (river.r * 0.9)))
+			for step = 0, steps - (if k < #pts - 1 then 1 else 0) do
+				local f = step / steps
+				-- Alternate the width a little so the banks aren't ruler-straight.
+				local wobble = 1 + 0.18 * math.sin((k * 7 + step) * 1.7)
+				table.insert(ownLakes, { x = ax + (bx - ax) * f, z = az + (bz - az) * f, r = river.r * wobble })
+			end
+		end
+	end
+	for _, l in ownLakes do
 		table.insert(plan.lakes, {
 			x = l.x * scale,
 			z = l.z * scale,
@@ -2186,6 +2462,16 @@ function Landscape.plan(track: Track.Built): Plan?
 		end
 	end
 
+	-- Earth under shortcut paths, so a shortcut across a valley sits on a
+	-- ridge instead of floating.
+	for _, sc in def.shortcuts or {} do
+		local a, b = Track.shortcutEnds(track, sc)
+		local top = math.min(a.y, b.y) - drop
+		if top > groundTop + 0.5 then
+			table.insert(plan.banks, { ax = a.x, ay = a.y - drop, az = a.z, bx = b.x, by = b.y - drop, bz = b.z, width = sc.width + 12, depth = top - groundTop + 6 })
+		end
+	end
+
 	-- Rolling hills, clear of the road and its banks.
 	local hillRule = spec.hills
 	if hillRule then
@@ -2223,9 +2509,19 @@ function Landscape.plan(track: Track.Built): Plan?
 	end
 
 	-- Distant mountains in a ring: a main mass, two shoulders, a peak and a cap.
-	local mountainRule = spec.mountains
+	-- An optional `outer` ring sits further out: bigger, hazier peaks behind.
 	local reach = extent + 200
-	if mountainRule then
+	local rings = {}
+	if spec.mountains then
+		table.insert(rings, spec.mountains)
+		if spec.mountains.outer then
+			local outer = table.clone(spec.mountains.outer)
+			outer.material = outer.material or spec.mountains.material
+			outer.cap = if outer.cap ~= nil then outer.cap else spec.mountains.cap
+			table.insert(rings, outer)
+		end
+	end
+	for _, mountainRule in rings do
 		local count = mountainRule.count
 		for k = 0, count - 1 do
 			local r = mountainRule.min + random() * (mountainRule.max - mountainRule.min)
@@ -3144,6 +3440,7 @@ Scenery.Themes = {
 	sunny = {
 		{ kind = "tree", count = 150, near = 12, far = 220, minSize = 0.8, maxSize = 1.5, radius = 8 },
 		{ kind = "pine", count = 60, near = 30, far = 260, minSize = 0.9, maxSize = 1.6, radius = 7 },
+		{ kind = "farTree", count = 200, near = 260, far = 650, minSize = 1, maxSize = 1.8, radius = 9 },
 		{ kind = "bush", count = 80, near = 6, far = 120, minSize = 0.7, maxSize = 1.3, radius = 4 },
 		{ kind = "billboard", count = 8, near = 14, far = 30, minSize = 1, maxSize = 1, radius = 14 },
 		{ kind = "flag", count = 18, near = 4, far = 10, minSize = 1, maxSize = 1, radius = 3 },
@@ -3153,8 +3450,17 @@ Scenery.Themes = {
 		{ kind = "rock", count = 110, near = 8, far = 200, minSize = 0.6, maxSize = 1.8, radius = 9 },
 		{ kind = "cactus", count = 70, near = 8, far = 160, minSize = 0.8, maxSize = 1.4, radius = 4 },
 	},
+	-- farTree = a cheap two-part tree for the distant forest (Props.luau).
+	highland = {
+		{ kind = "tree", count = 170, near = 10, far = 240, minSize = 0.9, maxSize = 1.6, radius = 8 },
+		{ kind = "pine", count = 60, near = 20, far = 260, minSize = 0.9, maxSize = 1.6, radius = 7 },
+		{ kind = "rock", count = 40, near = 12, far = 200, minSize = 0.6, maxSize = 1.6, radius = 8 },
+		{ kind = "flag", count = 16, near = 4, far = 10, minSize = 1, maxSize = 1, radius = 3 },
+		{ kind = "farTree", count = 280, near = 260, far = 700, minSize = 1, maxSize = 1.8, radius = 9 },
+	},
 	alpine = {
 		{ kind = "pine", count = 240, near = 10, far = 260, minSize = 0.8, maxSize = 1.7, radius = 7 },
+		{ kind = "farTree", count = 220, near = 260, far = 650, minSize = 1, maxSize = 1.8, radius = 9 },
 		{ kind = "rock", count = 50, near = 12, far = 220, minSize = 0.6, maxSize = 1.6, radius = 8 },
 		{ kind = "flag", count = 14, near = 4, far = 10, minSize = 1, maxSize = 1, radius = 3 },
 	},
@@ -3367,6 +3673,8 @@ export type TrackDef = {
 	-- Lakes the road may cross on a bridge (realistic themes with terrain).
 	-- Same units as the control points: scaled by `scale`.
 	lakes: { { x: number, z: number, r: number } }?,
+	-- Rivers: a radius and a polyline of { x, z } points, same units.
+	rivers: { { r: number, points: { { number } } } }?,
 }
 
 export type Zone = { kind: string, t: number, length: number, offset: number?, width: number?, period: number?, duty: number? }
@@ -3778,7 +4086,7 @@ Tracks.Themes = {
 			drop = 3.5, -- terrain stays 3.5 studs under the road, hidden inside its 4-stud slab
 			hills = { count = 16, min = 50, max = 140, material = "LeafyGrass" },
 			lakes = { count = 2, min = 55, max = 120, shore = "Sand", liquid = "Water" },
-			mountains = { count = 10, min = 170, max = 280, ring = 520, material = "Rock", cap = "Snow" },
+			mountains = { count = 10, min = 170, max = 280, ring = 520, material = "Rock", cap = "Snow", outer = { count = 5, min = 240, max = 300, ring = 1100 } },
 			colors = { Grass = { 82, 124, 52 }, LeafyGrass = { 72, 110, 46 }, Rock = { 104, 100, 96 }, Sand = { 196, 180, 140 }, Snow = { 238, 242, 246 }, Ground = { 102, 88, 66 }, Mud = { 70, 58, 46 } },
 			water = { color = { 28, 74, 86 }, transparency = 0.35, reflectance = 0.6, waveSize = 0.1, waveSpeed = 7 },
 		},
@@ -3811,7 +4119,7 @@ Tracks.Themes = {
 			hills = { count = 10, min = 60, max = 150, material = "Sand" },
 			mesas = { count = 14, min = 50, max = 120, minHeight = 60, maxHeight = 150, material = "Sandstone", band = "Rock", ring = 420 },
 			lakes = { count = 1, min = 45, max = 70, shore = "Grass", liquid = "Water" },
-			mountains = { count = 8, min = 180, max = 280, ring = 650, material = "Sandstone" },
+			mountains = { count = 8, min = 180, max = 280, ring = 650, material = "Sandstone", outer = { count = 5, min = 220, max = 300, ring = 1200 } },
 			colors = { Sand = { 206, 164, 112 }, Sandstone = { 176, 108, 72 }, Rock = { 120, 82, 62 }, Grass = { 110, 128, 60 }, Mud = { 90, 70, 50 } },
 			water = { color = { 40, 90, 92 }, transparency = 0.35, reflectance = 0.5, waveSize = 0.08, waveSpeed = 6 },
 		},
@@ -3919,6 +4227,43 @@ Tracks.Themes = {
 		saturation = 0.02,
 		clouds = { cover = 0.45, density = 0.7 }, -- seen through the lobby window
 	},
+	-- Ridgeline Grand Prix: autumn highlands, a river valley and rocky tors,
+	-- with a second, hazier range of peaks far behind the first.
+	highland = {
+		realistic = true,
+		road = { 60, 61, 64 },
+		shoulder = { 104, 116, 58 },
+		shoulderMaterial = "Grass",
+		ground = { 104, 116, 58 },
+		wall = { 205, 204, 198 },
+		accent = { 255, 170, 40 },
+		curb = { { 196, 38, 34 }, { 236, 236, 232 } },
+		line = { 236, 236, 228 },
+		clock = 16.2,
+		ambient = { 104, 98, 96 },
+		brightness = 2.9,
+		atmosphere = { density = 0.32, haze = 1.5, glare = 0.6, color = { 230, 210, 185 }, decay = { 150, 120, 100 } },
+		bloom = 0.25,
+		tint = { 255, 246, 232 },
+		saturation = 0.08,
+		contrast = 0.12,
+		clouds = { cover = 0.5, density = 0.75 },
+		leaves = { { 196, 92, 36 }, { 214, 150, 40 }, { 160, 50, 36 }, { 120, 128, 50 }, { 226, 178, 70 } },
+		terrain = {
+			ground = "Grass",
+			bank = "Grass",
+			drop = 3.5,
+			hills = { count = 20, min = 60, max = 170, material = "LeafyGrass" },
+			mesas = { count = 10, min = 30, max = 60, minHeight = 25, maxHeight = 70, material = "Rock", ring = 300 },
+			lakes = { count = 1, min = 60, max = 100, shore = "Pebble", liquid = "Water" },
+			mountains = {
+				count = 10, min = 200, max = 300, ring = 520, material = "Rock", cap = "Snow",
+				outer = { count = 6, min = 240, max = 320, ring = 1150 },
+			},
+			colors = { Grass = { 104, 116, 58 }, LeafyGrass = { 116, 110, 52 }, Rock = { 110, 104, 98 }, Snow = { 238, 240, 244 }, Pebble = { 140, 132, 120 }, Mud = { 70, 58, 46 }, Ground = { 100, 86, 64 } },
+			water = { color = { 30, 70, 80 }, transparency = 0.35, reflectance = 0.6, waveSize = 0.1, waveSpeed = 8 },
+		},
+	},
 	-- Pinewater Pass: a mountain lake, pine forest and snowy peaks.
 	alpine = {
 		realistic = true,
@@ -3945,7 +4290,7 @@ Tracks.Themes = {
 			drop = 3.5, -- terrain stays 3.5 studs under the road, hidden inside its 4-stud slab
 			hills = { count = 18, min = 50, max = 150, material = "LeafyGrass" },
 			lakes = { count = 1, min = 60, max = 100, shore = "Ground", liquid = "Water" },
-			mountains = { count = 11, min = 200, max = 320, ring = 480, material = "Rock", cap = "Snow" },
+			mountains = { count = 11, min = 200, max = 320, ring = 480, material = "Rock", cap = "Snow", outer = { count = 5, min = 260, max = 320, ring = 1100 } },
 			colors = { Grass = { 74, 112, 52 }, LeafyGrass = { 60, 96, 44 }, Rock = { 98, 96, 94 }, Snow = { 240, 244, 248 }, Ground = { 96, 84, 64 }, Sand = { 170, 160, 130 }, Mud = { 62, 54, 44 } },
 			water = { color = { 22, 70, 92 }, transparency = 0.3, reflectance = 0.7, waveSize = 0.08, waveSpeed = 6 },
 		},
@@ -4001,6 +4346,54 @@ Tracks.List = {
 	},
 
 	{
+		id = "ridgeline",
+		name = "Ridgeline Grand Prix",
+		theme = "highland",
+		difficulty = "Hard",
+		feature = "A figure-eight overpass, a river bridge and three skill shortcuts",
+		icon = "🍂",
+		width = 58,
+		scale = 1.8,
+		laps = 2,
+		-- Opening straight, then the east loop climbs through S-bends and a
+		-- hairpin, crosses OVER the start straight, descends over the river and
+		-- finishes with the tight west loop.
+		controls = {
+			v(-300, 0, 200),
+			v(-150, 0, 150),
+			v(0, 0, 0),
+			v(150, 0, -150),
+			v(280, 4, -260),
+			v(430, 10, -280),
+			v(540, 14, -180),
+			v(520, 18, -40),
+			v(600, 20, 80),
+			v(540, 20, 200),
+			v(400, 20, 240),
+			v(260, 18, 180),
+			v(130, 16, 80),
+			v(0, 16, 0),
+			v(-130, 13, -100),
+			v(-260, 9, -180),
+			v(-400, 4, -200),
+			v(-520, 0, -120),
+			v(-560, 0, 20),
+			v(-500, 0, 140),
+			v(-400, 0, 230),
+		},
+		-- The river runs north-south and is crossed once, on a bridge.
+		rivers = { { r = 22, points = { { -330, -420 }, { -320, -200 }, { -345, 40 } } } },
+		boostPads = { { t = 0.06, offset = 0 }, { t = 0.5, offset = 0.3 }, { t = 0.88, offset = -0.3 } },
+		itemRows = { 0.2, 0.58 },
+		ramps = { { t = 0.85, offset = 0, width = 20 } },
+		-- Quarry cut (S-bends), ridge gap (hairpin), riverside dash (final corner).
+		shortcuts = {
+			{ from = 0.29, to = 0.34, side = 1, width = 16 },
+			{ from = 0.4, to = 0.44, side = 1, width = 16 },
+			{ from = 0.94, to = 0.98, side = -1, width = 16 },
+		},
+	},
+	{
 		id = "alpine",
 		name = "Pinewater Pass",
 		theme = "alpine",
@@ -4008,7 +4401,7 @@ Tracks.List = {
 		feature = "A long bridge over a mountain lake, pine forest and snowy peaks",
 		icon = "🏔️",
 		width = 54,
-		scale = 1.6,
+		scale = 1.9,
 		laps = 3,
 		controls = {
 			v(0, 0, 0),
@@ -4040,7 +4433,7 @@ Tracks.List = {
 		feature = "Wide, fast corners and a big crowd",
 		icon = "🌳",
 		width = 56,
-		scale = 1.6,
+		scale = 2,
 		laps = 3,
 		controls = {
 			v(0, 0, 0),
@@ -4070,7 +4463,7 @@ Tracks.List = {
 		feature = "Rolling hills under giant mesas",
 		icon = "🏜️",
 		width = 52,
-		scale = 1.6,
+		scale = 2,
 		laps = 3,
 		controls = {
 			v(0, 0, 0),
@@ -4261,7 +4654,7 @@ Tracks.List = {
 } :: { Track.TrackDef }
 
 -- Tracks that can come up in map voting.
-Tracks.VotePool = { "alpine", "emberfort", "toyroom", "kitchen", "backyard", "sunny", "canyon", "neon" }
+Tracks.VotePool = { "ridgeline", "alpine", "emberfort", "toyroom", "kitchen", "backyard", "sunny", "canyon", "neon" }
 
 -- A Grand Prix is every track in order (kept for a future cup mode).
 Tracks.Cup = { name = "Starter Cup", tracks = { "sunny", "canyon", "neon" } }
@@ -6461,7 +6854,10 @@ builders.tree = function(prop, theme, parent)
 			part(parent, Vector3.new(0.8, 6 * s, 0.8), base * CFrame.new(math.cos(a) * 1.6 * s, 11 * s, math.sin(a) * 1.6 * s) * CFrame.Angles(math.sin(a) * 0.6, 0, -math.cos(a) * 0.6), Color3.fromRGB(96, 70, 48), Enum.Material.Wood)
 		end
 	end
-	local leaf = vary(if theme.realistic then Color3.fromRGB(66, 104, 44) else Color3.fromRGB(70, 150, 60), 0.25, prop.x + prop.z)
+	-- A theme can list its own leaf colours (autumn reds and golds).
+	local leaves = theme.leaves
+	local tone = if leaves then rgb(leaves[math.floor(math.abs(prop.x * 7 + prop.z * 3)) % #leaves + 1]) elseif theme.realistic then Color3.fromRGB(66, 104, 44) else Color3.fromRGB(70, 150, 60)
+	local leaf = vary(tone, 0.25, prop.x + prop.z)
 	part(parent, Vector3.one * 12 * s, base * CFrame.new(0, 16 * s, 0), leaf, leafMaterial, Enum.PartType.Ball)
 	part(parent, Vector3.one * 8 * s, base * CFrame.new(3 * s, 13 * s, 1 * s), leaf, leafMaterial, Enum.PartType.Ball)
 	if theme.realistic then
@@ -6487,6 +6883,23 @@ builders.pine = function(prop, theme, parent)
 		mesh.Parent = p
 	end
 	part(parent, Vector3.new(1.2, 3 * s, 1.2), base * CFrame.new(0, 29 * s, 0), needles, mat(theme, Enum.Material.Grass))
+end
+
+-- A cheap tree for the distant forest: two parts, no shadow. From the road
+-- it reads as a dense treeline; up close it would look plain, so it is only
+-- placed far away (Scenery rule `farTree`).
+builders.farTree = function(prop, theme, parent)
+	local s = prop.size
+	local base = CFrame.new(prop.x, prop.y, prop.z)
+	local leaves = theme.leaves
+	local tone = if leaves and (math.floor(prop.x) % 3 ~= 0) then rgb(leaves[math.floor(math.abs(prop.z)) % #leaves + 1]) else Color3.fromRGB(40, 74, 46)
+	local trunk = part(parent, Vector3.new(1.4, 10 * s, 1.4), base * CFrame.new(0, 5 * s, 0), Color3.fromRGB(84, 62, 46), mat(theme, Enum.Material.Wood))
+	trunk.CastShadow = false
+	local crown = part(parent, Vector3.new(11 * s, 22 * s, 11 * s), base * CFrame.new(0, 17 * s, 0), vary(tone, 0.2, prop.x), mat(theme, Enum.Material.Grass))
+	crown.CastShadow = false
+	local mesh = Instance.new("SpecialMesh")
+	mesh.MeshType = Enum.MeshType.Sphere
+	mesh.Parent = crown
 end
 
 builders.bush = function(prop, theme, parent)
@@ -7562,8 +7975,9 @@ return RaceService
           <string name="Name">RoadSurface</string>
           <string name="Source"><![CDATA[-- Builds the road and everything alongside it from one set of frames
 -- (shared/RoadGeometry), so every piece meets the next exactly:
---   * road: a solid 2-stud slab built from triangles (two wedges each), so
---     curves and hills have no gaps, steps or overlapping, flickering slabs
+--   * road: a solid slab built from triangles (two wedges each), one piece
+--     per two segments, so curves and hills have no gaps, steps or
+--     overlapping, flickering slabs
 --   * verges: the same triangle strips either side, out past the barrier,
 --     grass (or the theme's material), gravel run-off on the outside of
 --     corners, and a concrete deck on bridges
@@ -7663,6 +8077,13 @@ local function chordBox(parent: Instance, a: Vector3, b: Vector3, width: number,
 	return p
 end
 
+-- Pieces span two segments; the last one stops at the start line, so with
+-- an odd number of points no two pieces ever overlap (overlapping coplanar
+-- pieces would flicker).
+local function pairEnd(i: number, n: number): number
+	return if i + 2 > n then 1 else i + 2
+end
+
 export type Options = {
 	theme: any,
 	walled: boolean,
@@ -7718,33 +8139,14 @@ function RoadSurface.build(track: any, frames: { any }, parent: Instance, opts: 
 	for i = 1, n do
 		local j = i % n + 1
 		local a, b = frames[i], frames[j]
-		local aL, aR = v3(RoadGeometry.edge(a, -half)), v3(RoadGeometry.edge(a, half))
-		local bL, bR = v3(RoadGeometry.edge(b, -half)), v3(RoadGeometry.edge(b, half))
-		triangle(surface, aL, aR, bL, th, road, "Road")
-		triangle(surface, aR, bR, bL, th, road, "Road")
-
-		-- Verges on both sides, out past the barrier, covering the terrain.
-		local plan = opts.plan
-		local onBridge = plan and not (plan.bankAt[i] and plan.bankAt[j])
-		if opts.walled then
-			local outer = half + sw + RoadSurface.VergeExtra
-			-- Turning right (turn > 0) puts the outside of the bend on the left.
-			local outside = if a.turn > 0 then -1 else 1
-			local corner = RoadGeometry.isCorner(a) and RoadGeometry.isCorner(b)
-			for _, side in { -1, 1 } do
-				local style = shoulder
-				if realistic and onBridge then
-					style = deck
-				elseif realistic and corner and side == outside then
-					style = gravel
-				end
-				local ai = v3(RoadGeometry.edge(a, side * half, -SHOULDER_DROP))
-				local ao = v3(RoadGeometry.edge(a, side * outer, -SHOULDER_DROP))
-				local bi = v3(RoadGeometry.edge(b, side * half, -SHOULDER_DROP))
-				local bo = v3(RoadGeometry.edge(b, side * outer, -SHOULDER_DROP))
-				triangle(verge, ai, ao, bi, th, style, "Shoulder")
-				triangle(verge, ao, bo, bi, th, style, "Shoulder")
-			end
+		-- The road slab spans two segments per piece, with the same corner
+		-- points as the verges, so the two always meet.
+		if i % 2 == 1 then
+			local c = frames[pairEnd(i, n)]
+			local aL, aR = v3(RoadGeometry.edge(a, -half)), v3(RoadGeometry.edge(a, half))
+			local cL, cR = v3(RoadGeometry.edge(c, -half)), v3(RoadGeometry.edge(c, half))
+			triangle(surface, aL, aR, cL, th, road, "Road")
+			triangle(surface, aR, cR, cL, th, road, "Road")
 		end
 
 		-- Curbs on corners (both sides), edge lines on straights.
@@ -7765,8 +8167,41 @@ function RoadSurface.build(track: any, frames: { any }, parent: Instance, opts: 
 		end
 	end
 
-	-- Barriers, one piece per segment, skipping shortcut gaps and the rare
-	-- inside-of-a-hairpin segment that would run backwards.
+	-- Verges on both sides, out past the barrier, covering the terrain. One
+	-- piece spans two segments (half the parts; on a 300-stud bend the chord
+	-- strays about 0.25 studs), and the inner edge tucks 1 stud under the
+	-- road so no gap can open at the road's edge.
+	if opts.walled then
+		local plan = opts.plan
+		local outer = half + sw + RoadSurface.VergeExtra
+		for i = 1, n, 2 do
+			local mid = i % n + 1
+			local j = pairEnd(i, n)
+			local a, b = frames[i], frames[j]
+			local onBridge = plan and not (plan.bankAt[i] and plan.bankAt[mid] and plan.bankAt[j])
+			-- Turning right (turn > 0) puts the outside of the bend on the left.
+			local outside = if a.turn > 0 then -1 else 1
+			local corner = RoadGeometry.isCorner(a) and RoadGeometry.isCorner(b)
+			for _, side in { -1, 1 } do
+				local style = shoulder
+				if realistic and onBridge then
+					style = deck
+				elseif realistic and corner and side == outside then
+					style = gravel
+				end
+				local ai = v3(RoadGeometry.edge(a, side * (half - 1), -SHOULDER_DROP))
+				local ao = v3(RoadGeometry.edge(a, side * outer, -SHOULDER_DROP))
+				local bi = v3(RoadGeometry.edge(b, side * (half - 1), -SHOULDER_DROP))
+				local bo = v3(RoadGeometry.edge(b, side * outer, -SHOULDER_DROP))
+				triangle(verge, ai, ao, bi, th, style, "Shoulder")
+				triangle(verge, ao, bo, bi, th, style, "Shoulder")
+			end
+		end
+	end
+
+	-- Barriers, one piece per two segments (like the verges), skipping
+	-- shortcut gaps and the rare inside-of-a-hairpin stretch that would run
+	-- backwards.
 	if opts.walled then
 		local wallAt = half + sw + 0.9
 		local folded = {}
@@ -7778,13 +8213,14 @@ function RoadSurface.build(track: any, frames: { any }, parent: Instance, opts: 
 		end
 		local wallColor = rgb(theme.wall)
 		local wallMaterial = theme.wallMaterial and Enum.Material[theme.wallMaterial] or (if neon then Enum.Material.Neon else Enum.Material.SmoothPlastic)
-		for i = 1, n do
-			local j = i % n + 1
+		for i = 1, n, 2 do
+			local j = pairEnd(i, n)
 			local a, b = frames[i], frames[j]
 			local segLen = (v3(b) - v3(a)).Magnitude
 			local distance = track.cum[i] + segLen / 2
 			for _, side in { -1, 1 } do
-				if not folded[side][i] and not opts.wallOpen(side, distance, segLen) then
+				local foldedHere = folded[side][i] or folded[side][i % n + 1]
+				if not foldedHere and not opts.wallOpen(side, distance, segLen) then
 					local p0 = v3(RoadGeometry.edge(a, side * wallAt))
 					local p1 = v3(RoadGeometry.edge(b, side * wallAt))
 					if realistic then
@@ -8868,17 +9304,21 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		local pa, pb = v3(sa), v3(sb)
 		local length = (pb - pa).Magnitude + sc.width
 		local scCf = CFrame.lookAt((pa + pb) / 2, pb)
-		local road = part(folder, "ShortcutRoad", Vector3.new(sc.width, 1, length), scCf * CFrame.new(0, -0.5, 0), roadColor:Lerp(rgb(theme.accent), 0.25), shortcutMaterial)
+		-- As thick as the main road, so terrain under it stays hidden.
+		local road = part(folder, "ShortcutRoad", Vector3.new(sc.width, 4, length), scCf * CFrame.new(0, -2, 0), roadColor:Lerp(rgb(theme.accent), 0.25), shortcutMaterial)
 		road:SetAttribute("Surface", sc.surface or "road")
 		-- Connect each end to the road edge across the grass shoulder.
 		for _, endpoint in { { at = sc.from, p = pa }, { at = sc.to, p = pb } } do
 			local edge = v3(Track.spot(track, endpoint.at * track.length, sc.side * half))
 			local link = (endpoint.p - edge)
-			part(folder, "ShortcutLink", Vector3.new(sc.width, 1, link.Magnitude + sc.width), CFrame.lookAt((edge + endpoint.p) / 2, endpoint.p) * CFrame.new(0, -0.49, 0), roadColor:Lerp(rgb(theme.accent), 0.25), shortcutMaterial)
+			part(folder, "ShortcutLink", Vector3.new(sc.width, 4, link.Magnitude + sc.width), CFrame.lookAt((edge + endpoint.p) / 2, endpoint.p) * CFrame.new(0, -1.99, 0), roadColor:Lerp(rgb(theme.accent), 0.25), shortcutMaterial)
 		end
-		-- Little arrows hint the way in.
+		-- Posts either side of the entry hint the way in (shortcut blue on
+		-- realistic tracks, the theme's glow elsewhere).
+		local postColor = if theme.realistic then Color3.fromRGB(60, 150, 255) else rgb(theme.accent)
+		local postMaterial = if theme.realistic then Enum.Material.SmoothPlastic else Enum.Material.Neon
 		for _, side in { -1, 1 } do
-			Shapes.box(folder, Vector3.new(0.8, 6, 0.8), scCf * CFrame.new(side * (sc.width / 2 + 1), 3, -length / 2 + 2), { color = rgb(theme.accent), material = Enum.Material.Neon })
+			Shapes.box(folder, Vector3.new(0.8, 6, 0.8), scCf * CFrame.new(side * (sc.width / 2 + 1), 3, -length / 2 + 2), { color = postColor, material = postMaterial })
 		end
 		if def.theme == "backyard" then
 			-- The shortcut runs through a hollow log.
@@ -10109,7 +10549,8 @@ local function animate(kart: Model, dt: number, t: number)
 		if joint:IsA("Motor6D") and joint.Name == "WheelJoint" then
 			local steer = if joint:GetAttribute("Front") then anim.steer else 0
 			-- Rolling forward (-z) turns the wheel's top toward the front.
-			joint.Transform = CFrame.Angles(0, -steer, 0) * CFrame.Angles(-anim.spin, 0, 0)
+			local spin = anim.spin * (joint:GetAttribute("SpinScale") or 1)
+			joint.Transform = CFrame.Angles(0, -steer, 0) * CFrame.Angles(-spin, 0, 0)
 		end
 	end
 
@@ -10142,6 +10583,10 @@ local function animate(kart: Model, dt: number, t: number)
 					cf = CFrame.new(0, math.sin(t * 9) * 0.05 * k, 0) * CFrame.Angles(math.sin(t * 7) * 0.05 * k, 0, math.cos(t * 6) * 0.05 * k)
 				elseif kind == "rattle" then
 					cf = CFrame.Angles(math.sin(t * 30 + anim.seed) * 0.06 * speedFrac - anim.squash * 0.4, 0, 0)
+				elseif kind == "engine" then
+					-- An exposed motor rumbles at idle and shakes harder on the throttle.
+					local k = 0.5 + math.clamp(accel / 40, 0, 1) * 0.8 + speedFrac * 0.3
+					cf = CFrame.new(0, math.sin(t * 47 + anim.seed) * 0.03 * k, 0) * CFrame.Angles(0, 0, math.sin(t * 39 + anim.seed) * 0.015 * k)
 				elseif kind == "orbit" then
 					cf = CFrame.Angles(0, t * 2.5, 0)
 				end

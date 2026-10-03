@@ -21,7 +21,8 @@ export type BodyPart = {
 	reflectance: number?,
 	-- Animated parts (client/KartVisuals): "blink" eyelids, "toast" pops up
 	-- when boosting, "flap" wings, "flutter" laces, "claw" snips, "wobble"
-	-- jelly, "rattle" lid, "orbit" lights circling the kart.
+	-- jelly, "rattle" lid, "orbit" lights circling the kart, "engine" an
+	-- exposed motor's rumble (harder on the throttle).
 	anim: string?,
 	text: string?, -- marker drawing on both sides of this part
 	bubbles: boolean?, -- this part blows bubbles
@@ -34,6 +35,12 @@ export type Body = {
 	price: number?, -- coins to unlock (0 or nil = free)
 	wheelRadius: number,
 	wheelWidth: number,
+	-- Bigger rear wheels (dragsters, hot rods). Default: same as the front.
+	rearWheelRadius: number?,
+	rearWheelWidth: number?,
+	-- Realistic finish: glossy paint, polished chrome, rubber tyres on
+	-- metal rims (KartRig). Cartoon bodies leave it off.
+	realistic: boolean?,
 	wheels: { { number } }, -- x, z of each wheel; the two with the largest z are rear wheels
 	seat: { number }, -- where the driver sits
 	exhaust: { number },
@@ -470,6 +477,236 @@ for index, design in racingBodies do
   seat = { 0, 0.55, 0.6 }, exhaust = { 0, 1.1, 4.1 }, parts = parts,
  })
 end
+
+---------------------------------------------------------------------------
+-- Big-motor cars: realistic paint, chrome and rubber, with exposed engines
+-- that rumble. Original designs, built from small helpers so each stays short.
+---------------------------------------------------------------------------
+local function P(parts: { BodyPart }, size: { number }, offset: { number }, role: any, shape: any?, extra: { [string]: any }?)
+	local part: any = { size = size, offset = offset, role = role, shape = shape }
+	for k, v in extra or {} do
+		part[k] = v
+	end
+	table.insert(parts, part)
+end
+
+local GLOSS = { reflectance = 0.12 }
+local RED_LIGHT = { color = { 255, 40, 30 } }
+
+-- An exposed V8: block, chrome valve covers, a supercharger with its belt
+-- pulley, eight velocity stacks (or a scoop) and four-into-one headers.
+-- The blower and stacks rumble.
+type EngineOptions = { stacks: boolean?, headers: boolean?, length: number? }
+local function v8(parts: { BodyPart }, x: number, y: number, z: number, options: EngineOptions?)
+	local o: EngineOptions = options or {}
+	local L = o.length or 2.4
+	P(parts, { 1.8, 1, L }, { x, y, z }, "accent", nil, { material = "Metal", reflectance = 0.1 })
+	for _, side in { -1, 1 } do
+		P(parts, { 0.7, 0.45, L - 0.2 }, { x + side * 0.75, y + 0.6, z }, "chrome", nil, { rotation = { 0, 0, side * -25 } })
+	end
+	P(parts, { 1.3, 0.75, L * 0.65 }, { x, y + 1.05, z }, "chrome", nil, { anim = "engine" })
+	P(parts, { 0.5, 0.9, 0.9 }, { x, y + 0.95, z - L / 2 - 0.1 }, "dark", "Cylinder", { rotation = { 0, 90, 0 } })
+	if o.stacks ~= false then
+		for k = 0, 3 do
+			for _, side in { -1, 1 } do
+				P(parts, { 0.75, 0.34, 0.34 }, { x + side * 0.32, y + 1.75, z - L * 0.25 + k * L * 0.17 }, "chrome", "Cylinder", { rotation = { 0, 0, 90 }, anim = "engine" })
+			end
+		end
+	else
+		P(parts, { 1.2, 0.6, 1.1 }, { x, y + 1.7, z }, "dark", nil, { anim = "engine" })
+	end
+	if o.headers ~= false then
+		for _, side in { -1, 1 } do
+			for k = 0, 3 do
+				P(parts, { 1.3, 0.24, 0.24 }, { x + side * 1.35, y - 0.05, z - L * 0.35 + k * L * 0.23 }, "chrome", "Cylinder", { rotation = { 0, 0, side * -40 } })
+			end
+		end
+	end
+end
+
+local bigMotor: { Body } = {}
+
+do -- Blower Rod: an open hot rod, supercharged V8 out front, fat rear tyres.
+	local parts: { BodyPart } = {}
+	for _, side in { -1, 1 } do
+		P(parts, { 0.35, 0.4, 8.6 }, { side * 1.05, -0.15, -0.3 }, "dark")
+	end
+	P(parts, { 4.4, 0.28, 0.28 }, { 0, -0.2, -3.7 }, "dark", "Cylinder")
+	P(parts, { 3.2, 1.5, 3.4 }, { 0, 0.55, 1.5 }, "main", "Ellipsoid", GLOSS)
+	P(parts, { 3.4, 0.35, 3.6 }, { 0, 1.2, 1.5 }, "accent", "Ellipsoid")
+	for _, side in { -1, 1 } do
+		P(parts, { 1.5, 1.1, 3.2 }, { side * 2.55, 1.3, 2.6 }, "main", "Ellipsoid", GLOSS)
+	end
+	P(parts, { 2.2, 2, 0.5 }, { 0, 0.75, -4.3 }, "chrome")
+	P(parts, { 1.8, 1.6, 0.2 }, { 0, 0.75, -4.6 }, "dark")
+	for k = -3, 3 do
+		P(parts, { 0.1, 1.5, 0.25 }, { k * 0.22, 0.75, -4.62 }, "chrome")
+	end
+	v8(parts, 0, 0.35, -2.1)
+	P(parts, { 2.6, 1, 0.12 }, { 0, 1.9, 0.1 }, "glass", nil, { rotation = { -15, 0, 0 } })
+	P(parts, { 2.8, 0.15, 0.2 }, { 0, 2.45, 0.25 }, "chrome")
+	for _, side in { -1, 1 } do
+		P(parts, { 0.18, 0.9, 0.18 }, { side * 1.45, 0.6, -3.9 }, "chrome")
+		P(parts, { 0.4, 0.8, 0.8 }, { side * 1.45, 1.2, -3.95 }, "chrome", "Cylinder", { rotation = { 0, 90, 0 } })
+		P(parts, { 0.06, 0.65, 0.65 }, { side * 1.45, 1.2, -4.38 }, "light", "Cylinder", { rotation = { 0, 90, 0 } })
+		P(parts, { 0.5, 0.35, 0.12 }, { side * 2.55, 1.2, 4.25 }, "light", nil, RED_LIGHT)
+	end
+	table.insert(bigMotor, {
+		id = "blowerrod", name = "Blower Rod", icon = "🔥", price = 0, realistic = true,
+		wheelRadius = 0.75, wheelWidth = 0.8, rearWheelRadius = 1.3, rearWheelWidth = 1.9,
+		wheels = { { -2.3, -3.7 }, { 2.3, -3.7 }, { -2.55, 2.6 }, { 2.55, 2.6 } },
+		seat = { 0, 0.35, 1.6 }, exhaust = { 0, 0, 4.3 }, parts = parts,
+	})
+end
+
+do -- Thunder Muscle: a wide convertible muscle car, blower through the hood.
+	local parts: { BodyPart } = {}
+	P(parts, { 4.2, 1.1, 8.8 }, { 0, 0.25, 0 }, "main", nil, GLOSS)
+	P(parts, { 4.2, 0.9, 1.6 }, { 0, 0.15, -4.3 }, "main", "Ellipsoid", GLOSS)
+	P(parts, { 4.2, 0.9, 1.4 }, { 0, 0.2, 4.3 }, "main", "Ellipsoid", GLOSS)
+	for _, side in { -1, 1 } do
+		P(parts, { 0.55, 0.06, 8.8 }, { side * 0.45, 0.82, 0 }, "accent")
+		for _, z in { -2.9, 2.8 } do
+			P(parts, { 0.9, 0.9, 2.8 }, { side * 2.3, 0.6, z }, "main", "Ellipsoid", GLOSS)
+		end
+		P(parts, { 5.2, 0.42, 0.42 }, { side * 2.25, -0.4, 0 }, "chrome", "Cylinder", { rotation = { 0, 90, 0 } })
+		P(parts, { 1.4, 0.3, 0.1 }, { side * 1.3, 0.45, 4.98 }, "light", nil, RED_LIGHT)
+		for k = 0, 1 do
+			P(parts, { 0.12, 0.45, 0.45 }, { side * (1.2 + k * 0.6), 0.35, -5.05 }, "light", "Cylinder", { rotation = { 0, 90, 0 } })
+		end
+		P(parts, { 0.2, 0.6, 0.2 }, { side * 1.8, 1.05, 4.2 }, "dark")
+	end
+	P(parts, { 3.4, 0.3, 2.6 }, { 0, 0.85, 1.2 }, "dark")
+	P(parts, { 3.8, 1, 0.12 }, { 0, 1.35, -0.3 }, "glass", nil, { rotation = { -25, 0, 0 } })
+	P(parts, { 3.9, 0.12, 0.2 }, { 0, 1.85, -0.1 }, "chrome")
+	P(parts, { 2.2, 0.35, 3.4 }, { 0, 0.9, -2.4 }, "main", "Ellipsoid", GLOSS)
+	v8(parts, 0, 0, -2.5, { headers = false })
+	P(parts, { 4.2, 0.2, 0.9 }, { 0, 1.35, 4.2 }, "accent")
+	P(parts, { 3.4, 0.6, 0.15 }, { 0, 0.25, -5.0 }, "dark")
+	P(parts, { 4.4, 0.25, 0.3 }, { 0, -0.25, -5.05 }, "chrome")
+	P(parts, { 4.4, 0.25, 0.3 }, { 0, -0.15, 5.0 }, "chrome")
+	table.insert(bigMotor, {
+		id = "thunder", name = "Thunder Muscle", icon = "⚡", price = 300, realistic = true,
+		wheelRadius = 0.95, wheelWidth = 1.3, rearWheelRadius = 1.1, rearWheelWidth = 1.7,
+		wheels = { { -2.45, -2.9 }, { 2.45, -2.9 }, { -2.45, 2.8 }, { 2.45, 2.8 } },
+		seat = { 0, 0.3, 1.3 }, exhaust = { 0, -0.2, 5.1 }, parts = parts,
+	})
+end
+
+do -- Twin-Turbo Dragster: long nose, tiny front wheels, huge slicks, a wing.
+	local parts: { BodyPart } = {}
+	for _, side in { -1, 1 } do
+		P(parts, { 0.25, 0.25, 10.5 }, { side * 0.6, -0.1, -1.6 }, "dark")
+	end
+	P(parts, { 1.4, 0.9, 5 }, { 0, 0.15, -4.3 }, "main", "Ellipsoid", { reflectance = 0.15 })
+	P(parts, { 1, 0.5, 1.6 }, { 0, 0.2, -6.9 }, "accent", "Ellipsoid")
+	P(parts, { 2.6, 0.12, 0.6 }, { 0, -0.1, -6.9 }, "accent")
+	P(parts, { 2, 1.2, 2.4 }, { 0, 0.5, -0.6 }, "main", "Ellipsoid", { reflectance = 0.15 })
+	P(parts, { 1.8, 0.18, 0.18 }, { 0, 2.6, 0.2 }, "chrome")
+	P(parts, { 2.2, 1, 2 }, { 0, 0.3, 3.3 }, "main", "Ellipsoid", GLOSS)
+	v8(parts, 0, 0.4, 1.9, { headers = false })
+	for _, side in { -1, 1 } do
+		P(parts, { 0.18, 2, 0.18 }, { side * 0.8, 1.6, 0.2 }, "chrome")
+		P(parts, { 0.9, 1.1, 1.1 }, { side * 1.45, 1.3, 1.6 }, "chrome", "Cylinder", { rotation = { 0, 90, 0 } })
+		P(parts, { 0.1, 0.75, 0.75 }, { side * 1.45, 1.3, 1.03 }, "dark", "Cylinder", { rotation = { 0, 90, 0 } })
+		for k = 0, 1 do
+			P(parts, { 1.4, 0.3, 0.3 }, { side * 1.3, 1.1, 2.2 + k * 0.6 }, "chrome", "Cylinder", { rotation = { 0, 0, side * 35 } })
+		end
+		P(parts, { 0.15, 1.1, 1.7 }, { side * 2.7, 4.1, 3.9 }, "accent")
+		P(parts, { 0.2, 3.2, 0.2 }, { side * 1, 2.7, 3.6 }, "dark")
+	end
+	P(parts, { 5.4, 0.25, 1.8 }, { 0, 4.3, 3.9 }, "accent", nil, { rotation = { -8, 0, 0 } })
+	table.insert(bigMotor, {
+		id = "dragster", name = "Twin-Turbo Dragster", icon = "🚀", price = 500, realistic = true,
+		wheelRadius = 0.6, wheelWidth = 0.6, rearWheelRadius = 1.55, rearWheelWidth = 2.3,
+		wheels = { { -1.5, -6.2 }, { 1.5, -6.2 }, { -2.65, 2.9 }, { 2.65, 2.9 } },
+		seat = { 0, 0.15, -0.4 }, exhaust = { 0, 1.6, 3.4 }, parts = parts,
+	})
+end
+
+do -- Dune Hauler: a long-travel trophy truck with a roll cage and light bar.
+	local parts: { BodyPart } = {}
+	P(parts, { 4.2, 1.1, 7.2 }, { 0, 0.9, -0.2 }, "main", nil, GLOSS)
+	P(parts, { 4.2, 0.9, 1.4 }, { 0, 0.8, -3.9 }, "main", "Ellipsoid", GLOSS)
+	P(parts, { 4.4, 0.3, 0.5 }, { 0, 0.2, -4.4 }, "chrome")
+	v8(parts, 0, 1.1, -2.2, { headers = false })
+	for _, side in { -1, 1 } do
+		for _, z in { -0.4, 1.6 } do
+			P(parts, { 0.2, 2.2, 0.2 }, { side * 1.6, 2.5, z }, "chrome")
+		end
+		P(parts, { 0.2, 0.2, 2.2 }, { side * 1.6, 3.6, 0.6 }, "chrome")
+		for _, z in { -2.7, 2.8 } do
+			P(parts, { 1.1, 0.45, 3 }, { side * 2.4, 1.65, z }, "accent", "Ellipsoid")
+			P(parts, { 1.8, 0.3, 0.3 }, { side * 1.7, 1.3, z }, "chrome", "Cylinder", { rotation = { 0, 0, side * -50 } })
+		end
+		P(parts, { 0.4, 0.8, 0.1 }, { side * 1.6, 1.0, 3.45 }, "light", nil, RED_LIGHT)
+	end
+	for _, z in { -0.4, 1.6 } do
+		P(parts, { 3.4, 0.2, 0.2 }, { 0, 3.6, z }, "chrome")
+	end
+	P(parts, { 3, 0.4, 0.4 }, { 0, 3.85, -0.45 }, "dark")
+	for k = -3, 3, 2 do
+		P(parts, { 0.12, 0.3, 0.3 }, { k * 0.4, 3.85, -0.7 }, "light", "Cylinder", { rotation = { 0, 90, 0 } })
+	end
+	P(parts, { 3.8, 0.5, 2.6 }, { 0, 1.6, 2.7 }, "dark")
+	P(parts, { 0.9, 1.8, 1.8 }, { 0, 2.3, 2.7 }, "dark", "Cylinder", { rotation = { 0, 0, 90 }, material = "Rubber" })
+	table.insert(bigMotor, {
+		id = "dunehauler", name = "Dune Hauler", icon = "🛻", price = 300, realistic = true,
+		wheelRadius = 1.2, wheelWidth = 1.5,
+		wheels = { { -2.6, -2.7 }, { 2.6, -2.7 }, { -2.6, 2.8 }, { 2.6, 2.8 } },
+		seat = { 0, 0.9, 0.6 }, exhaust = { 0, 0.8, 4 }, parts = parts,
+	})
+end
+
+do -- Midnight V12: a low mid-engine speedster, the V12 under a glass cover.
+	local parts: { BodyPart } = {}
+	P(parts, { 4.4, 0.8, 8.4 }, { 0, 0.05, 0 }, "main", "Ellipsoid", { reflectance = 0.18 })
+	P(parts, { 4.2, 0.7, 3.2 }, { 0, 0.35, -2.6 }, "main", "Wedge", { reflectance = 0.18 })
+	P(parts, { 2.8, 0.4, 2.2 }, { 0, 0.5, 0 }, "dark")
+	P(parts, { 3, 0.6, 0.1 }, { 0, 0.95, -1 }, "glass", nil, { rotation = { -35, 0, 0 } })
+	P(parts, { 2.2, 0.7, 2.6 }, { 0, 0.6, 2.4 }, "accent", nil, { material = "Metal", reflectance = 0.1 })
+	for k = 0, 5 do
+		for _, side in { -1, 1 } do
+			P(parts, { 0.5, 0.26, 0.26 }, { side * 0.5, 1.05, 1.4 + k * 0.4 }, "chrome", "Cylinder", { rotation = { 0, 0, 90 }, anim = "engine" })
+		end
+	end
+	P(parts, { 3, 0.15, 3 }, { 0, 1.3, 2.4 }, "glass", nil, { transparency = 0.5 })
+	for _, side in { -1, 1 } do
+		P(parts, { 0.3, 0.6, 1.6 }, { side * 2.15, 0.4, 1.2 }, "dark")
+		P(parts, { 1, 0.15, 0.1 }, { side * 1.4, 0.35, -4.15 }, "light")
+		P(parts, { 0.2, 0.7, 0.2 }, { side * 1.6, 1.05, 3.9 }, "dark")
+		for k = 0, 1 do
+			P(parts, { 0.5, 0.35, 0.35 }, { side * (0.35 + k * 0.5), -0.1, 4.2 }, "chrome", "Cylinder", { rotation = { 0, 90, 0 } })
+		end
+	end
+	P(parts, { 3.6, 0.12, 0.1 }, { 0, 0.55, 4.2 }, "light", nil, RED_LIGHT)
+	P(parts, { 4.2, 0.15, 0.8 }, { 0, 1.4, 4 }, "accent")
+	table.insert(bigMotor, {
+		id = "v12", name = "Midnight V12", icon = "🌙", price = 600, realistic = true,
+		wheelRadius = 0.9, wheelWidth = 1.2, rearWheelRadius = 1, rearWheelWidth = 1.6,
+		wheels = { { -2.3, -2.7 }, { 2.3, -2.7 }, { -2.35, 2.6 }, { 2.35, 2.6 } },
+		seat = { 0, -0.1, 0.2 }, exhaust = { 0, 0, 4.4 }, parts = parts,
+	})
+end
+
+for _, body in bigMotor do
+	table.insert(KartBodies.List, body)
+end
+-- The racing-style bodies get the realistic finish too.
+for _, body in KartBodies.List do
+	if table.find({ "embergt", "arrowsprint", "rallycomet", "racer", "buggy", "muscle", "formula" }, body.id) then
+		body.realistic = true
+	end
+end
+
+-- CPU drivers race the realistic cars so every grid shows them off.
+KartBodies.CpuBodies = {}
+for _, body in KartBodies.List do
+	if body.realistic then
+		table.insert(KartBodies.CpuBodies, body.id)
+	end
+end
+
 -- Give the familiar starter body the same visible exhaust detail.
 local starter = nil
 for _, body in KartBodies.List do if body.id == "classic" then starter = body end end
@@ -509,7 +746,8 @@ end
 
 -- A varied look for CPU driver number n (the same every race).
 function KartBodies.cpuLook(n: number): Look
-	local body = KartBodies.List[(n - 1) % #KartBodies.List + 1].id
+	local pool = KartBodies.CpuBodies
+	local body = pool[(n * 5 - 1) % #pool + 1]
 	local main = (n * 5) % #KartBodies.Palette + 1
 	local accent = (n * 7 + 4) % #KartBodies.Palette + 1
 	if accent == main then

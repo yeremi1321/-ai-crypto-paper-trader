@@ -25,7 +25,11 @@ local Tracks = require(Shared:WaitForChild("Tracks"))
 local KartRig = require(ReplicatedStorage:WaitForChild("Common"):WaitForChild("KartRig"))
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 
+local KartVisuals = require(script.Parent.KartVisuals)
+
 local KartController = {}
+
+local STUCK_SECONDS = 4 -- pressing the gas but not moving this long resets the kart
 
 local player = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
@@ -42,10 +46,13 @@ type Session = {
 	throttleDownAt: number?,
 	started: boolean,
 	camYaw: number,
+	camY: number,
+	stuckFor: number,
 }
 
 local session: Session? = nil
 local driftHeld = false
+local driftPressed = false -- set on the frame drift goes down (tricks)
 local gasHeld, brakeHeld = false, false
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -82,6 +89,9 @@ local function setRacingControls(racing: boolean)
 		-- Bound above the default controls so Space drifts instead of jumping out.
 		ContextActionService:BindActionAtPriority("KartDrift", function(_, inputState)
 			driftHeld = inputState == Enum.UserInputState.Begin
+			if driftHeld then
+				driftPressed = true
+			end
 			return Enum.ContextActionResult.Sink
 		end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.Space, Enum.KeyCode.LeftShift, Enum.KeyCode.ButtonR1)
 		ContextActionService:BindActionAtPriority("KartItem", function(_, inputState)
@@ -116,6 +126,9 @@ end
 
 -- Touch buttons call these.
 function KartController.setDrift(on: boolean)
+	if on and not driftHeld then
+		driftPressed = true
+	end
 	driftHeld = on
 end
 local readInput: () -> (number, number)
@@ -166,6 +179,7 @@ end
 local function stop()
 	local mode = session and session.mode
 	session = nil
+	KartVisuals.setOwn(nil, 0, 0)
 	setRacingControls(false)
 	camera.CameraType = Enum.CameraType.Custom
 	camera.FieldOfView = 70
@@ -183,6 +197,7 @@ end
 function KartController.handOff()
 	if session then
 		session = nil
+		KartVisuals.setOwn(nil, 0, 0)
 		setRacingControls(false)
 		camera.FieldOfView = 70
 	end
@@ -209,6 +224,8 @@ local function begin(info: any, mode: string)
 		throttleDownAt = nil,
 		started = mode ~= "race",
 		camYaw = info.yaw,
+		camY = kart.PrimaryPart.Position.Y,
+		stuckFor = 0,
 	}
 	refreshRayFilter()
 	setRacingControls(true)
@@ -237,8 +254,12 @@ local function updateCamera(s: Session, dt: number)
 	s.camYaw += diff * math.min(1, dt * 6)
 	local fx, fz = KartPhysics.forward(s.camYaw)
 	local forward = Vector3.new(fx, 0, fz)
-	local target = root.Position + Vector3.new(0, 6.5, 0) - forward * 17
-	local look = root.Position + forward * 10 + Vector3.new(0, 2, 0)
+	-- Height follows more lazily in the air, so jumps feel big and the view stays steady.
+	local airborne = s.state.air > 0.1
+	s.camY += (root.Position.Y - s.camY) * math.min(1, dt * (if airborne then 2.5 else 8))
+	local base = Vector3.new(root.Position.X, s.camY, root.Position.Z)
+	local target = base + Vector3.new(0, 6.5, 0) - forward * 17
+	local look = base + forward * 10 + Vector3.new(0, 2, 0)
 	camera.CFrame = camera.CFrame:Lerp(CFrame.lookAt(target, look), math.min(1, dt * 10))
 	local fov = if s.state.boost > 0 then 84 else 70
 	camera.FieldOfView += (fov - camera.FieldOfView) * math.min(1, dt * 5)
@@ -297,13 +318,41 @@ local function step(dt: number)
 		surface = "road" -- the practice area is open tarmac
 	end
 
+	-- Slipstream: tucked in behind any other kart?
+	local others = {}
+	local folder = Workspace:FindFirstChild(if s.mode == "race" then "Karts" else "PracticeKarts")
+	if folder then
+		for _, other in folder:GetChildren() do
+			local p = other:IsA("Model") and other ~= s.kart and other.PrimaryPart
+			if p then
+				table.insert(others, { x = p.Position.X, z = p.Position.Z })
+			end
+		end
+	end
+	local drafting = KartPhysics.isDrafting(root.Position.X, root.Position.Z, s.state.yaw, others)
+
 	local _, released = KartPhysics.step(s.stats, s.state, {
 		throttle = throttle,
 		steer = steer,
 		drift = driftHeld,
 		grounded = sensed.grounded,
 		surface = if surface == "wall" then "offroad" else surface,
+		trick = driftPressed,
+		drafting = drafting,
 	}, dt)
+	driftPressed = false
+	KartVisuals.setOwn(s.kart, steer, KartPhysics.trickRoll(s.state))
+
+	-- Stuck against something with the gas held down? Put the kart back.
+	if throttle > 0.5 and math.abs(s.state.speed) < 4 and s.state.spin <= 0 then
+		s.stuckFor += dt
+		if s.stuckFor > STUCK_SECONDS then
+			s.stuckFor = 0
+			KartController.reset()
+		end
+	else
+		s.stuckFor = 0
+	end
 	KartRig.sync(s.kart, s.state)
 	KartRig.apply(s.kart, s.state, sensed)
 	local level = if s.state.drift ~= 0 then KartPhysics.chargeLevel(s.state.charge) else 0
@@ -319,6 +368,7 @@ local function step(dt: number)
 			drift = level,
 			boosting = s.state.boost > 0,
 			invincible = s.state.invincible > 0,
+			drafting = drafting and s.state.draft > 0.2,
 			wrongWay = s.mode == "race" and s.state.speed > 15 and Track.wrongWay(s.track, proj, fx, fz),
 		})
 	end
@@ -358,6 +408,7 @@ local function onKartEvent(kind: string, value: any)
 end
 
 function KartController.start()
+	driftPressed = false
 	Remotes.RaceStart.OnClientEvent:Connect(function(info)
 		task.spawn(begin, info, "race")
 	end)

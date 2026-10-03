@@ -100,3 +100,69 @@ T.test("all karts have equal stat budgets", function()
 		T.ok(math.abs(budget(k) - first) < 0.25, `{k.id} budget {budget(k)} vs {first}`)
 	end
 end)
+
+T.test("slipstream: staying behind someone builds a boost", function()
+	local s = KartPhysics.newState(0)
+	run(s, input(), 4)
+	local got = 0
+	for _ = 1, math.floor(1.5 * 60) do
+		local _, ev = KartPhysics.step(stats, s, input({ drafting = true }), 1 / 60)
+		if ev == KartPhysics.Events.Draft then
+			got += 1
+		end
+	end
+	T.eq(got, 1)
+	T.ok(s.boost > 0)
+end)
+
+T.test("drafting detection needs the other kart ahead and in line", function()
+	-- yaw 0 faces -z
+	T.ok(KartPhysics.isDrafting(0, 0, 0, { { x = 0, z = -20 } }))
+	T.ok(KartPhysics.isDrafting(0, 0, 0, { { x = 3, z = -30 } }))
+	T.ok(not KartPhysics.isDrafting(0, 0, 0, { { x = 0, z = 20 } }), "behind")
+	T.ok(not KartPhysics.isDrafting(0, 0, 0, { { x = 12, z = -20 } }), "off to the side")
+	T.ok(not KartPhysics.isDrafting(0, 0, 0, { { x = 0, z = -80 } }), "too far")
+end)
+
+T.test("tricks: press in the air, land for a boost", function()
+	local s = KartPhysics.newState(0)
+	run(s, input(), 4)
+	KartPhysics.step(stats, s, input({ grounded = false }), 0.05)
+	KartPhysics.step(stats, s, input({ grounded = false, trick = true }), 0.05)
+	T.ok(s.trick > 0)
+	for _ = 1, 6 do
+		KartPhysics.step(stats, s, input({ grounded = false }), 0.05)
+	end
+	T.ok(KartPhysics.trickRoll(s) > 0)
+	local boostBefore = s.boost
+	local _, ev = KartPhysics.step(stats, s, input(), 0.02)
+	T.eq(ev, KartPhysics.Events.Trick)
+	T.ok(s.boost >= KartPhysics.TrickBoost - 0.05 and s.boost >= boostBefore)
+	T.eq(s.trick, 0)
+end)
+
+T.test("tricks: too late in the jump, or tiny hops, give nothing", function()
+	local s = KartPhysics.newState(0)
+	run(s, input(), 4)
+	for _ = 1, 14 do
+		KartPhysics.step(stats, s, input({ grounded = false }), 0.05)
+	end
+	KartPhysics.step(stats, s, input({ grounded = false, trick = true }), 0.05)
+	T.eq(s.trick, 0, "trick window closed")
+	local s2 = KartPhysics.newState(0)
+	KartPhysics.step(stats, s2, input({ grounded = false, trick = true }), 0.05)
+	local _, ev = KartPhysics.step(stats, s2, input(), 0.02)
+	T.ok(ev ~= KartPhysics.Events.Trick, "hop too small")
+end)
+
+T.test("sticky traps halve top speed; overdrive ignores them", function()
+	local s = KartPhysics.newState(0)
+	run(s, input(), 5)
+	KartPhysics.slow(s, 2)
+	run(s, input(), 1.5)
+	T.ok(s.speed < stats.topSpeed * 0.6, `speed {s.speed}`)
+	local s2 = KartPhysics.newState(0)
+	KartPhysics.overdrive(s2, 5)
+	KartPhysics.slow(s2, 2)
+	T.eq(s2.slow, 0)
+end)

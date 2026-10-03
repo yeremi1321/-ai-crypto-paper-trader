@@ -100,6 +100,11 @@ return Atmos
           <string name="Source"><![CDATA[-- Builds a kart and connects KartPhysics to Roblox physics. Shared by the
 -- server (CPU karts) and the client (your own kart, which you own physics for).
 --
+-- How it looks alive: the body hangs off the ball on a Motor6D ("BodyJoint")
+-- and each wheel has its own Motor6D, so clients (client/KartVisuals) can
+-- lean the body into turns, bounce the suspension, flip it for tricks, steer
+-- the front wheels and spin all of them, without touching the physics.
+--
 -- How it moves: an invisible sphere carries the kart. A LinearVelocity pushes
 -- it horizontally at the speed KartPhysics wants (vertical is left to
 -- gravity, so hills and jumps just work), and an AlignOrientation turns the
@@ -129,7 +134,7 @@ local function weld(a: BasePart, b: BasePart)
 	w.Parent = b
 end
 
-local function visual(model: Model, root: BasePart, name: string, size: Vector3, offset: CFrame, color: Color3, material: Enum.Material?, shape: string?): BasePart
+local function visual(model: Model, root: BasePart, name: string, size: Vector3, offset: CFrame, color: Color3, material: Enum.Material?, shape: string?, weldTo: BasePart?): BasePart
 	local p: BasePart
 	if shape == "Wedge" then
 		p = Instance.new("WedgePart")
@@ -154,8 +159,19 @@ local function visual(model: Model, root: BasePart, name: string, size: Vector3,
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
 	p.Parent = model
-	weld(root, p)
+	weld(weldTo or root, p)
 	return p
+end
+
+local function motor(name: string, part0: BasePart, part1: BasePart, c0: CFrame): Motor6D
+	local m = Instance.new("Motor6D")
+	m.Name = name
+	m.Part0 = part0
+	m.Part1 = part1
+	m.C0 = c0
+	m.C1 = CFrame.new()
+	m.Parent = part0
+	return m
 end
 
 local function rgb(c: { number }): Color3
@@ -225,18 +241,42 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	align.Parent = root
 
 	local drop = CFrame.new(0, -BODY_DROP, 0)
+	-- Everything that leans and bounces hangs off this invisible part.
+	local bodyRoot = Instance.new("Part")
+	bodyRoot.Name = "BodyRoot"
+	bodyRoot.Size = Vector3.one
+	bodyRoot.CFrame = root.CFrame * drop
+	bodyRoot.Transparency = 1
+	bodyRoot.CanCollide = false
+	bodyRoot.CanQuery = false
+	bodyRoot.CanTouch = false
+	bodyRoot.Massless = true
+	bodyRoot.Parent = model
+	motor("BodyJoint", root, bodyRoot, drop)
+
 	for i, part in body.parts do
 		local color, material, transparency = roleStyle(part.role, main, accent)
 		local rot = part.rotation or { 0, 0, 0 }
 		local offset = drop
 			* CFrame.new(part.offset[1], part.offset[2], part.offset[3])
 			* CFrame.Angles(math.rad(rot[1]), math.rad(rot[2]), math.rad(rot[3]))
-		local p = visual(model, root, `Body{i}`, Vector3.new(part.size[1], part.size[2], part.size[3]), offset, color, material, part.shape)
+		local p = visual(model, root, `Body{i}`, Vector3.new(part.size[1], part.size[2], part.size[3]), offset, color, material, part.shape, bodyRoot)
 		p.Transparency = transparency
 	end
 	local ex = body.exhaust
-	local exhaust = visual(model, root, "Exhaust", Vector3.new(1.2, 0.6, 0.4), drop * CFrame.new(ex[1], ex[2], ex[3]), Color3.fromRGB(255, 140, 40), Enum.Material.Neon)
+	local exhaust = visual(model, root, "Exhaust", Vector3.new(1.2, 0.6, 0.4), drop * CFrame.new(ex[1], ex[2], ex[3]), Color3.fromRGB(255, 140, 40), Enum.Material.Neon, nil, bodyRoot)
 	exhaust.Transparency = 1
+	local puff = Instance.new("ParticleEmitter")
+	puff.Name = "ExhaustPuff"
+	puff.Texture = "rbxasset://textures/particles/smoke_main.dds"
+	puff.Color = ColorSequence.new(Color3.fromRGB(235, 235, 245))
+	puff.Size = NumberSequence.new(0.5, 1.6)
+	puff.Transparency = NumberSequence.new(0.5, 1)
+	puff.Lifetime = NumberRange.new(0.4, 0.7)
+	puff.Speed = NumberRange.new(3, 6)
+	puff.EmissionDirection = Enum.NormalId.Back
+	puff.Rate = 6
+	puff.Parent = exhaust
 
 	-- Wheels sit on the road: the body's center rides BODY_DROP below the ball's center.
 	local groundToBody = KartRig.BallRadius - BODY_DROP
@@ -248,9 +288,25 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	for i, w in body.wheels do
 		local name = if w[2] >= rearZ then (if w[1] < 0 then "WheelRL" else "WheelRR") else `Wheel{i}`
 		local d = body.wheelRadius * 2
-		local wheel = visual(model, root, name, Vector3.new(body.wheelWidth, d, d), drop * CFrame.new(w[1], wheelY, w[2]), Color3.fromRGB(20, 20, 22), nil, "Cylinder")
-		local hub = visual(model, root, `{name}Hub`, Vector3.new(body.wheelWidth + 0.05, d * 0.5, d * 0.5), drop * CFrame.new(w[1], wheelY, w[2]), accent, Enum.Material.Metal, "Cylinder")
-		local _ = hub
+		local wheelCf = drop * CFrame.new(w[1], wheelY, w[2])
+		local wheel = Instance.new("Part")
+		wheel.Name = name
+		wheel.Shape = Enum.PartType.Cylinder
+		wheel.Size = Vector3.new(body.wheelWidth, d, d)
+		wheel.CFrame = root.CFrame * wheelCf
+		wheel.Color = Color3.fromRGB(26, 26, 30)
+		wheel.Material = Enum.Material.SmoothPlastic
+		wheel.CanCollide = false
+		wheel.CanQuery = false
+		wheel.CanTouch = false
+		wheel.Massless = true
+		wheel.Parent = model
+		-- Wheels turn on their own joint: front ones steer, all of them spin.
+		local joint = motor("WheelJoint", root, wheel, wheelCf)
+		joint:SetAttribute("Front", w[2] < rearZ)
+		visual(model, root, `{name}Hub`, Vector3.new(body.wheelWidth + 0.06, d * 0.55, d * 0.55), wheelCf, accent, Enum.Material.SmoothPlastic, "Cylinder", wheel)
+		-- A spoke so you can see the wheel turning.
+		visual(model, root, `{name}Spoke`, Vector3.new(body.wheelWidth + 0.08, d * 0.5, d * 0.14), wheelCf, Color3.fromRGB(240, 240, 245), Enum.Material.SmoothPlastic, nil, wheel)
 		if w[2] >= rearZ then
 			local sparks = Instance.new("ParticleEmitter")
 			sparks.Name = "DriftSparks"
@@ -276,7 +332,7 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	seat.CanCollide = false
 	seat.Massless = true
 	seat.Parent = model
-	weld(root, seat)
+	weld(bodyRoot, seat)
 
 	local tag = Instance.new("BillboardGui")
 	tag.Name = "NameTag"
@@ -297,6 +353,7 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 
 	model:SetAttribute("KartId", def.id)
 	model:SetAttribute("Body", body.id)
+	model:SetAttribute("WheelRadius", body.wheelRadius)
 	model.Parent = parent
 	return model
 end
@@ -913,6 +970,9 @@ export type State = {
 	spin: number, -- seconds left spinning out after a hit
 	invincible: number, -- seconds of Overdrive left
 	slow: number, -- seconds left stuck in something sticky (jelly, syrup)
+	draft: number, -- slipstream charge built up behind another kart
+	air: number, -- seconds airborne in the current jump
+	trick: number, -- 0 = none, else seconds since a trick started in this jump
 }
 
 export type Input = {
@@ -921,6 +981,8 @@ export type Input = {
 	drift: boolean,
 	grounded: boolean,
 	surface: string, -- "road" | "offroad" | "boost"
+	trick: boolean?, -- drift button pressed this frame (does a trick when airborne)
+	drafting: boolean?, -- tucked in behind another kart this frame
 }
 
 local KartPhysics = {}
@@ -932,12 +994,22 @@ KartPhysics.BoostPadTime = 1.0
 KartPhysics.ChargeLevels = { 0.9, 1.8, 2.9 } -- charge needed for each mini-turbo
 KartPhysics.TurboTimes = { 0.6, 1.1, 1.7 } -- boost seconds each level gives
 KartPhysics.SlowFactor = 0.5
+-- Slipstream: stay behind someone this long to get a boost.
+KartPhysics.DraftTime = 1.1
+KartPhysics.DraftBoost = 0.9
+KartPhysics.DraftRange = { 6, 38 } -- studs behind the kart ahead
+KartPhysics.DraftWidth = 5 -- how far off their line you can be
+-- Tricks: press drift soon after leaving a ramp, land for a boost.
+KartPhysics.TrickWindow = 0.6
+KartPhysics.TrickMinAir = 0.25
+KartPhysics.TrickBoost = 0.8
+KartPhysics.TrickSpinTime = 0.45
 KartPhysics.SpinTime = 1.2
 KartPhysics.SpinSpeedKeep = 0.3
 KartPhysics.DriftSlide = 0.35 -- radians the body swings out while drifting (visual)
 
 function KartPhysics.newState(yaw: number): State
-	return { speed = 0, yaw = yaw, drift = 0, charge = 0, boost = 0, spin = 0, invincible = 0, slow = 0 }
+	return { speed = 0, yaw = yaw, drift = 0, charge = 0, boost = 0, spin = 0, invincible = 0, slow = 0, draft = 0, air = 0, trick = 0 }
 end
 
 function KartPhysics.chargeLevel(charge: number): number
@@ -1018,13 +1090,68 @@ local function approach(value: number, target: number, rate: number): number
 	return math.max(value - rate, target)
 end
 
--- Advances the kart by dt. Mutates and returns the state, plus the mini-turbo
--- level released this step (0 if none) for sound/effects.
+-- Is a kart at (px, pz) heading `yaw` tucked in behind any of `others`?
+function KartPhysics.isDrafting(px: number, pz: number, yaw: number, others: { { x: number, z: number } }): boolean
+	local fx, fz = KartPhysics.forward(yaw)
+	for _, o in others do
+		local dx, dz = o.x - px, o.z - pz
+		local ahead = dx * fx + dz * fz
+		local side = math.abs(dx * -fz + dz * fx)
+		if ahead >= KartPhysics.DraftRange[1] and ahead <= KartPhysics.DraftRange[2] and side <= KartPhysics.DraftWidth then
+			return true
+		end
+	end
+	return false
+end
+
+-- Extra roll (radians) for the trick animation: one full barrel roll.
+function KartPhysics.trickRoll(s: State): number
+	if s.trick <= 0 then
+		return 0
+	end
+	return math.clamp(s.trick / KartPhysics.TrickSpinTime, 0, 1) * math.pi * 2
+end
+
+-- Events returned by step: mini-turbo levels 1..3 as numbers, plus these.
+KartPhysics.Events = { Trick = 10, Draft = 11 }
+
+-- Advances the kart by dt. Mutates and returns the state, plus what happened
+-- this step for sound/effects: a mini-turbo level (1..3), Events.Trick when a
+-- trick lands, Events.Draft when a slipstream boost kicks in, or 0.
 function KartPhysics.step(stats: Karts.KartStats, s: State, input: Input, dt: number): (State, number)
 	local released = 0
 	s.boost = math.max(0, s.boost - dt)
 	s.invincible = math.max(0, s.invincible - dt)
 	s.slow = math.max(0, s.slow - dt)
+
+	-- Jumps and tricks.
+	if not input.grounded then
+		s.air += dt
+		if s.trick > 0 then
+			s.trick += dt
+		elseif input.trick and s.air <= KartPhysics.TrickWindow and s.spin <= 0 then
+			s.trick = dt
+		end
+	else
+		if s.trick > 0 and s.air >= KartPhysics.TrickMinAir and s.spin <= 0 then
+			KartPhysics.giveBoost(s, KartPhysics.TrickBoost)
+			released = KartPhysics.Events.Trick
+		end
+		s.air = 0
+		s.trick = 0
+	end
+
+	-- Slipstream.
+	if input.drafting and input.grounded and s.speed > stats.topSpeed * 0.6 then
+		s.draft += dt
+		if s.draft >= KartPhysics.DraftTime then
+			s.draft = 0
+			KartPhysics.giveBoost(s, KartPhysics.DraftBoost)
+			released = KartPhysics.Events.Draft
+		end
+	else
+		s.draft = math.max(0, s.draft - dt * 2)
+	end
 
 	if input.surface == "boost" then
 		KartPhysics.giveBoost(s, KartPhysics.BoostPadTime)
@@ -1033,7 +1160,7 @@ function KartPhysics.step(stats: Karts.KartStats, s: State, input: Input, dt: nu
 	if s.spin > 0 then
 		s.spin = math.max(0, s.spin - dt)
 		s.speed = approach(s.speed, 0, stats.accel * 1.5 * dt)
-		return s, 0
+		return s, released
 	end
 
 	local top = KartPhysics.targetTop(stats, s, input.surface)
@@ -1066,9 +1193,10 @@ function KartPhysics.step(stats: Karts.KartStats, s: State, input: Input, dt: nu
 			s.charge = 0
 		end
 	elseif not input.drift or s.speed < stats.topSpeed * 0.3 then
-		released = KartPhysics.chargeLevel(s.charge)
-		if released > 0 then
-			KartPhysics.giveBoost(s, KartPhysics.TurboTimes[released])
+		local level = KartPhysics.chargeLevel(s.charge)
+		if level > 0 then
+			released = level
+			KartPhysics.giveBoost(s, KartPhysics.TurboTimes[level])
 		end
 		s.drift = 0
 		s.charge = 0
@@ -3783,11 +3911,24 @@ local function stepCpus(dt: number)
 	if not r or now() < r.goTime then
 		return
 	end
+	local positions = {}
+	for _, racer in r.racers do
+		local p = racer.model.PrimaryPart
+		if p then
+			positions[racer] = { x = p.Position.X, z = p.Position.Z }
+		end
+	end
 	for _, racer in r.racers do
 		local s = racer.state
 		local root = racer.model.PrimaryPart
 		if not s or not root or root.Anchored then
 			continue
+		end
+		local others = {}
+		for other, p in positions do
+			if other ~= racer then
+				table.insert(others, p)
+			end
 		end
 		local sensed = KartRig.sense(racer.model, rayParams)
 		local pos = vec(root.Position)
@@ -3796,6 +3937,7 @@ local function stepCpus(dt: number)
 		local surface = Track.surfaceAt(r.track, proj)
 		input.surface = if surface == "wall" then "offroad" else surface
 		input.grounded = sensed.grounded
+		input.drafting = KartPhysics.isDrafting(root.Position.X, root.Position.Z, s.yaw, others)
 		KartPhysics.step(scaledStats(racer.stats, racer.speedFactor), s, input, dt)
 		KartRig.sync(racer.model, s)
 		KartRig.apply(racer.model, s, sensed)
@@ -5090,7 +5232,11 @@ local Tracks = require(Shared:WaitForChild("Tracks"))
 local KartRig = require(ReplicatedStorage:WaitForChild("Common"):WaitForChild("KartRig"))
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 
+local KartVisuals = require(script.Parent.KartVisuals)
+
 local KartController = {}
+
+local STUCK_SECONDS = 4 -- pressing the gas but not moving this long resets the kart
 
 local player = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
@@ -5107,10 +5253,13 @@ type Session = {
 	throttleDownAt: number?,
 	started: boolean,
 	camYaw: number,
+	camY: number,
+	stuckFor: number,
 }
 
 local session: Session? = nil
 local driftHeld = false
+local driftPressed = false -- set on the frame drift goes down (tricks)
 local gasHeld, brakeHeld = false, false
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -5147,6 +5296,9 @@ local function setRacingControls(racing: boolean)
 		-- Bound above the default controls so Space drifts instead of jumping out.
 		ContextActionService:BindActionAtPriority("KartDrift", function(_, inputState)
 			driftHeld = inputState == Enum.UserInputState.Begin
+			if driftHeld then
+				driftPressed = true
+			end
 			return Enum.ContextActionResult.Sink
 		end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.Space, Enum.KeyCode.LeftShift, Enum.KeyCode.ButtonR1)
 		ContextActionService:BindActionAtPriority("KartItem", function(_, inputState)
@@ -5181,6 +5333,9 @@ end
 
 -- Touch buttons call these.
 function KartController.setDrift(on: boolean)
+	if on and not driftHeld then
+		driftPressed = true
+	end
 	driftHeld = on
 end
 local readInput: () -> (number, number)
@@ -5231,6 +5386,7 @@ end
 local function stop()
 	local mode = session and session.mode
 	session = nil
+	KartVisuals.setOwn(nil, 0, 0)
 	setRacingControls(false)
 	camera.CameraType = Enum.CameraType.Custom
 	camera.FieldOfView = 70
@@ -5248,6 +5404,7 @@ end
 function KartController.handOff()
 	if session then
 		session = nil
+		KartVisuals.setOwn(nil, 0, 0)
 		setRacingControls(false)
 		camera.FieldOfView = 70
 	end
@@ -5274,6 +5431,8 @@ local function begin(info: any, mode: string)
 		throttleDownAt = nil,
 		started = mode ~= "race",
 		camYaw = info.yaw,
+		camY = kart.PrimaryPart.Position.Y,
+		stuckFor = 0,
 	}
 	refreshRayFilter()
 	setRacingControls(true)
@@ -5302,8 +5461,12 @@ local function updateCamera(s: Session, dt: number)
 	s.camYaw += diff * math.min(1, dt * 6)
 	local fx, fz = KartPhysics.forward(s.camYaw)
 	local forward = Vector3.new(fx, 0, fz)
-	local target = root.Position + Vector3.new(0, 6.5, 0) - forward * 17
-	local look = root.Position + forward * 10 + Vector3.new(0, 2, 0)
+	-- Height follows more lazily in the air, so jumps feel big and the view stays steady.
+	local airborne = s.state.air > 0.1
+	s.camY += (root.Position.Y - s.camY) * math.min(1, dt * (if airborne then 2.5 else 8))
+	local base = Vector3.new(root.Position.X, s.camY, root.Position.Z)
+	local target = base + Vector3.new(0, 6.5, 0) - forward * 17
+	local look = base + forward * 10 + Vector3.new(0, 2, 0)
 	camera.CFrame = camera.CFrame:Lerp(CFrame.lookAt(target, look), math.min(1, dt * 10))
 	local fov = if s.state.boost > 0 then 84 else 70
 	camera.FieldOfView += (fov - camera.FieldOfView) * math.min(1, dt * 5)
@@ -5362,13 +5525,41 @@ local function step(dt: number)
 		surface = "road" -- the practice area is open tarmac
 	end
 
+	-- Slipstream: tucked in behind any other kart?
+	local others = {}
+	local folder = Workspace:FindFirstChild(if s.mode == "race" then "Karts" else "PracticeKarts")
+	if folder then
+		for _, other in folder:GetChildren() do
+			local p = other:IsA("Model") and other ~= s.kart and other.PrimaryPart
+			if p then
+				table.insert(others, { x = p.Position.X, z = p.Position.Z })
+			end
+		end
+	end
+	local drafting = KartPhysics.isDrafting(root.Position.X, root.Position.Z, s.state.yaw, others)
+
 	local _, released = KartPhysics.step(s.stats, s.state, {
 		throttle = throttle,
 		steer = steer,
 		drift = driftHeld,
 		grounded = sensed.grounded,
 		surface = if surface == "wall" then "offroad" else surface,
+		trick = driftPressed,
+		drafting = drafting,
 	}, dt)
+	driftPressed = false
+	KartVisuals.setOwn(s.kart, steer, KartPhysics.trickRoll(s.state))
+
+	-- Stuck against something with the gas held down? Put the kart back.
+	if throttle > 0.5 and math.abs(s.state.speed) < 4 and s.state.spin <= 0 then
+		s.stuckFor += dt
+		if s.stuckFor > STUCK_SECONDS then
+			s.stuckFor = 0
+			KartController.reset()
+		end
+	else
+		s.stuckFor = 0
+	end
 	KartRig.sync(s.kart, s.state)
 	KartRig.apply(s.kart, s.state, sensed)
 	local level = if s.state.drift ~= 0 then KartPhysics.chargeLevel(s.state.charge) else 0
@@ -5384,6 +5575,7 @@ local function step(dt: number)
 			drift = level,
 			boosting = s.state.boost > 0,
 			invincible = s.state.invincible > 0,
+			drafting = drafting and s.state.draft > 0.2,
 			wrongWay = s.mode == "race" and s.state.speed > 15 and Track.wrongWay(s.track, proj, fx, fz),
 		})
 	end
@@ -5423,6 +5615,7 @@ local function onKartEvent(kind: string, value: any)
 end
 
 function KartController.start()
+	driftPressed = false
 	Remotes.RaceStart.OnClientEvent:Connect(function(info)
 		task.spawn(begin, info, "race")
 	end)
@@ -5459,6 +5652,123 @@ return KartController
           </Properties>
         </Item>
         <Item class="ModuleScript" referent="36">
+          <Properties>
+            <string name="Name">KartVisuals</string>
+            <string name="Source"><![CDATA[-- Makes every nearby kart look alive, on this client only: the body leans into
+-- turns, dips under braking, bounces on bumps and squashes on landing; front
+-- wheels steer; all wheels spin; exhaust puffs harder when accelerating. Your
+-- own kart also shows the trick barrel roll.
+--
+-- It only sets Motor6D.Transform, which is purely visual and never affects
+-- the physics.
+
+local Workspace = game:GetService("Workspace")
+
+local KartVisuals = {}
+
+type Anim = { spin: number, lastSpeed: number, lastVy: number, squash: number, lean: number, pitch: number, steer: number }
+local anims: { [Model]: Anim } = setmetatable({}, { __mode = "k" }) :: any
+
+local FOLDERS = { "Karts", "PracticeKarts" }
+local RANGE = 260
+
+-- Set by KartController for the local player's kart.
+local ownKart: Model? = nil
+local ownSteer = 0
+local ownTrickRoll = 0
+
+function KartVisuals.setOwn(kart: Model?, steer: number, trickRoll: number)
+	ownKart = kart
+	ownSteer = steer
+	ownTrickRoll = trickRoll
+end
+
+local function approach(a: number, b: number, rate: number): number
+	return a + (b - a) * math.min(1, rate)
+end
+
+local function animate(kart: Model, dt: number, t: number)
+	local root = kart.PrimaryPart
+	if not root then
+		return
+	end
+	local anim = anims[kart]
+	if not anim then
+		anim = { spin = 0, lastSpeed = 0, lastVy = 0, squash = 0, lean = 0, pitch = 0, steer = 0 }
+		anims[kart] = anim
+	end
+	local vel = root.AssemblyLinearVelocity
+	local look = root.CFrame.LookVector
+	local speed = vel.X * look.X + vel.Z * look.Z
+	local yawRate = root.AssemblyAngularVelocity.Y
+	local accel = (speed - anim.lastSpeed) / math.max(dt, 1e-3)
+
+	-- Landing squash: falling fast last frame, stopped now.
+	if anim.lastVy < -25 and vel.Y > -5 then
+		anim.squash = math.clamp(-anim.lastVy / 120, 0.1, 0.5)
+	end
+	anim.squash = math.max(0, anim.squash - dt * 2.5)
+	anim.lastSpeed = speed
+	anim.lastVy = vel.Y
+
+	local isOwn = kart == ownKart
+	-- Positive yaw rate is a left turn. Lean into the turn (positive Z roll
+	-- dips the left side), lift the nose when accelerating, dip it when braking.
+	local leanTarget = math.clamp(yawRate * speed * 0.0035, -0.2, 0.2)
+	local pitchTarget = math.clamp(accel * 0.0012, -0.09, 0.09)
+	anim.lean = approach(anim.lean, leanTarget, dt * 8)
+	anim.pitch = approach(anim.pitch, pitchTarget, dt * 6)
+	-- Steer is "right = positive", matching player input.
+	local steerTarget = if isOwn then ownSteer * 0.45 else math.clamp(-yawRate * 0.25, -0.45, 0.45)
+	anim.steer = approach(anim.steer, steerTarget, dt * 12)
+
+	local speedFrac = math.clamp(math.abs(speed) / 100, 0, 1)
+	local bob = math.sin(t * 21 + root.Position.X) * 0.035 * speedFrac - anim.squash * 0.5
+	local trick = if isOwn then ownTrickRoll else 0
+
+	local bodyJoint = root:FindFirstChild("BodyJoint") :: Motor6D?
+	if bodyJoint then
+		bodyJoint.Transform = CFrame.new(0, bob, 0) * CFrame.Angles(anim.pitch, 0, anim.lean + trick)
+	end
+
+	local radius = kart:GetAttribute("WheelRadius") or 0.8
+	anim.spin = (anim.spin + speed / radius * dt) % (math.pi * 2)
+	for _, joint in root:GetChildren() do
+		if joint:IsA("Motor6D") and joint.Name == "WheelJoint" then
+			local steer = if joint:GetAttribute("Front") then anim.steer else 0
+			-- Rolling forward (-z) turns the wheel's top toward the front.
+			joint.Transform = CFrame.Angles(0, -steer, 0) * CFrame.Angles(-anim.spin, 0, 0)
+		end
+	end
+
+	local exhaust = kart:FindFirstChild("Exhaust")
+	local puff = exhaust and exhaust:FindFirstChild("ExhaustPuff") :: ParticleEmitter?
+	if puff then
+		puff.Rate = if accel > 5 then 22 elseif math.abs(speed) > 5 then 8 else 4
+	end
+end
+
+function KartVisuals.step(dt: number)
+	local t = os.clock()
+	local camera = Workspace.CurrentCamera
+	local camPos = camera and camera.CFrame.Position or Vector3.zero
+	for _, name in FOLDERS do
+		local folder = Workspace:FindFirstChild(name)
+		if folder then
+			for _, kart in folder:GetChildren() do
+				if kart:IsA("Model") and kart.PrimaryPart and (kart.PrimaryPart.Position - camPos).Magnitude < RANGE then
+					animate(kart, dt, t)
+				end
+			end
+		end
+	end
+end
+
+return KartVisuals
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="37">
           <Properties>
             <string name="Name">LobbyUI</string>
             <string name="Source"><![CDATA[-- Lobby screens: the status bar (phase + countdown, always visible), the
@@ -5745,7 +6055,7 @@ return LobbyUI
 ]]></string>
           </Properties>
         </Item>
-        <Item class="LocalScript" referent="37">
+        <Item class="LocalScript" referent="38">
           <Properties>
             <string name="Name">Main</string>
             <string name="Source"><![CDATA[-- Client entry point: wires remotes to the lobby screens, garage, race HUD,
@@ -5761,6 +6071,7 @@ local Atmos = require(ReplicatedStorage:WaitForChild("Common"):WaitForChild("Atm
 
 local GarageUI = require(script.Parent.GarageUI)
 local Hud = require(script.Parent.Hud)
+local KartVisuals = require(script.Parent.KartVisuals)
 local KartController = require(script.Parent.KartController)
 local LobbyUI = require(script.Parent.LobbyUI)
 local Spectate = require(script.Parent.Spectate)
@@ -5890,7 +6201,13 @@ KartController.onWarning = function(text)
 	Hud.warn(text, 1.5)
 end
 KartController.onTurbo = function(level)
-	Hud.flash(if level == 0 then "ROCKET START!" elseif level == 3 then "ULTRA TURBO!" elseif level == 2 then "SUPER TURBO!" else "TURBO!", 0.8)
+	local text = if level == 0 then "ROCKET START!"
+		elseif level == 3 then "ULTRA TURBO!"
+		elseif level == 2 then "SUPER TURBO!"
+		elseif level == 10 then "TRICK!"
+		elseif level == 11 then "SLIPSTREAM!"
+		else "TURBO!"
+	Hud.flash(text, 0.8)
 end
 
 if UserInputService.TouchEnabled then
@@ -5912,6 +6229,7 @@ Workspace.DescendantAdded:Connect(track)
 RunService.RenderStepped:Connect(function(dt)
 	LobbyUI.update()
 	Hud.update()
+	KartVisuals.step(dt)
 	for i = #spinners, 1, -1 do
 		local inst = spinners[i]
 		if not inst.Parent then
@@ -5937,7 +6255,7 @@ end)
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="38">
+        <Item class="ModuleScript" referent="39">
           <Properties>
             <string name="Name">Spectate</string>
             <string name="Source"><![CDATA[-- Spectator camera: follows a racer's kart from behind. Used by lobby players
@@ -6039,7 +6357,7 @@ return Spectate
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="39">
+        <Item class="ModuleScript" referent="40">
           <Properties>
             <string name="Name">UI</string>
             <string name="Source"><![CDATA[-- Shared look for every screen: rounded panels, chunky buttons sized for
@@ -6226,7 +6544,7 @@ return UI
       </Item>
     </Item>
   </Item>
-  <Item class="Workspace" referent="40">
+  <Item class="Workspace" referent="41">
     <Properties>
       <string name="Name">Workspace</string>
       <float name="Gravity">150</float>

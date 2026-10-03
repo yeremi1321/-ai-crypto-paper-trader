@@ -11,6 +11,7 @@ local Atmos = require(ReplicatedStorage:WaitForChild("Common"):WaitForChild("Atm
 
 local GarageUI = require(script.Parent.GarageUI)
 local Hud = require(script.Parent.Hud)
+local KartVisuals = require(script.Parent.KartVisuals)
 local KartController = require(script.Parent.KartController)
 local LobbyUI = require(script.Parent.LobbyUI)
 local Spectate = require(script.Parent.Spectate)
@@ -140,7 +141,13 @@ KartController.onWarning = function(text)
 	Hud.warn(text, 1.5)
 end
 KartController.onTurbo = function(level)
-	Hud.flash(if level == 0 then "ROCKET START!" elseif level == 3 then "ULTRA TURBO!" elseif level == 2 then "SUPER TURBO!" else "TURBO!", 0.8)
+	local text = if level == 0 then "ROCKET START!"
+		elseif level == 3 then "ULTRA TURBO!"
+		elseif level == 2 then "SUPER TURBO!"
+		elseif level == 10 then "TRICK!"
+		elseif level == 11 then "SLIPSTREAM!"
+		else "TURBO!"
+	Hud.flash(text, 0.8)
 end
 
 if UserInputService.TouchEnabled then
@@ -162,6 +169,7 @@ Workspace.DescendantAdded:Connect(track)
 RunService.RenderStepped:Connect(function(dt)
 	LobbyUI.update()
 	Hud.update()
+	KartVisuals.step(dt)
 	for i = #spinners, 1, -1 do
 		local inst = spinners[i]
 		if not inst.Parent then

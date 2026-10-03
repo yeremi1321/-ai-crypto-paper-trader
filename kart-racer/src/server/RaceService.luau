@@ -513,11 +513,24 @@ local function stepCpus(dt: number)
 	if not r or now() < r.goTime then
 		return
 	end
+	local positions = {}
+	for _, racer in r.racers do
+		local p = racer.model.PrimaryPart
+		if p then
+			positions[racer] = { x = p.Position.X, z = p.Position.Z }
+		end
+	end
 	for _, racer in r.racers do
 		local s = racer.state
 		local root = racer.model.PrimaryPart
 		if not s or not root or root.Anchored then
 			continue
+		end
+		local others = {}
+		for other, p in positions do
+			if other ~= racer then
+				table.insert(others, p)
+			end
 		end
 		local sensed = KartRig.sense(racer.model, rayParams)
 		local pos = vec(root.Position)
@@ -526,6 +539,7 @@ local function stepCpus(dt: number)
 		local surface = Track.surfaceAt(r.track, proj)
 		input.surface = if surface == "wall" then "offroad" else surface
 		input.grounded = sensed.grounded
+		input.drafting = KartPhysics.isDrafting(root.Position.X, root.Position.Z, s.yaw, others)
 		KartPhysics.step(scaledStats(racer.stats, racer.speedFactor), s, input, dt)
 		KartRig.sync(racer.model, s)
 		KartRig.apply(racer.model, s, sensed)

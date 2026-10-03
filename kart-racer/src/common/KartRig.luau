@@ -1,6 +1,11 @@
 -- Builds a kart and connects KartPhysics to Roblox physics. Shared by the
 -- server (CPU karts) and the client (your own kart, which you own physics for).
 --
+-- How it looks alive: the body hangs off the ball on a Motor6D ("BodyJoint")
+-- and each wheel has its own Motor6D, so clients (client/KartVisuals) can
+-- lean the body into turns, bounce the suspension, flip it for tricks, steer
+-- the front wheels and spin all of them, without touching the physics.
+--
 -- How it moves: an invisible sphere carries the kart. A LinearVelocity pushes
 -- it horizontally at the speed KartPhysics wants (vertical is left to
 -- gravity, so hills and jumps just work), and an AlignOrientation turns the
@@ -30,7 +35,7 @@ local function weld(a: BasePart, b: BasePart)
 	w.Parent = b
 end
 
-local function visual(model: Model, root: BasePart, name: string, size: Vector3, offset: CFrame, color: Color3, material: Enum.Material?, shape: string?): BasePart
+local function visual(model: Model, root: BasePart, name: string, size: Vector3, offset: CFrame, color: Color3, material: Enum.Material?, shape: string?, weldTo: BasePart?): BasePart
 	local p: BasePart
 	if shape == "Wedge" then
 		p = Instance.new("WedgePart")
@@ -55,8 +60,19 @@ local function visual(model: Model, root: BasePart, name: string, size: Vector3,
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
 	p.Parent = model
-	weld(root, p)
+	weld(weldTo or root, p)
 	return p
+end
+
+local function motor(name: string, part0: BasePart, part1: BasePart, c0: CFrame): Motor6D
+	local m = Instance.new("Motor6D")
+	m.Name = name
+	m.Part0 = part0
+	m.Part1 = part1
+	m.C0 = c0
+	m.C1 = CFrame.new()
+	m.Parent = part0
+	return m
 end
 
 local function rgb(c: { number }): Color3
@@ -126,18 +142,42 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	align.Parent = root
 
 	local drop = CFrame.new(0, -BODY_DROP, 0)
+	-- Everything that leans and bounces hangs off this invisible part.
+	local bodyRoot = Instance.new("Part")
+	bodyRoot.Name = "BodyRoot"
+	bodyRoot.Size = Vector3.one
+	bodyRoot.CFrame = root.CFrame * drop
+	bodyRoot.Transparency = 1
+	bodyRoot.CanCollide = false
+	bodyRoot.CanQuery = false
+	bodyRoot.CanTouch = false
+	bodyRoot.Massless = true
+	bodyRoot.Parent = model
+	motor("BodyJoint", root, bodyRoot, drop)
+
 	for i, part in body.parts do
 		local color, material, transparency = roleStyle(part.role, main, accent)
 		local rot = part.rotation or { 0, 0, 0 }
 		local offset = drop
 			* CFrame.new(part.offset[1], part.offset[2], part.offset[3])
 			* CFrame.Angles(math.rad(rot[1]), math.rad(rot[2]), math.rad(rot[3]))
-		local p = visual(model, root, `Body{i}`, Vector3.new(part.size[1], part.size[2], part.size[3]), offset, color, material, part.shape)
+		local p = visual(model, root, `Body{i}`, Vector3.new(part.size[1], part.size[2], part.size[3]), offset, color, material, part.shape, bodyRoot)
 		p.Transparency = transparency
 	end
 	local ex = body.exhaust
-	local exhaust = visual(model, root, "Exhaust", Vector3.new(1.2, 0.6, 0.4), drop * CFrame.new(ex[1], ex[2], ex[3]), Color3.fromRGB(255, 140, 40), Enum.Material.Neon)
+	local exhaust = visual(model, root, "Exhaust", Vector3.new(1.2, 0.6, 0.4), drop * CFrame.new(ex[1], ex[2], ex[3]), Color3.fromRGB(255, 140, 40), Enum.Material.Neon, nil, bodyRoot)
 	exhaust.Transparency = 1
+	local puff = Instance.new("ParticleEmitter")
+	puff.Name = "ExhaustPuff"
+	puff.Texture = "rbxasset://textures/particles/smoke_main.dds"
+	puff.Color = ColorSequence.new(Color3.fromRGB(235, 235, 245))
+	puff.Size = NumberSequence.new(0.5, 1.6)
+	puff.Transparency = NumberSequence.new(0.5, 1)
+	puff.Lifetime = NumberRange.new(0.4, 0.7)
+	puff.Speed = NumberRange.new(3, 6)
+	puff.EmissionDirection = Enum.NormalId.Back
+	puff.Rate = 6
+	puff.Parent = exhaust
 
 	-- Wheels sit on the road: the body's center rides BODY_DROP below the ball's center.
 	local groundToBody = KartRig.BallRadius - BODY_DROP
@@ -149,9 +189,25 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	for i, w in body.wheels do
 		local name = if w[2] >= rearZ then (if w[1] < 0 then "WheelRL" else "WheelRR") else `Wheel{i}`
 		local d = body.wheelRadius * 2
-		local wheel = visual(model, root, name, Vector3.new(body.wheelWidth, d, d), drop * CFrame.new(w[1], wheelY, w[2]), Color3.fromRGB(20, 20, 22), nil, "Cylinder")
-		local hub = visual(model, root, `{name}Hub`, Vector3.new(body.wheelWidth + 0.05, d * 0.5, d * 0.5), drop * CFrame.new(w[1], wheelY, w[2]), accent, Enum.Material.Metal, "Cylinder")
-		local _ = hub
+		local wheelCf = drop * CFrame.new(w[1], wheelY, w[2])
+		local wheel = Instance.new("Part")
+		wheel.Name = name
+		wheel.Shape = Enum.PartType.Cylinder
+		wheel.Size = Vector3.new(body.wheelWidth, d, d)
+		wheel.CFrame = root.CFrame * wheelCf
+		wheel.Color = Color3.fromRGB(26, 26, 30)
+		wheel.Material = Enum.Material.SmoothPlastic
+		wheel.CanCollide = false
+		wheel.CanQuery = false
+		wheel.CanTouch = false
+		wheel.Massless = true
+		wheel.Parent = model
+		-- Wheels turn on their own joint: front ones steer, all of them spin.
+		local joint = motor("WheelJoint", root, wheel, wheelCf)
+		joint:SetAttribute("Front", w[2] < rearZ)
+		visual(model, root, `{name}Hub`, Vector3.new(body.wheelWidth + 0.06, d * 0.55, d * 0.55), wheelCf, accent, Enum.Material.SmoothPlastic, "Cylinder", wheel)
+		-- A spoke so you can see the wheel turning.
+		visual(model, root, `{name}Spoke`, Vector3.new(body.wheelWidth + 0.08, d * 0.5, d * 0.14), wheelCf, Color3.fromRGB(240, 240, 245), Enum.Material.SmoothPlastic, nil, wheel)
 		if w[2] >= rearZ then
 			local sparks = Instance.new("ParticleEmitter")
 			sparks.Name = "DriftSparks"
@@ -177,7 +233,7 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	seat.CanCollide = false
 	seat.Massless = true
 	seat.Parent = model
-	weld(root, seat)
+	weld(bodyRoot, seat)
 
 	local tag = Instance.new("BillboardGui")
 	tag.Name = "NameTag"
@@ -198,6 +254,7 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 
 	model:SetAttribute("KartId", def.id)
 	model:SetAttribute("Body", body.id)
+	model:SetAttribute("WheelRadius", body.wheelRadius)
 	model.Parent = parent
 	return model
 end

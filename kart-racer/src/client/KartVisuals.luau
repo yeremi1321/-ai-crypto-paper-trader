@@ -130,6 +130,13 @@ local function animate(kart: Model, dt: number, t: number)
 		end
 	end
 
+	-- Engine note: higher with speed, a little extra on the throttle.
+	local engineSound = root:FindFirstChild("EngineSound") :: Sound?
+	if engineSound then
+		local throttle = math.clamp(accel / 60, 0, 0.3)
+		engineSound.PlaybackSpeed = 0.7 + speedFrac * 1.1 + throttle
+	end
+
 	local exhaust = kart:FindFirstChild("Exhaust")
 	local puff = exhaust and exhaust:FindFirstChild("ExhaustPuff") :: ParticleEmitter?
 	if puff then

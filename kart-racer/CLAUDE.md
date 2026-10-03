@@ -183,3 +183,20 @@ crypto bot and the separate `open-world-racer/` game, so don't touch them.
   realistic bodies the CPUs drive. Wheel `SpinScale` keeps big rear wheels
   turning at the right rate.
 - `Atmos` sets `Lighting.LightingStyle` (Realistic for realistic themes).
+
+## Studio asset hooks and hand-made land
+
+- `common/Assets` looks up `ReplicatedStorage.KartAssets` (Trees, Pines,
+  Rocks, Bushes, FarTrees models; Sounds: Wind, Water, Birds, Engine,
+  LobbyAmbience; Sky) and MaterialVariants by name in MaterialService
+  (`Assets.Variants`). `Props.build` tries `Assets.placeProp` first; it
+  scales and places part by part (no PivotTo) so Lune can test it.
+- `server/StudioTools` (command bar, Edit mode): preview, check, save,
+  forget, clear. Saved land = TerrainRegion tiles under
+  `ServerStorage.KartTerrain.<id>`; `TerrainBuilder.ensure` pastes them
+  instead of generating, and `TrackBuilder.landHeight` raycasts prop heights
+  onto it. Lune can't run CopyRegion, PasteRegion or ReadVoxels, so the smoke
+  test only covers regions and the saved/generated switch: verify in Studio.
+- Grass decoration is on again (`TerrainBuilder.GrassBlades`, plus
+  `Workspace.Terrain.Decoration` in the project file); the 3.5-stud terrain
+  drop is what keeps blades under the road.

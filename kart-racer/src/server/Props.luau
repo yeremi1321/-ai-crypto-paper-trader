@@ -4,6 +4,7 @@
 -- and towers collide so nobody drives through them).
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Assets = require(ReplicatedStorage.Common.Assets)
 local Shapes = require(ReplicatedStorage.Common.Shapes)
 
 local Props = {}
@@ -376,6 +377,11 @@ builders.clover = function(prop, _theme, parent)
 end
 
 function Props.build(prop: any, theme: any, parent: Instance)
+	-- Imported models (ReplicatedStorage.KartAssets) replace the built-in
+	-- shapes for trees, pines, rocks, bushes and the distant forest.
+	if Assets.placeProp(prop, parent, prop.kind ~= "farTree") then
+		return
+	end
 	local builder = builders[prop.kind]
 	if builder then
 		builder(prop, theme, parent)

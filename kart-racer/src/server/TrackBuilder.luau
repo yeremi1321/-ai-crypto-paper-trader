@@ -14,6 +14,7 @@ local Scenery = require(Shared.Scenery)
 local Track = require(Shared.Track)
 local Tracks = require(Shared.Tracks)
 
+local Assets = require(ReplicatedStorage.Common.Assets)
 local Landmarks = require(script.Parent.Landmarks)
 local Props = require(script.Parent.Props)
 local RoadSurface = require(script.Parent.RoadSurface)
@@ -101,7 +102,9 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 	-- Land: realistic themes get Terrain (hills, lakes, mountains, banks under
 	-- raised road); the toy-world themes keep a flat part floor.
 	local plan = if opts.ground ~= false then Landscape.plan(track) else nil
-	if plan then
+	-- Land hand-sculpted in Studio and saved (StudioTools) wins over the plan.
+	local handMade = opts.ground ~= false and TerrainBuilder.saved(trackId) ~= nil
+	if plan or handMade then
 		TerrainBuilder.ensure(trackId, plan)
 	end
 
@@ -124,7 +127,7 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 	end
 
 	-- Flat floor under everything (themes without terrain).
-	if opts.ground ~= false and not plan then
+	if opts.ground ~= false and not plan and not handMade then
 		local margin = 300
 		local sizeX, sizeZ = maxX - minX + margin * 2, maxZ - minZ + margin * 2
 		local tile = 1000
@@ -283,7 +286,14 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		scenery.Name = "Scenery"
 		scenery.Parent = folder
 		for _, prop in Scenery.place(track) do
-			if plan then
+			if handMade then
+				-- Stand props on the sculpted surface; skip water.
+				local y = TrackBuilder.landHeight(prop.x, prop.z)
+				if y then
+					prop.y = y
+					Props.build(prop, theme, scenery)
+				end
+			elseif plan then
 				-- Stand props on the land; skip any that would be in a lake.
 				local y = Landscape.groundAt(plan, prop.x, prop.z)
 				if y then
@@ -300,8 +310,82 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		require(script.Parent.FortressBuilder).build(track, folder)
 	end
 
+	TrackBuilder.ambience(folder, track, plan, minX, maxX, minZ, maxZ)
+
 	folder.Parent = Workspace
 	return folder, track
+end
+
+-- Height of the terrain surface at (x, z), or nil over water or nothing.
+function TrackBuilder.landHeight(x: number, z: number): number?
+	local terrain = Workspace:FindFirstChildOfClass("Terrain")
+	if not terrain then
+		return nil
+	end
+	local ok, hit = pcall(function()
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Include
+		params.FilterDescendantsInstances = { terrain }
+		return Workspace:Raycast(Vector3.new(x, 3000, z), Vector3.new(0, -6000, 0), params)
+	end)
+	if not ok or not hit or hit.Material == Enum.Material.Water then
+		return nil
+	end
+	return hit.Position.Y
+end
+
+-- Ambient sound, only if it was added in Studio (KartAssets.Sounds): wind
+-- over the whole map, water at lakes and rivers, birds in the trees. Each
+-- is a looped sound on an invisible part, fading out with distance, so
+-- players in the lobby (far away) hear none of it.
+function TrackBuilder.ambience(folder: Instance, track: Track.Built, plan: any?, minX: number, maxX: number, minZ: number, maxZ: number)
+	local sounds = Instance.new("Folder")
+	sounds.Name = "Ambience"
+	sounds.Parent = folder
+	local function emitter(name: string, at: Vector3, reach: number, volume: number): boolean
+		local sound = Assets.sound(name)
+		if not sound then
+			return false
+		end
+		local holder = Instance.new("Part")
+		holder.Name = name
+		holder.Anchored = true
+		holder.CanCollide = false
+		holder.CanQuery = false
+		holder.CanTouch = false
+		holder.Transparency = 1
+		holder.Size = Vector3.one
+		holder.CFrame = CFrame.new(at)
+		holder.Parent = sounds
+		sound.Looped = true
+		sound.Volume = math.min(sound.Volume, volume)
+		sound.RollOffMode = Enum.RollOffMode.Linear
+		sound.RollOffMinDistance = reach * 0.3
+		sound.RollOffMaxDistance = reach
+		sound.Playing = true
+		sound.Parent = holder
+		return true
+	end
+	local cx, cz = (minX + maxX) / 2, (minZ + maxZ) / 2
+	local extent = math.max(maxX - minX, maxZ - minZ) / 2
+	local y = track.points[1].y + 20
+	emitter("Wind", Vector3.new(cx, y, cz), extent + 400, 0.3)
+	if plan then
+		-- Water: every lake, and every third pool along a river (at most 10).
+		local placed = 0
+		for i, lake in plan.lakes do
+			if placed < 10 and (not lake.bridged or i % 3 == 0) then
+				if emitter("Water", Vector3.new(lake.x, lake.surface + 1, lake.z), lake.r + 90, 0.5) then
+					placed += 1
+				end
+			end
+		end
+	end
+	-- Birds: a few spots spread round the lap, beside the road.
+	for k = 0, 5 do
+		local spot = Track.spot(track, track.length * (k + 0.5) / 6, if k % 2 == 0 then 70 else -70)
+		emitter("Birds", Vector3.new(spot.x, spot.y + 25, spot.z), 140, 0.25)
+	end
 end
 
 return TrackBuilder

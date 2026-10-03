@@ -190,6 +190,7 @@ src/shared/    pure game rules, tested outside Roblox with Lune
   LobbyLayout  where everything in the lobby goes
 src/common/    Roblox code shared by server and client
   KartRig      builds and drives a kart; Shapes = rounded parts; Atmos = lighting
+  Assets       finds models, MaterialVariants, sounds and sky made in Studio
 src/server/
   RoundService    lobby → vote → race → results loop, garage actions, tokens
   RaceService     one race: grid, laps, respawns, CPUs, crossers, results
@@ -197,6 +198,7 @@ src/server/
   DataService     saving with retries and safe failure
   TrackBuilder / RoadSurface / TerrainBuilder / FortressBuilder /
   Landmarks / Props / LobbyBuilder   world building
+  StudioTools     command-bar helpers to sculpt and save a track's land
 src/client/
   KartController  your kart, camera, input
   KartVisuals     lean, wheels, character animations
@@ -212,6 +214,96 @@ lune run tests/syntax   # every file compiles
 lune run tests/smoke    # builds every track, kart, item and the lobby in Lune's Roblox DOM
 ```
 
+## Make it look more real in Studio
+
+All of this is optional, and none of it needs code: the game finds things by
+name. Check the licence of anything you download (some Sketchfab models need
+a credit, some can't be used in games at all).
+
+### 1. Your own 3D models (trees, rocks)
+
+1. Bring them in with **File → Import 3D** (FBX, OBJ or glTF) or the Toolbox.
+   Keep them low-poly: trees under about 2,000 triangles, distant trees under
+   about 300.
+2. In **ReplicatedStorage**, make a folder `KartAssets` with folders `Trees`,
+   `Pines`, `Rocks`, `Bushes` and `FarTrees`, and put each model (as a Model)
+   in the right one.
+3. Too big or small? Add a number attribute `Scale` to that model.
+
+Every tree, pine, rock and bush on the tracks then uses one of your models.
+Each copy is scaled, turned, leaned and shaded a little differently, stands
+on the ground, and never collides with karts.
+
+### 2. PBR textures
+
+- **Roads, verges and barriers:** in **MaterialService**, add MaterialVariants
+  with these names and base materials: `KartAsphalt` (Asphalt),
+  `KartConcrete` (Concrete), `KartGrass` (Grass), `KartSand` (Sand),
+  `KartGravel` (Pebble), `KartDirt` (Ground), `KartStone` (Slate). Give each
+  a ColorMap, NormalMap and RoughnessMap (MetalnessMap only for metal). The
+  track builder uses them automatically.
+- **Terrain:** in MaterialService's properties, point a terrain material (for
+  example Grass) at your variant to retexture the land.
+- **Models:** SurfaceAppearance (colour, normal, roughness, metalness maps)
+  goes on the MeshParts of the models from step 1.
+
+### 3. Sound
+
+In `KartAssets`, add a folder `Sounds` with Sound objects (Toolbox audio or
+your uploads) named:
+
+| Name | Where it plays |
+| --- | --- |
+| `Wind` | over the whole track |
+| `Water` | at every lake and along rivers |
+| `Birds` | at six spots beside the road |
+| `Engine` | on every kart; the pitch rises with speed |
+| `LobbyAmbience` | inside the lobby |
+
+### 4. Sky
+
+Put a Sky (a custom skybox) in `KartAssets` named `Sky`, or straight into
+Lighting. Without one, Roblox's sky is used with a bigger sun and stars.
+
+### 5. Sculpt the land yourself
+
+The land is generated for each race, so hand edits would be wiped unless
+you save them. In Edit mode, open **View → Command Bar** and run:
+
+```lua
+local T = require(game.ServerScriptService.Server.StudioTools)
+T.preview("ridgeline")   -- builds the track and its land
+-- now use the Terrain Editor: Generate, Draw, Add, Smooth, Paint, Import
+-- (heightmaps, e.g. from a heightmap website), or a plugin like World Engine
+T.check("ridgeline")     -- lists spots where land comes within 1 stud of the road
+T.save("ridgeline")      -- races use your land from now on
+T.clear()                -- remove the preview, then File → Save
+```
+
+`T.forget("ridgeline")` goes back to generated land. Use `"lobby"` to shape
+the view outside the lobby window. Track ids: `ridgeline`, `alpine`,
+`sunny`, `canyon`, `backyard`, `emberfort`, `neon`, `toyroom`, `kitchen`.
+The road always comes from the track data, so leave room under it.
+
+Animated grass (Terrain Decoration) is on: generated terrain stays 3.5 studs
+under every road and 8 under the lobby floor. If grass ever shows through
+something, set `TerrainBuilder.GrassBlades = false`.
+
+### Already set up in code
+
+Future lighting with the Realistic lighting style, Atmosphere haze,
+volumetric clouds, gentle bloom, sun rays, colour correction, a low ambient
+fill for natural shadow contrast, and a warm or cool tint on sunlit surfaces
+per map (`Tracks.Themes`).
+
+### Keep it fast
+
+- Low-poly models, and reuse a few models many times rather than many
+  different ones.
+- Few local lights; leave shadows off on small ones.
+- Big pasted land and many models take longer to load at race start; test
+  on a phone with the device emulator.
+
 ## Assets to replace
 
 Everything is built from Roblox's own parts: boxes, spheres, stretched spheres
@@ -222,11 +314,12 @@ uploads. These will look much better as custom meshes or sounds:
   keep the simple ball collider.
 - **Landmarks:** bed, toaster, cereal bowl, flowerpot, toy chest, crossers
   (robot, train, beetle), giant props (`Landmarks.luau`, `Props.luau`).
-- **Trees:** pines and leafy trees are built from textured parts. Free
-  realistic tree meshes from the Creator Store would look better; swap them
-  in `Props.luau` (`builders.pine`, `builders.tree`).
-- **Sounds (none yet):**
-  - engine, drift, boost: no slots yet, needs adding;
+- **Trees and rocks:** built from textured parts until you add models to
+  `ReplicatedStorage.KartAssets` (see "Make it look more real in Studio").
+- **Sounds (none built in):**
+  - engine, wind, water, birds, lobby: drop Sounds into
+    `KartAssets.Sounds` (see above);
+  - drift, boost: no slots yet;
   - item sounds: `ItemService.Sounds`;
   - horns: `Cosmetics.Horns[].soundId`;
   - countdown, music: no slots yet.

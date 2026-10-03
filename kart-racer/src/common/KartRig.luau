@@ -19,6 +19,7 @@ local function child(parent: Instance, name: string): Instance
 end
 
 local Shared = child(ReplicatedStorage, "Shared")
+local Assets = require(child(child(ReplicatedStorage, "Common"), "Assets"))
 local KartPhysics = require(child(Shared, "KartPhysics"))
 local Cosmetics = require(child(Shared, "Cosmetics"))
 local KartBodies = require(child(Shared, "KartBodies"))
@@ -386,6 +387,18 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 		trail.LightEmission = if trailStyle.id == "smoke" then 0 else 0.6
 		trail.FaceCamera = true
 		trail.Parent = bodyRoot
+	end
+
+	-- Engine sound, if one was added (KartAssets.Sounds.Engine); clients
+	-- raise its pitch with speed (KartVisuals).
+	local engine = Assets.sound("Engine")
+	if engine then
+		engine.Name = "EngineSound"
+		engine.Looped = true
+		engine.Volume = math.min(engine.Volume, 0.45)
+		engine.RollOffMaxDistance = 140
+		engine.Playing = true
+		engine.Parent = root
 	end
 
 	local seatPos = body.seat

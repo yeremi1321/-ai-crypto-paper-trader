@@ -27,7 +27,8 @@ Tracks.Themes = {
 		line = { 236, 236, 228 },
 		clock = 14.5,
 		-- Lighting: clear summer afternoon with soft shadows and real clouds.
-		ambient = { 95, 100, 110 },
+		ambient = { 78, 82, 92 }, -- low fill light: natural shadow contrast
+		colorShiftTop = { 60, 45, 20 }, -- warm afternoon sun
 		brightness = 3.2,
 		atmosphere = { density = 0.32, haze = 1.6, glare = 0.5, color = { 199, 210, 225 }, decay = { 106, 124, 150 } },
 		bloom = 0.25,
@@ -59,7 +60,8 @@ Tracks.Themes = {
 		line = { 240, 232, 210 },
 		clock = 17.2,
 		-- Lighting: dusty golden hour.
-		ambient = { 120, 96, 82 },
+		ambient = { 100, 82, 72 },
+		colorShiftTop = { 90, 55, 25 }, -- golden hour
 		brightness = 2.8,
 		atmosphere = { density = 0.36, haze = 2, glare = 1, color = { 240, 200, 160 }, decay = { 180, 110, 74 } },
 		bloom = 0.3,
@@ -195,7 +197,8 @@ Tracks.Themes = {
 		curb = { { 196, 38, 34 }, { 236, 236, 232 } },
 		line = { 236, 236, 228 },
 		clock = 16.2,
-		ambient = { 104, 98, 96 },
+		ambient = { 86, 80, 80 },
+		colorShiftTop = { 85, 55, 25 }, -- warm autumn light
 		brightness = 2.9,
 		atmosphere = { density = 0.32, haze = 1.5, glare = 0.6, color = { 230, 210, 185 }, decay = { 150, 120, 100 } },
 		bloom = 0.25,
@@ -231,7 +234,8 @@ Tracks.Themes = {
 		curb = { { 200, 40, 40 }, { 238, 238, 234 } },
 		line = { 238, 238, 230 },
 		clock = 10.5,
-		ambient = { 92, 100, 112 },
+		ambient = { 76, 82, 94 },
+		colorShiftTop = { 30, 30, 40 }, -- cool mountain morning
 		brightness = 3.1,
 		atmosphere = { density = 0.3, haze = 1.2, glare = 0.4, color = { 200, 215, 235 }, decay = { 100, 125, 160 } },
 		bloom = 0.25,

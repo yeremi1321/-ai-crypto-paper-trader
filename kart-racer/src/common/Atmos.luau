@@ -11,6 +11,7 @@ local function child(parent: Instance, name: string): Instance
 	return parent:FindFirstChild(name) or parent:WaitForChild(name)
 end
 local Tracks = require(child(child(ReplicatedStorage, "Shared"), "Tracks"))
+local Assets = require(child(child(ReplicatedStorage, "Common"), "Assets"))
 
 local Atmos = {}
 
@@ -45,8 +46,28 @@ local function tween(inst: Instance, seconds: number, goals: { [string]: any })
 	TweenService:Create(inst, TweenInfo.new(seconds, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), goals):Play()
 end
 
+-- The sky: one placed in Lighting in Studio wins, then a custom one from
+-- KartAssets.Sky, else Roblox's default sky with a bigger sun and stars.
+local function ensureSky()
+	if Lighting:FindFirstChildOfClass("Sky") then
+		return
+	end
+	local sky = Assets.sky()
+	if not sky then
+		local made = Instance.new("Sky")
+		made.SunAngularSize = 14
+		made.MoonAngularSize = 10
+		made.StarCount = 3000
+		sky = made
+	end
+	local s = sky :: Sky
+	s.Name = "KartSky"
+	s.Parent = Lighting
+end
+
 -- Sky, sun and colour grading for a theme. `seconds` = fade time (0 = snap).
 function Atmos.applyTheme(theme: any, seconds: number?)
+	ensureSky()
 	local fade = seconds or Atmos.FadeSeconds
 	-- The sun can't sweep across the sky in a second without looking odd, so
 	-- the time of day changes at once; everything else fades.
@@ -62,10 +83,13 @@ function Atmos.applyTheme(theme: any, seconds: number?)
 	pcall(function()
 		(Lighting :: any).LightingStyle = if theme.realistic then Enum.LightingStyle.Realistic else Enum.LightingStyle.Soft
 	end)
+	-- ColorShift_Top tints sunlit surfaces (warm afternoons, cool mornings),
+	-- like light bouncing off the sky and ground.
 	tween(Lighting, fade, {
 		Brightness = theme.brightness,
 		Ambient = rgb(theme.ambient),
 		OutdoorAmbient = rgb(theme.ambient),
+		ColorShift_Top = rgb(theme.colorShiftTop or { 0, 0, 0 }),
 	})
 
 	local a = theme.atmosphere

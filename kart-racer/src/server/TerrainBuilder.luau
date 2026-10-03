@@ -7,10 +7,20 @@
 -- calls it as soon as the winning track is announced, so the land is usually
 -- ready before the race loads); calling it again for the same track is free.
 -- Anything registered with `onCleared` (the lobby's view) is rebuilt after.
+--
+-- Hand-made land: sculpt a track's terrain in Studio and save it with
+-- StudioTools (ServerStorage.KartTerrain.<track id>, as TerrainRegion
+-- tiles). If saved land exists, races paste it instead of generating.
 
+local ServerStorage = game:GetService("ServerStorage")
 local Workspace = game:GetService("Workspace")
 
 local TerrainBuilder = {}
+
+-- Animated grass blades on Grass terrain. Terrain is kept 3.5 studs under
+-- every road and verge (8 under the lobby floors), well below blade height,
+-- so they can't poke through. If they ever show through a surface, set false.
+TerrainBuilder.GrassBlades = true
 
 local current: string? = nil
 local building: string? = nil
@@ -34,12 +44,79 @@ end
 
 -- Things that must survive a track change (the lobby's window view).
 function TerrainBuilder.onCleared(rebuild: () -> ())
-	table.insert(keepers, rebuild)
+	if not table.find(keepers, rebuild) then
+		table.insert(keepers, rebuild)
+	end
 	rebuild()
 end
 
 -- Counts fills by kind; the smoke test checks these without real Terrain.
 TerrainBuilder.lastCounts = {} :: { [string]: number }
+-- "generated" or "saved": where the current track's land came from.
+TerrainBuilder.lastSource = nil :: string?
+
+TerrainBuilder.SavedFolder = "KartTerrain"
+
+local function runKeepers()
+	for _, rebuild in keepers do
+		local ok, err = pcall(rebuild)
+		if not ok then
+			warn("[TerrainBuilder] keeper failed:", err)
+		end
+	end
+end
+
+-- Material colours, water look and grass blades for a theme's land.
+local function applySettings(terrain: Terrain, spec: any)
+	for name, c in spec.colors or {} do
+		pcall(function()
+			terrain:SetMaterialColor(material(name), Color3.fromRGB(c[1], c[2], c[3]))
+		end)
+	end
+	local water = spec.water
+	if water then
+		terrain.WaterColor = Color3.fromRGB(water.color[1], water.color[2], water.color[3])
+		terrain.WaterTransparency = water.transparency or 0.4
+		terrain.WaterReflectance = water.reflectance or 0.5
+		terrain.WaterWaveSize = water.waveSize or 0.12
+		terrain.WaterWaveSpeed = water.waveSpeed or 8
+	end
+end
+
+-- The saved hand-made land for a track (or "lobby"), if any.
+function TerrainBuilder.saved(id: string): Instance?
+	local root = ServerStorage:FindFirstChild(TerrainBuilder.SavedFolder)
+	local f = root and root:FindFirstChild(id)
+	if f and #f:GetChildren() > 0 then
+		return f
+	end
+	return nil
+end
+
+-- Pastes saved land tiles back where they were copied from. Returns
+-- whether there was saved land for this id.
+function TerrainBuilder.pasteSaved(id: string): boolean
+	local saved = TerrainBuilder.saved(id)
+	if not saved then
+		return false
+	end
+	local terrain = terrainOf()
+	if terrain then
+		for _, tile in saved:GetChildren() do
+			if tile:IsA("TerrainRegion") then
+				local corner = Vector3int16.new(tile:GetAttribute("CellX"), tile:GetAttribute("CellY"), tile:GetAttribute("CellZ"))
+				terrain:PasteRegion(tile, corner, true)
+				task.wait()
+			end
+		end
+	end
+	return true
+end
+
+-- Forget which track's land is built (StudioTools previews use this).
+function TerrainBuilder.reset()
+	current = nil
+end
 
 -- `additive` adds to the land already there (the lobby's view) instead of
 -- replacing it.
@@ -83,27 +160,13 @@ function TerrainBuilder.apply(plan: any, additive: boolean?)
 	end
 
 	if terrain then
-		-- Animated grass blades stand 1-2 studs tall and poke through road
-		-- and floors laid just above the ground, so they stay off.
 		pcall(function()
-			(terrain :: any).Decoration = false
+			(terrain :: any).Decoration = TerrainBuilder.GrassBlades
 		end)
 	end
 	if terrain and not additive then
 		terrain:Clear()
-		for name, c in spec.colors or {} do
-			pcall(function()
-				terrain:SetMaterialColor(material(name), Color3.fromRGB(c[1], c[2], c[3]))
-			end)
-		end
-		local water = spec.water
-		if water then
-			terrain.WaterColor = Color3.fromRGB(water.color[1], water.color[2], water.color[3])
-			terrain.WaterTransparency = water.transparency or 0.4
-			terrain.WaterReflectance = water.reflectance or 0.5
-			terrain.WaterWaveSize = water.waveSize or 0.12
-			terrain.WaterWaveSpeed = water.waveSpeed or 8
-		end
+		applySettings(terrain, spec)
 	end
 
 	-- Ground: a slab whose top is just under the lowest road.
@@ -155,12 +218,7 @@ function TerrainBuilder.apply(plan: any, additive: boolean?)
 	end
 
 	if not additive then
-		for _, rebuild in keepers do
-			local ok, err = pcall(rebuild)
-			if not ok then
-				warn("[TerrainBuilder] keeper failed:", err)
-			end
-		end
+		runKeepers()
 	end
 end
 
@@ -185,7 +243,23 @@ function TerrainBuilder.ensure(trackId: string, plan: any?)
 			local Tracks = require(ReplicatedStorage.Shared.Tracks)
 			p = Landscape.plan(Track.build(Tracks.get(trackId)))
 		end
-		if p then
+		if TerrainBuilder.saved(trackId) then
+			-- Hand-made land from Studio replaces the generated land.
+			TerrainBuilder.lastSource = "saved"
+			local terrain = terrainOf()
+			if terrain then
+				terrain:Clear()
+				pcall(function()
+					(terrain :: any).Decoration = TerrainBuilder.GrassBlades
+				end)
+				if p then
+					applySettings(terrain, p.spec)
+				end
+			end
+			TerrainBuilder.pasteSaved(trackId)
+			runKeepers()
+		elseif p then
+			TerrainBuilder.lastSource = "generated"
 			TerrainBuilder.apply(p)
 		end
 	end)

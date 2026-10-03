@@ -13,6 +13,7 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage.Shared
 local Karts = require(Shared.Karts)
 local LobbyLayout = require(Shared.LobbyLayout)
+local Assets = require(ReplicatedStorage.Common.Assets)
 local KartRig = require(ReplicatedStorage.Common.KartRig)
 local Shapes = require(ReplicatedStorage.Common.Shapes)
 local Tracks = require(Shared.Tracks)
@@ -23,8 +24,9 @@ local TerrainBuilder = require(script.Parent.TerrainBuilder)
 
 local LobbyBuilder = {}
 
--- Optional looping ambience (a soft machinery hum). Upload a sound to Roblox
--- and paste its id here, e.g. "rbxassetid://123456". Empty = silent.
+-- Optional looping ambience (a soft machinery hum): put a Sound named
+-- LobbyAmbience in ReplicatedStorage.KartAssets.Sounds, or paste an uploaded
+-- sound's id here, e.g. "rbxassetid://123456". Empty = silent.
 LobbyBuilder.AmbientSoundId = ""
 
 local C = {
@@ -348,6 +350,10 @@ end
 -- trees round its shore, grassy hills and a ring of snowy peaks. Built in
 -- Terrain next to the lobby, and rebuilt whenever a track's land replaces it.
 buildVista = function()
+	-- A view sculpted by hand in Studio and saved as "lobby" wins.
+	if TerrainBuilder.pasteSaved("lobby") then
+		return
+	end
 	local lakeZ = O.z + HD + 240
 	local vista = {
 		spec = { ground = "Grass", bank = "Grass" },
@@ -567,6 +573,19 @@ function LobbyBuilder.build(): Handles
   table.insert(tokens, token)
  end
  finish(lobby)
+ local ambience = Assets.sound("LobbyAmbience")
+ if not ambience and LobbyBuilder.AmbientSoundId ~= "" then
+  ambience = Instance.new("Sound")
+  ambience.SoundId = LobbyBuilder.AmbientSoundId
+ end
+ if ambience then
+  local hum = Shapes.box(lobby, Vector3.one, CFrame.new(W(0, 20, 0)), { color = C.white, transparency = 1, name = "Ambience" })
+  ambience.Looped = true
+  ambience.Volume = math.min(ambience.Volume, 0.3)
+  ambience.RollOffMaxDistance = 260
+  ambience.Playing = true
+  ambience.Parent = hum
+ end
  lobby.Parent = Workspace
  TerrainBuilder.onCleared(buildVista)
 	local function setKartDisplay(slot: number, name: string?, kartId: string?, look: any?)

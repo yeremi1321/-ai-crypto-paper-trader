@@ -67,6 +67,9 @@ load = function(module: any)
 		require = nil :: any,
 		Instance = Instance,
 		Vector3 = roblox.Vector3,
+		Vector3int16 = roblox.Vector3int16,
+		Region3int16 = roblox.Region3int16,
+		Region3 = roblox.Region3,
 		Vector2 = roblox.Vector2,
 		CFrame = roblox.CFrame,
 		Color3 = roblox.Color3,
@@ -438,6 +441,124 @@ check("LobbyScreens: phases, headshots, countdown and local doors", function()
 	end
 	assert(checked == 5, "room and departure doors exercised")
 	gui:Destroy()
+end)
+
+check("Studio assets: imported models, MaterialVariants and sounds are used", function()
+	-- What a builder would set up in Studio: a tree model, sounds, a variant.
+	local rs = game:GetService("ReplicatedStorage")
+	local kartAssets = Instance.new("Folder")
+	kartAssets.Name = "KartAssets"
+	local trees = Instance.new("Folder")
+	trees.Name = "Trees"
+	trees.Parent = kartAssets
+	local tree = Instance.new("Model")
+	tree.Name = "ImportedOak"
+	local trunk = Instance.new("Part")
+	trunk.Size = roblox.Vector3.new(2, 10, 2)
+	trunk.CFrame = roblox.CFrame.new(100, 5, 100)
+	trunk.CanCollide = true
+	trunk.Parent = tree
+	local crown = Instance.new("Part")
+	crown.Size = roblox.Vector3.new(12, 10, 12)
+	crown.CFrame = roblox.CFrame.new(100, 14, 100)
+	crown.Parent = tree
+	tree.Parent = trees
+	local sounds = Instance.new("Folder")
+	sounds.Name = "Sounds"
+	sounds.Parent = kartAssets
+	for _, name in { "Wind", "Water", "Birds", "Engine" } do
+		local sound = Instance.new("Sound")
+		sound.Name = name
+		sound.Parent = sounds
+	end
+	kartAssets.Parent = rs
+	local variant = Instance.new("MaterialVariant")
+	variant.Name = "KartAsphalt"
+	variant.BaseMaterial = roblox.Enum.Material.Asphalt
+	variant.Parent = game:GetService("MaterialService")
+
+	local TrackBuilder = load(server.TrackBuilder)
+	local Landscape = load(shared.Landscape)
+	local Track = load(shared.Track)
+	local Tracks = load(shared.Tracks)
+	-- Sunny Loop has leafy trees (alpine has only pines, which stay built-in).
+	local folder = TrackBuilder.build("sunny")
+	local plan = Landscape.plan(Track.build(Tracks.get("sunny")))
+	local imported = 0
+	for _, m in folder.Scenery:GetChildren() do
+		if m.Name == "ImportedOak" then
+			imported += 1
+			local trunkPart, crownPart
+			for _, part in m:GetChildren() do
+				assert(not part.CanCollide and part.Anchored, "imported scenery must not collide")
+				if part.Size.Y < part.Size.X then
+					crownPart = part
+				end
+				if part.Size.X < part.Size.Y then
+					trunkPart = part
+				end
+			end
+			-- Scaled within the tree rule's size range (0.8 to 1.5).
+			local k = crownPart.Size.X / 12
+			assert(k >= 0.79 and k <= 1.51, `scale {k}`)
+			-- Standing on the land: the trunk's base is at the ground there.
+			local p = trunkPart.CFrame.Position
+			local ground = Landscape.groundAt(plan, p.X, p.Z) :: number
+			local base = p.Y - trunkPart.Size.Y / 2
+			assert(math.abs(base - ground) < 1.5, `tree base {base} vs ground {ground}`)
+		end
+	end
+	assert(imported > 50, `imported trees used: {imported}`)
+	local road = folder.RoadSurface:GetChildren()[1]
+	assert(road.MaterialVariant == "KartAsphalt", "asphalt variant on the road")
+	local ambience = folder:FindFirstChild("Ambience")
+	assert(ambience and ambience:FindFirstChild("Wind") and ambience:FindFirstChild("Water") and ambience:FindFirstChild("Birds"), "ambient sounds")
+	local KartRig = load(common.KartRig)
+	local kart = KartRig.build("classic", "Tester", roblox.CFrame.new(0, 0, 0), game:GetService("Workspace"))
+	assert(kart.Root:FindFirstChild("EngineSound"), "engine sound on karts")
+	kart:Destroy()
+	print(`     {imported} imported trees placed`)
+	kartAssets:Destroy()
+	variant:Destroy()
+end)
+
+check("Hand-made land: regions cover each track, saved land replaces generated", function()
+	local StudioTools = load(server.StudioTools)
+	local Track = load(shared.Track)
+	local Tracks = load(shared.Tracks)
+	for _, def in Tracks.List do
+		local lo, hi = StudioTools.region(def.id)
+		assert(lo.X < hi.X and lo.Y < hi.Y and lo.Z < hi.Z, `{def.id}: empty region`)
+		assert(math.abs(lo.X) < 32000 and math.abs(hi.Z) < 32000, `{def.id}: region out of range`)
+		for _, p in Track.build(def).points do
+			assert(p.x >= lo.X * 4 and p.x <= hi.X * 4 + 4 and p.z >= lo.Z * 4 and p.z <= hi.Z * 4 + 4, `{def.id}: road outside its region`)
+			assert(p.y >= lo.Y * 4 and p.y <= hi.Y * 4, `{def.id}: road above or below its region`)
+		end
+	end
+	local lo, hi = StudioTools.region("lobby")
+	assert(lo.Z * 4 > 4000 and hi.Z * 4 > lo.Z * 4, "lobby region")
+	-- A saved tile makes races use it instead of generating land.
+	local TerrainBuilder = load(server.TerrainBuilder)
+	local TrackBuilder = load(server.TrackBuilder)
+	local root = Instance.new("Folder")
+	root.Name = "KartTerrain"
+	local saved = Instance.new("Folder")
+	saved.Name = "canyon"
+	local tile = Instance.new("TerrainRegion")
+	tile:SetAttribute("CellX", 0)
+	tile:SetAttribute("CellY", 0)
+	tile:SetAttribute("CellZ", 0)
+	tile.Parent = saved
+	saved.Parent = root
+	root.Parent = game:GetService("ServerStorage")
+	TerrainBuilder.reset()
+	local folder = TrackBuilder.build("canyon")
+	assert(TerrainBuilder.lastSource == "saved", "saved land used")
+	assert(not folder:FindFirstChild("Ground"), "no part floor under hand-made land")
+	root:Destroy()
+	TerrainBuilder.reset()
+	TrackBuilder.build("canyon")
+	assert(TerrainBuilder.lastSource == "generated", "generated again once forgotten")
 end)
 
 print(if failures == 0 then "smoke ok" else `{failures} smoke failure(s)`)

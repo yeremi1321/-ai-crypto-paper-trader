@@ -13,6 +13,7 @@
 -- concrete curbs; the toy-world themes keep their own colours.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Assets = require(ReplicatedStorage.Common.Assets)
 local RoadGeometry = require(ReplicatedStorage.Shared.RoadGeometry)
 local Track = require(ReplicatedStorage.Shared.Track)
 
@@ -26,6 +27,15 @@ RoadSurface.VergeExtra = 3 -- the verge runs this far past the barrier line
 local SHOULDER_DROP = 0.12 -- shoulders sit just under the road so edges read
 
 export type Style = { color: Color3, material: Enum.Material, collide: boolean, surface: string? }
+
+-- A MaterialVariant made in Studio (Assets.Variants) overrides the built-in
+-- texture for its base material: KartAsphalt on the road, and so on.
+local function finish(p: BasePart, style: Style)
+	local variant = Assets.variantFor(style.material)
+	if variant then
+		p.MaterialVariant = variant
+	end
+end
 
 local function v3(p: any): Vector3
 	return Vector3.new(p.x, p.y, p.z)
@@ -72,6 +82,7 @@ local function triangle(parent: Instance, a: Vector3, b: Vector3, c: Vector3, th
 			if style.surface then
 				wedge:SetAttribute("Surface", style.surface)
 			end
+			finish(wedge, style)
 			wedge.Parent = parent
 		end
 	end
@@ -98,6 +109,7 @@ local function chordBox(parent: Instance, a: Vector3, b: Vector3, width: number,
 	p.CastShadow = style.collide
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
+	finish(p, style)
 	p.Parent = parent
 	return p
 end

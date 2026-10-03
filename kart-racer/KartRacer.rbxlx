@@ -19,6 +19,179 @@
       </Properties>
       <Item class="ModuleScript" referent="3">
         <Properties>
+          <string name="Name">Assets</string>
+          <string name="Source"><![CDATA[-- Studio-made assets the game picks up by name, so the world can be upgraded
+-- in Studio without touching code. Everything is optional: with nothing set
+-- up, the game uses its built-in shapes, materials and silence.
+--
+--   ReplicatedStorage
+--     KartAssets
+--       Trees, Pines, Rocks, Bushes, FarTrees
+--           Models (e.g. low-poly meshes brought in with Import 3D). Any
+--           number per folder; each prop picks one, scaled, turned and
+--           leaned a little so forests don't repeat. Optional attribute
+--           `Scale` on a model sets its base size.
+--       Sounds
+--           Sound objects named Wind, Water, Birds, Engine, LobbyAmbience.
+--       Sky
+--           A Sky object (a custom skybox) used on every track.
+--   MaterialService
+--       MaterialVariants named in Assets.Variants (KartAsphalt, KartGrass, …)
+--       replace the built-in look of roads, verges, barriers and props. Each
+--       must use the base material listed beside its name.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Assets = {}
+
+Assets.FolderName = "KartAssets"
+
+-- Scenery prop kind → asset folder.
+Assets.PropFolders = {
+	tree = "Trees",
+	pine = "Pines",
+	rock = "Rocks",
+	bush = "Bushes",
+	farTree = "FarTrees", -- keep these very low-poly: hundreds are placed
+}
+
+-- Surface → MaterialVariant name (and the base material it must use).
+Assets.Variants = {
+	asphalt = { name = "KartAsphalt", base = "Asphalt" },
+	concrete = { name = "KartConcrete", base = "Concrete" },
+	grass = { name = "KartGrass", base = "Grass" },
+	sand = { name = "KartSand", base = "Sand" },
+	gravel = { name = "KartGravel", base = "Pebble" },
+	ground = { name = "KartDirt", base = "Ground" },
+	slate = { name = "KartStone", base = "Slate" },
+}
+
+local function folder(name: string): Instance?
+	local root = ReplicatedStorage:FindFirstChild(Assets.FolderName)
+	return root and root:FindFirstChild(name)
+end
+
+-- The models available for a prop kind (empty when none were added).
+function Assets.models(kind: string): { Model }
+	local out = {}
+	local name = Assets.PropFolders[kind]
+	local f = name and folder(name)
+	if f then
+		for _, m in f:GetChildren() do
+			if m:IsA("Model") then
+				table.insert(out, m)
+			end
+		end
+	end
+	return out
+end
+
+-- The MaterialVariant name to use for a part made of `material`, if one was
+-- set up in MaterialService with the matching base material.
+function Assets.variantFor(material: Enum.Material): string?
+	local ok, service = pcall(function()
+		return game:GetService("MaterialService")
+	end)
+	if not ok or not service then
+		return nil
+	end
+	for _, v in Assets.Variants do
+		if v.base == material.Name then
+			local variant = service:FindFirstChild(v.name)
+			if variant and variant:IsA("MaterialVariant") and variant.BaseMaterial == material then
+				return v.name
+			end
+		end
+	end
+	return nil
+end
+
+-- A copy of a sound from KartAssets.Sounds, or nil.
+function Assets.sound(name: string): Sound?
+	local f = folder("Sounds")
+	local s = f and f:FindFirstChild(name)
+	if s and s:IsA("Sound") then
+		return s:Clone()
+	end
+	return nil
+end
+
+-- A copy of the custom Sky, or nil.
+function Assets.sky(): Sky?
+	local root = ReplicatedStorage:FindFirstChild(Assets.FolderName)
+	local s = root and root:FindFirstChild("Sky")
+	if s and s:IsA("Sky") then
+		return s:Clone()
+	end
+	return nil
+end
+
+-- Places a copy of one of this kind's models standing on (x, y, z), scaled
+-- by prop.size, turned by prop.yaw and leaned slightly. Returns nil when the
+-- kind has no models. Works part by part (no PivotTo), so the smoke test can
+-- run it too.
+function Assets.placeProp(prop: any, parent: Instance, shadows: boolean): Model?
+	local list = Assets.models(prop.kind)
+	if #list == 0 then
+		return nil
+	end
+	local seed = math.abs(math.floor(prop.x * 13 + prop.z * 7))
+	local source = list[seed % #list + 1]
+	local model = source:Clone()
+	local parts: { BasePart } = {}
+	local minY, minX, maxX, minZ, maxZ = math.huge, math.huge, -math.huge, math.huge, -math.huge
+	for _, d in model:GetDescendants() do
+		if d:IsA("BasePart") then
+			table.insert(parts, d)
+			local p, s = d.CFrame.Position, d.Size
+			minY = math.min(minY, p.Y - s.Y / 2)
+			minX, maxX = math.min(minX, p.X), math.max(maxX, p.X)
+			minZ, maxZ = math.min(minZ, p.Z), math.max(maxZ, p.Z)
+		end
+	end
+	if #parts == 0 then
+		model:Destroy()
+		return nil
+	end
+	local scale = prop.size * (source:GetAttribute("Scale") or 1)
+	-- The model's own bottom-centre goes to the prop's spot.
+	local origin = CFrame.new((minX + maxX) / 2, minY, (minZ + maxZ) / 2)
+	local lean = CFrame.Angles(((seed % 7) - 3) * 0.012, 0, ((seed % 5) - 2) * 0.015)
+	local target = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0) * lean
+	-- A small brightness shift per copy, so a forest isn't one colour.
+	local shade = 1 + ((seed % 9) - 4) * 0.025
+	for _, part in parts do
+		local rel = origin:ToObjectSpace(part.CFrame)
+		part.CFrame = target * CFrame.new(rel.Position * scale) * (rel - rel.Position)
+		part.Size = part.Size * scale
+		part.Anchored = true
+		-- Clutter rule: scenery never collides with or snags a kart.
+		part.CanCollide = false
+		part.CanQuery = false
+		part.CanTouch = false
+		part.CastShadow = shadows
+		if not part:FindFirstChildOfClass("SurfaceAppearance") then
+			local c = part.Color
+			part.Color = Color3.new(math.clamp(c.R * shade, 0, 1), math.clamp(c.G * shade, 0, 1), math.clamp(c.B * shade, 0, 1))
+		end
+		local mesh = part:FindFirstChildOfClass("SpecialMesh")
+		if mesh then
+			mesh.Offset = mesh.Offset * scale
+			if mesh.MeshType == Enum.MeshType.FileMesh then
+				mesh.Scale = mesh.Scale * scale
+			end
+		end
+	end
+	model.Parent = parent
+	return model
+end
+
+return Assets
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="4">
+        <Properties>
           <string name="Name">Atmos</string>
           <string name="Source"><![CDATA[-- Lighting for a track theme (sky haze, sun, bloom, colour grading). Runs on
 -- each client: racers see the track's theme while lobby players keep the
@@ -33,6 +206,7 @@ local function child(parent: Instance, name: string): Instance
 	return parent:FindFirstChild(name) or parent:WaitForChild(name)
 end
 local Tracks = require(child(child(ReplicatedStorage, "Shared"), "Tracks"))
+local Assets = require(child(child(ReplicatedStorage, "Common"), "Assets"))
 
 local Atmos = {}
 
@@ -67,8 +241,28 @@ local function tween(inst: Instance, seconds: number, goals: { [string]: any })
 	TweenService:Create(inst, TweenInfo.new(seconds, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), goals):Play()
 end
 
+-- The sky: one placed in Lighting in Studio wins, then a custom one from
+-- KartAssets.Sky, else Roblox's default sky with a bigger sun and stars.
+local function ensureSky()
+	if Lighting:FindFirstChildOfClass("Sky") then
+		return
+	end
+	local sky = Assets.sky()
+	if not sky then
+		local made = Instance.new("Sky")
+		made.SunAngularSize = 14
+		made.MoonAngularSize = 10
+		made.StarCount = 3000
+		sky = made
+	end
+	local s = sky :: Sky
+	s.Name = "KartSky"
+	s.Parent = Lighting
+end
+
 -- Sky, sun and colour grading for a theme. `seconds` = fade time (0 = snap).
 function Atmos.applyTheme(theme: any, seconds: number?)
+	ensureSky()
 	local fade = seconds or Atmos.FadeSeconds
 	-- The sun can't sweep across the sky in a second without looking odd, so
 	-- the time of day changes at once; everything else fades.
@@ -84,10 +278,13 @@ function Atmos.applyTheme(theme: any, seconds: number?)
 	pcall(function()
 		(Lighting :: any).LightingStyle = if theme.realistic then Enum.LightingStyle.Realistic else Enum.LightingStyle.Soft
 	end)
+	-- ColorShift_Top tints sunlit surfaces (warm afternoons, cool mornings),
+	-- like light bouncing off the sky and ground.
 	tween(Lighting, fade, {
 		Brightness = theme.brightness,
 		Ambient = rgb(theme.ambient),
 		OutdoorAmbient = rgb(theme.ambient),
+		ColorShift_Top = rgb(theme.colorShiftTop or { 0, 0, 0 }),
 	})
 
 	local a = theme.atmosphere
@@ -142,7 +339,7 @@ return Atmos
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="4">
+      <Item class="ModuleScript" referent="5">
         <Properties>
           <string name="Name">KartRig</string>
           <string name="Source"><![CDATA[-- Builds a kart and connects KartPhysics to Roblox physics. Shared by the
@@ -166,6 +363,7 @@ local function child(parent: Instance, name: string): Instance
 end
 
 local Shared = child(ReplicatedStorage, "Shared")
+local Assets = require(child(child(ReplicatedStorage, "Common"), "Assets"))
 local KartPhysics = require(child(Shared, "KartPhysics"))
 local Cosmetics = require(child(Shared, "Cosmetics"))
 local KartBodies = require(child(Shared, "KartBodies"))
@@ -535,6 +733,18 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 		trail.Parent = bodyRoot
 	end
 
+	-- Engine sound, if one was added (KartAssets.Sounds.Engine); clients
+	-- raise its pitch with speed (KartVisuals).
+	local engine = Assets.sound("Engine")
+	if engine then
+		engine.Name = "EngineSound"
+		engine.Looped = true
+		engine.Volume = math.min(engine.Volume, 0.45)
+		engine.RollOffMaxDistance = 140
+		engine.Playing = true
+		engine.Parent = root
+	end
+
 	local seatPos = body.seat
 	local seat = Instance.new("Seat")
 	seat.Name = "DriverSeat"
@@ -654,7 +864,7 @@ return KartRig
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="5">
+      <Item class="ModuleScript" referent="6">
         <Properties>
           <string name="Name">Shapes</string>
           <string name="Source"><![CDATA[-- Rounded building blocks for a smooth cartoon look without imported meshes:
@@ -795,11 +1005,11 @@ return Shapes
         </Properties>
       </Item>
     </Item>
-    <Item class="Folder" referent="6">
+    <Item class="Folder" referent="7">
       <Properties>
         <string name="Name">Shared</string>
       </Properties>
-      <Item class="ModuleScript" referent="7">
+      <Item class="ModuleScript" referent="8">
         <Properties>
           <string name="Name">AIDriver</string>
           <string name="Source"><![CDATA[--!strict
@@ -865,7 +1075,7 @@ return AIDriver
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="8">
+      <Item class="ModuleScript" referent="9">
         <Properties>
           <string name="Name">Cosmetics</string>
           <string name="Source"><![CDATA[--!strict
@@ -990,7 +1200,7 @@ return Cosmetics
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="9">
+      <Item class="ModuleScript" referent="10">
         <Properties>
           <string name="Name">Items</string>
           <string name="Source"><![CDATA[--!strict
@@ -1088,7 +1298,7 @@ return Items
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="10">
+      <Item class="ModuleScript" referent="11">
         <Properties>
           <string name="Name">KartBodies</string>
           <string name="Source"><![CDATA[--!strict
@@ -1853,7 +2063,7 @@ return KartBodies
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="11">
+      <Item class="ModuleScript" referent="12">
         <Properties>
           <string name="Name">KartPhysics</string>
           <string name="Source"><![CDATA[--!strict
@@ -2145,7 +2355,7 @@ return KartPhysics
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="12">
+      <Item class="ModuleScript" referent="13">
         <Properties>
           <string name="Name">Karts</string>
           <string name="Source"><![CDATA[--!strict
@@ -2221,7 +2431,7 @@ return Karts
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="13">
+      <Item class="ModuleScript" referent="14">
         <Properties>
           <string name="Name">Landscape</string>
           <string name="Source"><![CDATA[--!strict
@@ -2605,7 +2815,7 @@ return Landscape
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="14">
+      <Item class="ModuleScript" referent="15">
         <Properties>
           <string name="Name">LobbyLayout</string>
           <string name="Source"><![CDATA[--!strict
@@ -2732,7 +2942,7 @@ return LobbyLayout
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="15">
+      <Item class="ModuleScript" referent="16">
         <Properties>
           <string name="Name">PlayerData</string>
           <string name="Source"><![CDATA[--!strict
@@ -3059,7 +3269,7 @@ return PlayerData
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="16">
+      <Item class="ModuleScript" referent="17">
         <Properties>
           <string name="Name">RaceRules</string>
           <string name="Source"><![CDATA[--!strict
@@ -3145,7 +3355,7 @@ return RaceRules
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="17">
+      <Item class="ModuleScript" referent="18">
         <Properties>
           <string name="Name">RemoteNames</string>
           <string name="Source"><![CDATA[--!strict
@@ -3178,7 +3388,7 @@ return {
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="18">
+      <Item class="ModuleScript" referent="19">
         <Properties>
           <string name="Name">Rewards</string>
           <string name="Source"><![CDATA[--!strict
@@ -3295,7 +3505,7 @@ return Rewards
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="19">
+      <Item class="ModuleScript" referent="20">
         <Properties>
           <string name="Name">RoadGeometry</string>
           <string name="Source"><![CDATA[--!strict
@@ -3405,7 +3615,7 @@ return RoadGeometry
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="20">
+      <Item class="ModuleScript" referent="21">
         <Properties>
           <string name="Name">Scenery</string>
           <string name="Source"><![CDATA[--!strict
@@ -3627,7 +3837,7 @@ return Scenery
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="21">
+      <Item class="ModuleScript" referent="22">
         <Properties>
           <string name="Name">Track</string>
           <string name="Source"><![CDATA[--!strict
@@ -4040,7 +4250,7 @@ return Track
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="22">
+      <Item class="ModuleScript" referent="23">
         <Properties>
           <string name="Name">Tracks</string>
           <string name="Source"><![CDATA[--!strict
@@ -4072,7 +4282,8 @@ Tracks.Themes = {
 		line = { 236, 236, 228 },
 		clock = 14.5,
 		-- Lighting: clear summer afternoon with soft shadows and real clouds.
-		ambient = { 95, 100, 110 },
+		ambient = { 78, 82, 92 }, -- low fill light: natural shadow contrast
+		colorShiftTop = { 60, 45, 20 }, -- warm afternoon sun
 		brightness = 3.2,
 		atmosphere = { density = 0.32, haze = 1.6, glare = 0.5, color = { 199, 210, 225 }, decay = { 106, 124, 150 } },
 		bloom = 0.25,
@@ -4104,7 +4315,8 @@ Tracks.Themes = {
 		line = { 240, 232, 210 },
 		clock = 17.2,
 		-- Lighting: dusty golden hour.
-		ambient = { 120, 96, 82 },
+		ambient = { 100, 82, 72 },
+		colorShiftTop = { 90, 55, 25 }, -- golden hour
 		brightness = 2.8,
 		atmosphere = { density = 0.36, haze = 2, glare = 1, color = { 240, 200, 160 }, decay = { 180, 110, 74 } },
 		bloom = 0.3,
@@ -4240,7 +4452,8 @@ Tracks.Themes = {
 		curb = { { 196, 38, 34 }, { 236, 236, 232 } },
 		line = { 236, 236, 228 },
 		clock = 16.2,
-		ambient = { 104, 98, 96 },
+		ambient = { 86, 80, 80 },
+		colorShiftTop = { 85, 55, 25 }, -- warm autumn light
 		brightness = 2.9,
 		atmosphere = { density = 0.32, haze = 1.5, glare = 0.6, color = { 230, 210, 185 }, decay = { 150, 120, 100 } },
 		bloom = 0.25,
@@ -4276,7 +4489,8 @@ Tracks.Themes = {
 		curb = { { 200, 40, 40 }, { 238, 238, 234 } },
 		line = { 238, 238, 230 },
 		clock = 10.5,
-		ambient = { 92, 100, 112 },
+		ambient = { 76, 82, 94 },
+		colorShiftTop = { 30, 30, 40 }, -- cool mountain morning
 		brightness = 3.1,
 		atmosphere = { density = 0.3, haze = 1.2, glare = 0.4, color = { 200, 215, 235 }, decay = { 100, 125, 160 } },
 		bloom = 0.25,
@@ -4675,7 +4889,7 @@ return Tracks
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="23">
+      <Item class="ModuleScript" referent="24">
         <Properties>
           <string name="Name">Voting</string>
           <string name="Source"><![CDATA[--!strict
@@ -4769,15 +4983,15 @@ return Voting
       </Item>
     </Item>
   </Item>
-  <Item class="ServerScriptService" referent="24">
+  <Item class="ServerScriptService" referent="25">
     <Properties>
       <string name="Name">ServerScriptService</string>
     </Properties>
-    <Item class="Folder" referent="25">
+    <Item class="Folder" referent="26">
       <Properties>
         <string name="Name">Server</string>
       </Properties>
-      <Item class="ModuleScript" referent="26">
+      <Item class="ModuleScript" referent="27">
         <Properties>
           <string name="Name">DataService</string>
           <string name="Source"><![CDATA[-- Loads and saves player data (coins, unlocks, equipped kart, settings,
@@ -4966,7 +5180,7 @@ return DataService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="27">
+      <Item class="ModuleScript" referent="28">
         <Properties>
           <string name="Name">FortressBuilder</string>
           <string name="Source"><![CDATA[-- Original fortress course dressing. Masonry and lava stay outside the
@@ -5057,7 +5271,7 @@ return FortressBuilder
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="28">
+      <Item class="ModuleScript" referent="29">
         <Properties>
           <string name="Name">ItemService</string>
           <string name="Source"><![CDATA[-- Item boxes, rolling items and everything the six items do on the track.
@@ -5590,7 +5804,7 @@ return ItemService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="29">
+      <Item class="ModuleScript" referent="30">
         <Properties>
           <string name="Name">Landmarks</string>
           <string name="Source"><![CDATA[-- Big themed pieces for the oversized-world tracks: tunnels (the bed, garden
@@ -5980,7 +6194,7 @@ return Landmarks
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="30">
+      <Item class="ModuleScript" referent="31">
         <Properties>
           <string name="Name">LobbyBuilder</string>
           <string name="Source"><![CDATA[-- Compact indoor Kart HQ: soft lighting, four voting pads, garage,
@@ -5998,6 +6212,7 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage.Shared
 local Karts = require(Shared.Karts)
 local LobbyLayout = require(Shared.LobbyLayout)
+local Assets = require(ReplicatedStorage.Common.Assets)
 local KartRig = require(ReplicatedStorage.Common.KartRig)
 local Shapes = require(ReplicatedStorage.Common.Shapes)
 local Tracks = require(Shared.Tracks)
@@ -6008,8 +6223,9 @@ local TerrainBuilder = require(script.Parent.TerrainBuilder)
 
 local LobbyBuilder = {}
 
--- Optional looping ambience (a soft machinery hum). Upload a sound to Roblox
--- and paste its id here, e.g. "rbxassetid://123456". Empty = silent.
+-- Optional looping ambience (a soft machinery hum): put a Sound named
+-- LobbyAmbience in ReplicatedStorage.KartAssets.Sounds, or paste an uploaded
+-- sound's id here, e.g. "rbxassetid://123456". Empty = silent.
 LobbyBuilder.AmbientSoundId = ""
 
 local C = {
@@ -6333,6 +6549,10 @@ end
 -- trees round its shore, grassy hills and a ring of snowy peaks. Built in
 -- Terrain next to the lobby, and rebuilt whenever a track's land replaces it.
 buildVista = function()
+	-- A view sculpted by hand in Studio and saved as "lobby" wins.
+	if TerrainBuilder.pasteSaved("lobby") then
+		return
+	end
 	local lakeZ = O.z + HD + 240
 	local vista = {
 		spec = { ground = "Grass", bank = "Grass" },
@@ -6552,6 +6772,19 @@ function LobbyBuilder.build(): Handles
   table.insert(tokens, token)
  end
  finish(lobby)
+ local ambience = Assets.sound("LobbyAmbience")
+ if not ambience and LobbyBuilder.AmbientSoundId ~= "" then
+  ambience = Instance.new("Sound")
+  ambience.SoundId = LobbyBuilder.AmbientSoundId
+ end
+ if ambience then
+  local hum = Shapes.box(lobby, Vector3.one, CFrame.new(W(0, 20, 0)), { color = C.white, transparency = 1, name = "Ambience" })
+  ambience.Looped = true
+  ambience.Volume = math.min(ambience.Volume, 0.3)
+  ambience.RollOffMaxDistance = 260
+  ambience.Playing = true
+  ambience.Parent = hum
+ end
  lobby.Parent = Workspace
  TerrainBuilder.onCleared(buildVista)
 	local function setKartDisplay(slot: number, name: string?, kartId: string?, look: any?)
@@ -6654,7 +6887,7 @@ return LobbyBuilder
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Script" referent="31">
+      <Item class="Script" referent="32">
         <Properties>
           <string name="Name">Main</string>
           <token name="RunContext">0</token>
@@ -6672,7 +6905,7 @@ print("[KartRacer] server ready - walk under the READY arch (or press READY) to 
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="32">
+      <Item class="ModuleScript" referent="33">
         <Properties>
           <string name="Name">Net</string>
           <string name="Source"><![CDATA[-- Creates the RemoteEvents listed in Shared.RemoteNames under ReplicatedStorage.Remotes.
@@ -6697,7 +6930,7 @@ return Net
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="33">
+      <Item class="ModuleScript" referent="34">
         <Properties>
           <string name="Name">PracticeService</string>
           <string name="Source"><![CDATA[-- Practice karts on the lobby loop. Anyone not in a race can take one out to
@@ -6790,7 +7023,7 @@ return PracticeService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="34">
+      <Item class="ModuleScript" referent="35">
         <Properties>
           <string name="Name">Props</string>
           <string name="Source"><![CDATA[-- Scenery models built from parts. Scenery.luau decides where they go; this
@@ -6799,6 +7032,7 @@ return PracticeService
 -- and towers collide so nobody drives through them).
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Assets = require(ReplicatedStorage.Common.Assets)
 local Shapes = require(ReplicatedStorage.Common.Shapes)
 
 local Props = {}
@@ -7171,6 +7405,11 @@ builders.clover = function(prop, _theme, parent)
 end
 
 function Props.build(prop: any, theme: any, parent: Instance)
+	-- Imported models (ReplicatedStorage.KartAssets) replace the built-in
+	-- shapes for trees, pines, rocks, bushes and the distant forest.
+	if Assets.placeProp(prop, parent, prop.kind ~= "farTree") then
+		return
+	end
 	local builder = builders[prop.kind]
 	if builder then
 		builder(prop, theme, parent)
@@ -7183,7 +7422,7 @@ return Props
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="35">
+      <Item class="ModuleScript" referent="36">
         <Properties>
           <string name="Name">RaceService</string>
           <string name="Source"><![CDATA[-- Runs one race: builds the track, puts karts on the grid, counts down,
@@ -7970,7 +8209,7 @@ return RaceService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="36">
+      <Item class="ModuleScript" referent="37">
         <Properties>
           <string name="Name">RoadSurface</string>
           <string name="Source"><![CDATA[-- Builds the road and everything alongside it from one set of frames
@@ -7988,6 +8227,7 @@ return RaceService
 -- concrete curbs; the toy-world themes keep their own colours.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Assets = require(ReplicatedStorage.Common.Assets)
 local RoadGeometry = require(ReplicatedStorage.Shared.RoadGeometry)
 local Track = require(ReplicatedStorage.Shared.Track)
 
@@ -8001,6 +8241,15 @@ RoadSurface.VergeExtra = 3 -- the verge runs this far past the barrier line
 local SHOULDER_DROP = 0.12 -- shoulders sit just under the road so edges read
 
 export type Style = { color: Color3, material: Enum.Material, collide: boolean, surface: string? }
+
+-- A MaterialVariant made in Studio (Assets.Variants) overrides the built-in
+-- texture for its base material: KartAsphalt on the road, and so on.
+local function finish(p: BasePart, style: Style)
+	local variant = Assets.variantFor(style.material)
+	if variant then
+		p.MaterialVariant = variant
+	end
+end
 
 local function v3(p: any): Vector3
 	return Vector3.new(p.x, p.y, p.z)
@@ -8047,6 +8296,7 @@ local function triangle(parent: Instance, a: Vector3, b: Vector3, c: Vector3, th
 			if style.surface then
 				wedge:SetAttribute("Surface", style.surface)
 			end
+			finish(wedge, style)
 			wedge.Parent = parent
 		end
 	end
@@ -8073,6 +8323,7 @@ local function chordBox(parent: Instance, a: Vector3, b: Vector3, width: number,
 	p.CastShadow = style.collide
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
+	finish(p, style)
 	p.Parent = parent
 	return p
 end
@@ -8245,7 +8496,7 @@ return RoadSurface
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="37">
+      <Item class="ModuleScript" referent="38">
         <Properties>
           <string name="Name">RoundService</string>
           <string name="Source"><![CDATA[-- The round loop:
@@ -8885,7 +9136,211 @@ return RoundService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="38">
+      <Item class="ModuleScript" referent="39">
+        <Properties>
+          <string name="Name">StudioTools</string>
+          <string name="Source"><![CDATA[-- Command-bar helpers for shaping a track's land by hand in Roblox Studio.
+-- Use them in Edit mode (not Play). Paste into the command bar (View → Command Bar):
+--
+--   local T = require(game.ServerScriptService.Server.StudioTools)
+--   T.preview("ridgeline")  -- build the track and its land so you can see it
+--   -- sculpt, paint and smooth with the Terrain Editor; import a heightmap;
+--   -- run a terrain plugin; anything that edits Terrain works
+--   T.check("ridgeline")    -- lists spots where the land comes too close to the road
+--   T.save("ridgeline")     -- races use your land from now on (then File → Save)
+--   T.forget("ridgeline")   -- go back to the generated land
+--   T.clear()               -- remove the preview before publishing (smaller file)
+--
+-- "lobby" works the same way for the view outside the lobby window:
+-- T.preview("lobby") … T.save("lobby").
+--
+-- Saved land lives in ServerStorage.KartTerrain.<id> as TerrainRegion tiles.
+-- The road itself always comes from the track data, so keep the land under
+-- it: T.check flags terrain within about 1 stud of the road surface.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerStorage = game:GetService("ServerStorage")
+local Workspace = game:GetService("Workspace")
+
+local Shared = ReplicatedStorage.Shared
+local Landscape = require(Shared.Landscape)
+local LobbyLayout = require(Shared.LobbyLayout)
+local RoadGeometry = require(Shared.RoadGeometry)
+local Track = require(Shared.Track)
+local Tracks = require(Shared.Tracks)
+
+local TerrainBuilder = require(script.Parent.TerrainBuilder)
+
+local StudioTools = {}
+
+StudioTools.TileCells = 256 -- each saved tile is 256 × 256 cells (1,024 studs) across
+
+local function cells(studs: number): number
+	return math.floor(studs / 4)
+end
+
+-- The block of terrain cells that belongs to a track (or the lobby view):
+-- everything its land plan fills, from under the lakes to over the peaks.
+function StudioTools.region(id: string): (Vector3int16, Vector3int16)
+	if id == "lobby" then
+		local o = LobbyLayout.Origin
+		local back = o.z + LobbyLayout.HalfDepth
+		return Vector3int16.new(cells(o.x - 1000), cells(-220), cells(o.z - 260)), Vector3int16.new(cells(o.x + 1000), cells(560), cells(back + 1500))
+	end
+	local track = Track.build(Tracks.get(id))
+	local minY, maxY = math.huge, -math.huge
+	local minX, maxX, minZ, maxZ = math.huge, -math.huge, math.huge, -math.huge
+	for _, p in track.points do
+		minY, maxY = math.min(minY, p.y), math.max(maxY, p.y)
+		minX, maxX = math.min(minX, p.x), math.max(maxX, p.x)
+		minZ, maxZ = math.min(minZ, p.z), math.max(maxZ, p.z)
+	end
+	local plan = Landscape.plan(track)
+	local low, high = minY - 60, maxY + 300
+	if plan then
+		minX, maxX, minZ, maxZ = plan.minX, plan.maxX, plan.minZ, plan.maxZ
+		low = plan.groundTop - 40
+		for _, list in { plan.mountains, plan.caps, plan.hills } do
+			for _, b in list do
+				high = math.max(high, b.y + b.r + 30)
+			end
+		end
+		for _, m in plan.mesas do
+			high = math.max(high, m.top + 30)
+		end
+	else
+		minX, maxX, minZ, maxZ = minX - 500, maxX + 500, minZ - 500, maxZ + 500
+	end
+	return Vector3int16.new(cells(minX), cells(low), cells(minZ)), Vector3int16.new(cells(maxX), cells(high), cells(maxZ))
+end
+
+-- Builds a track (or the lobby) and its land in the edit world.
+function StudioTools.preview(id: string)
+	TerrainBuilder.reset()
+	if id == "lobby" then
+		require(script.Parent.LobbyBuilder).build()
+		print("[StudioTools] Built the lobby and its view. Shape the land behind the back window, then T.save(\"lobby\").")
+		return
+	end
+	local def = Tracks.get(id)
+	require(script.Parent.TrackBuilder).build(id)
+	local source = if TerrainBuilder.saved(id) then "your saved land" else "generated land"
+	print(`[StudioTools] Built {def.name} with {source}. Edit the terrain, then T.check("{id}") and T.save("{id}").`)
+end
+
+-- Saves the terrain in the track's region as tiles. Races then paste it
+-- instead of generating land. Remember to save the place afterwards.
+function StudioTools.save(id: string)
+	local terrain = Workspace.Terrain
+	local lo, hi = StudioTools.region(id)
+	local root = ServerStorage:FindFirstChild(TerrainBuilder.SavedFolder)
+	if not root then
+		root = Instance.new("Folder")
+		root.Name = TerrainBuilder.SavedFolder
+		root.Parent = ServerStorage
+	end
+	local old = root:FindFirstChild(id)
+	if old then
+		old:Destroy()
+	end
+	local folder = Instance.new("Folder")
+	folder.Name = id
+	local step = StudioTools.TileCells
+	local count = 0
+	for x = lo.X, hi.X, step do
+		for z = lo.Z, hi.Z, step do
+			local region = Region3int16.new(Vector3int16.new(x, lo.Y, z), Vector3int16.new(math.min(x + step - 1, hi.X), hi.Y, math.min(z + step - 1, hi.Z)))
+			local tile = terrain:CopyRegion(region)
+			tile.Name = `Tile_{x}_{z}`
+			tile:SetAttribute("CellX", x)
+			tile:SetAttribute("CellY", lo.Y)
+			tile:SetAttribute("CellZ", z)
+			tile.Parent = folder
+			count += 1
+			task.wait()
+		end
+	end
+	folder.Parent = root
+	print(`[StudioTools] Saved {count} land tiles for "{id}". Races use this land now. Save the place (File → Save) to keep it.`)
+end
+
+-- Removes a track's saved land; races go back to generating it.
+function StudioTools.forget(id: string)
+	local root = ServerStorage:FindFirstChild(TerrainBuilder.SavedFolder)
+	local saved = root and root:FindFirstChild(id)
+	if saved then
+		saved:Destroy()
+		print(`[StudioTools] Forgot the saved land for "{id}".`)
+	else
+		print(`[StudioTools] No saved land for "{id}".`)
+	end
+end
+
+-- Lists places where terrain (or water) reaches within about 1 stud of the
+-- road surface or its verge, where it could show through. Fix them with the
+-- Terrain Editor's Flatten or Subtract tools, then check again.
+function StudioTools.check(id: string): number
+	local terrain = Workspace.Terrain
+	local def = Tracks.get(id)
+	local track = Track.build(def)
+	local frames = RoadGeometry.frames(track)
+	local half = def.width / 2
+	local verge = half + Track.ShoulderWidth + 3
+	local problems = 0
+	for i = 1, #frames, 2 do
+		local f = frames[i]
+		for _, lateral in { -verge, -half, 0, half, verge } do
+			local e = RoadGeometry.edge(f, lateral)
+			local region = Region3.new(Vector3.new(e.x - 2, e.y - 6, e.z - 2), Vector3.new(e.x + 2, e.y + 4, e.z + 2)):ExpandToGrid(4)
+			local materials, occupancy = terrain:ReadVoxels(region, 4)
+			local size = occupancy.Size
+			local bottom = region.CFrame.Position.Y - region.Size.Y / 2
+			local worst = -math.huge
+			for y = 1, size.Y do
+				for x = 1, size.X do
+					for z = 1, size.Z do
+						local occ = occupancy[x][y][z]
+						if occ > 0 and materials[x][y][z] ~= Enum.Material.Air then
+							worst = math.max(worst, bottom + (y - 1) * 4 + occ * 4)
+						end
+					end
+				end
+			end
+			if worst > e.y - 1 then
+				problems += 1
+				if problems <= 25 then
+					print(string.format("[StudioTools] land %.1f studs from the road surface near (%d, %d, %d)", e.y - worst, math.floor(e.x), math.floor(e.y), math.floor(e.z)))
+				end
+			end
+		end
+	end
+	if problems == 0 then
+		print(`[StudioTools] {def.name}: the land stays clear of the road everywhere.`)
+	else
+		print(`[StudioTools] {def.name}: {problems} spots are too close to the road (first 25 listed).`)
+	end
+	return problems
+end
+
+-- Removes preview tracks, the lobby and all terrain from the edit world.
+-- Saved land (ServerStorage.KartTerrain) is kept.
+function StudioTools.clear()
+	for _, name in { "Track", "PracticeTrack", "Lobby", "LobbyVista" } do
+		local f = Workspace:FindFirstChild(name)
+		if f then
+			f:Destroy()
+		end
+	end
+	Workspace.Terrain:Clear()
+	TerrainBuilder.reset()
+	print("[StudioTools] Cleared the preview. Saved land is kept in ServerStorage.KartTerrain.")
+end
+
+return StudioTools
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="40">
         <Properties>
           <string name="Name">TerrainBuilder</string>
           <string name="Source"><![CDATA[-- Turns a Landscape plan into Roblox Terrain: grass or sand ground, earth
@@ -8897,10 +9352,20 @@ return RoundService
 -- calls it as soon as the winning track is announced, so the land is usually
 -- ready before the race loads); calling it again for the same track is free.
 -- Anything registered with `onCleared` (the lobby's view) is rebuilt after.
+--
+-- Hand-made land: sculpt a track's terrain in Studio and save it with
+-- StudioTools (ServerStorage.KartTerrain.<track id>, as TerrainRegion
+-- tiles). If saved land exists, races paste it instead of generating.
 
+local ServerStorage = game:GetService("ServerStorage")
 local Workspace = game:GetService("Workspace")
 
 local TerrainBuilder = {}
+
+-- Animated grass blades on Grass terrain. Terrain is kept 3.5 studs under
+-- every road and verge (8 under the lobby floors), well below blade height,
+-- so they can't poke through. If they ever show through a surface, set false.
+TerrainBuilder.GrassBlades = true
 
 local current: string? = nil
 local building: string? = nil
@@ -8924,12 +9389,79 @@ end
 
 -- Things that must survive a track change (the lobby's window view).
 function TerrainBuilder.onCleared(rebuild: () -> ())
-	table.insert(keepers, rebuild)
+	if not table.find(keepers, rebuild) then
+		table.insert(keepers, rebuild)
+	end
 	rebuild()
 end
 
 -- Counts fills by kind; the smoke test checks these without real Terrain.
 TerrainBuilder.lastCounts = {} :: { [string]: number }
+-- "generated" or "saved": where the current track's land came from.
+TerrainBuilder.lastSource = nil :: string?
+
+TerrainBuilder.SavedFolder = "KartTerrain"
+
+local function runKeepers()
+	for _, rebuild in keepers do
+		local ok, err = pcall(rebuild)
+		if not ok then
+			warn("[TerrainBuilder] keeper failed:", err)
+		end
+	end
+end
+
+-- Material colours, water look and grass blades for a theme's land.
+local function applySettings(terrain: Terrain, spec: any)
+	for name, c in spec.colors or {} do
+		pcall(function()
+			terrain:SetMaterialColor(material(name), Color3.fromRGB(c[1], c[2], c[3]))
+		end)
+	end
+	local water = spec.water
+	if water then
+		terrain.WaterColor = Color3.fromRGB(water.color[1], water.color[2], water.color[3])
+		terrain.WaterTransparency = water.transparency or 0.4
+		terrain.WaterReflectance = water.reflectance or 0.5
+		terrain.WaterWaveSize = water.waveSize or 0.12
+		terrain.WaterWaveSpeed = water.waveSpeed or 8
+	end
+end
+
+-- The saved hand-made land for a track (or "lobby"), if any.
+function TerrainBuilder.saved(id: string): Instance?
+	local root = ServerStorage:FindFirstChild(TerrainBuilder.SavedFolder)
+	local f = root and root:FindFirstChild(id)
+	if f and #f:GetChildren() > 0 then
+		return f
+	end
+	return nil
+end
+
+-- Pastes saved land tiles back where they were copied from. Returns
+-- whether there was saved land for this id.
+function TerrainBuilder.pasteSaved(id: string): boolean
+	local saved = TerrainBuilder.saved(id)
+	if not saved then
+		return false
+	end
+	local terrain = terrainOf()
+	if terrain then
+		for _, tile in saved:GetChildren() do
+			if tile:IsA("TerrainRegion") then
+				local corner = Vector3int16.new(tile:GetAttribute("CellX"), tile:GetAttribute("CellY"), tile:GetAttribute("CellZ"))
+				terrain:PasteRegion(tile, corner, true)
+				task.wait()
+			end
+		end
+	end
+	return true
+end
+
+-- Forget which track's land is built (StudioTools previews use this).
+function TerrainBuilder.reset()
+	current = nil
+end
 
 -- `additive` adds to the land already there (the lobby's view) instead of
 -- replacing it.
@@ -8973,27 +9505,13 @@ function TerrainBuilder.apply(plan: any, additive: boolean?)
 	end
 
 	if terrain then
-		-- Animated grass blades stand 1-2 studs tall and poke through road
-		-- and floors laid just above the ground, so they stay off.
 		pcall(function()
-			(terrain :: any).Decoration = false
+			(terrain :: any).Decoration = TerrainBuilder.GrassBlades
 		end)
 	end
 	if terrain and not additive then
 		terrain:Clear()
-		for name, c in spec.colors or {} do
-			pcall(function()
-				terrain:SetMaterialColor(material(name), Color3.fromRGB(c[1], c[2], c[3]))
-			end)
-		end
-		local water = spec.water
-		if water then
-			terrain.WaterColor = Color3.fromRGB(water.color[1], water.color[2], water.color[3])
-			terrain.WaterTransparency = water.transparency or 0.4
-			terrain.WaterReflectance = water.reflectance or 0.5
-			terrain.WaterWaveSize = water.waveSize or 0.12
-			terrain.WaterWaveSpeed = water.waveSpeed or 8
-		end
+		applySettings(terrain, spec)
 	end
 
 	-- Ground: a slab whose top is just under the lowest road.
@@ -9045,12 +9563,7 @@ function TerrainBuilder.apply(plan: any, additive: boolean?)
 	end
 
 	if not additive then
-		for _, rebuild in keepers do
-			local ok, err = pcall(rebuild)
-			if not ok then
-				warn("[TerrainBuilder] keeper failed:", err)
-			end
-		end
+		runKeepers()
 	end
 end
 
@@ -9075,7 +9588,23 @@ function TerrainBuilder.ensure(trackId: string, plan: any?)
 			local Tracks = require(ReplicatedStorage.Shared.Tracks)
 			p = Landscape.plan(Track.build(Tracks.get(trackId)))
 		end
-		if p then
+		if TerrainBuilder.saved(trackId) then
+			-- Hand-made land from Studio replaces the generated land.
+			TerrainBuilder.lastSource = "saved"
+			local terrain = terrainOf()
+			if terrain then
+				terrain:Clear()
+				pcall(function()
+					(terrain :: any).Decoration = TerrainBuilder.GrassBlades
+				end)
+				if p then
+					applySettings(terrain, p.spec)
+				end
+			end
+			TerrainBuilder.pasteSaved(trackId)
+			runKeepers()
+		elseif p then
+			TerrainBuilder.lastSource = "generated"
 			TerrainBuilder.apply(p)
 		end
 	end)
@@ -9091,7 +9620,7 @@ return TerrainBuilder
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="39">
+      <Item class="ModuleScript" referent="41">
         <Properties>
           <string name="Name">TrackBuilder</string>
           <string name="Source"><![CDATA[-- Builds a track from its centerline: the road and everything along it
@@ -9110,6 +9639,7 @@ local Scenery = require(Shared.Scenery)
 local Track = require(Shared.Track)
 local Tracks = require(Shared.Tracks)
 
+local Assets = require(ReplicatedStorage.Common.Assets)
 local Landmarks = require(script.Parent.Landmarks)
 local Props = require(script.Parent.Props)
 local RoadSurface = require(script.Parent.RoadSurface)
@@ -9197,7 +9727,9 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 	-- Land: realistic themes get Terrain (hills, lakes, mountains, banks under
 	-- raised road); the toy-world themes keep a flat part floor.
 	local plan = if opts.ground ~= false then Landscape.plan(track) else nil
-	if plan then
+	-- Land hand-sculpted in Studio and saved (StudioTools) wins over the plan.
+	local handMade = opts.ground ~= false and TerrainBuilder.saved(trackId) ~= nil
+	if plan or handMade then
 		TerrainBuilder.ensure(trackId, plan)
 	end
 
@@ -9220,7 +9752,7 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 	end
 
 	-- Flat floor under everything (themes without terrain).
-	if opts.ground ~= false and not plan then
+	if opts.ground ~= false and not plan and not handMade then
 		local margin = 300
 		local sizeX, sizeZ = maxX - minX + margin * 2, maxZ - minZ + margin * 2
 		local tile = 1000
@@ -9379,7 +9911,14 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		scenery.Name = "Scenery"
 		scenery.Parent = folder
 		for _, prop in Scenery.place(track) do
-			if plan then
+			if handMade then
+				-- Stand props on the sculpted surface; skip water.
+				local y = TrackBuilder.landHeight(prop.x, prop.z)
+				if y then
+					prop.y = y
+					Props.build(prop, theme, scenery)
+				end
+			elseif plan then
 				-- Stand props on the land; skip any that would be in a lake.
 				local y = Landscape.groundAt(plan, prop.x, prop.z)
 				if y then
@@ -9396,8 +9935,82 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		require(script.Parent.FortressBuilder).build(track, folder)
 	end
 
+	TrackBuilder.ambience(folder, track, plan, minX, maxX, minZ, maxZ)
+
 	folder.Parent = Workspace
 	return folder, track
+end
+
+-- Height of the terrain surface at (x, z), or nil over water or nothing.
+function TrackBuilder.landHeight(x: number, z: number): number?
+	local terrain = Workspace:FindFirstChildOfClass("Terrain")
+	if not terrain then
+		return nil
+	end
+	local ok, hit = pcall(function()
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Include
+		params.FilterDescendantsInstances = { terrain }
+		return Workspace:Raycast(Vector3.new(x, 3000, z), Vector3.new(0, -6000, 0), params)
+	end)
+	if not ok or not hit or hit.Material == Enum.Material.Water then
+		return nil
+	end
+	return hit.Position.Y
+end
+
+-- Ambient sound, only if it was added in Studio (KartAssets.Sounds): wind
+-- over the whole map, water at lakes and rivers, birds in the trees. Each
+-- is a looped sound on an invisible part, fading out with distance, so
+-- players in the lobby (far away) hear none of it.
+function TrackBuilder.ambience(folder: Instance, track: Track.Built, plan: any?, minX: number, maxX: number, minZ: number, maxZ: number)
+	local sounds = Instance.new("Folder")
+	sounds.Name = "Ambience"
+	sounds.Parent = folder
+	local function emitter(name: string, at: Vector3, reach: number, volume: number): boolean
+		local sound = Assets.sound(name)
+		if not sound then
+			return false
+		end
+		local holder = Instance.new("Part")
+		holder.Name = name
+		holder.Anchored = true
+		holder.CanCollide = false
+		holder.CanQuery = false
+		holder.CanTouch = false
+		holder.Transparency = 1
+		holder.Size = Vector3.one
+		holder.CFrame = CFrame.new(at)
+		holder.Parent = sounds
+		sound.Looped = true
+		sound.Volume = math.min(sound.Volume, volume)
+		sound.RollOffMode = Enum.RollOffMode.Linear
+		sound.RollOffMinDistance = reach * 0.3
+		sound.RollOffMaxDistance = reach
+		sound.Playing = true
+		sound.Parent = holder
+		return true
+	end
+	local cx, cz = (minX + maxX) / 2, (minZ + maxZ) / 2
+	local extent = math.max(maxX - minX, maxZ - minZ) / 2
+	local y = track.points[1].y + 20
+	emitter("Wind", Vector3.new(cx, y, cz), extent + 400, 0.3)
+	if plan then
+		-- Water: every lake, and every third pool along a river (at most 10).
+		local placed = 0
+		for i, lake in plan.lakes do
+			if placed < 10 and (not lake.bridged or i % 3 == 0) then
+				if emitter("Water", Vector3.new(lake.x, lake.surface + 1, lake.z), lake.r + 90, 0.5) then
+					placed += 1
+				end
+			end
+		end
+	end
+	-- Birds: a few spots spread round the lap, beside the road.
+	for k = 0, 5 do
+		local spot = Track.spot(track, track.length * (k + 0.5) / 6, if k % 2 == 0 then 70 else -70)
+		emitter("Birds", Vector3.new(spot.x, spot.y + 25, spot.z), 140, 0.25)
+	end
 end
 
 return TrackBuilder
@@ -9406,7 +10019,7 @@ return TrackBuilder
       </Item>
     </Item>
   </Item>
-  <Item class="StarterPlayer" referent="40">
+  <Item class="StarterPlayer" referent="42">
     <Properties>
       <string name="Name">StarterPlayer</string>
       <float name="CameraMaxZoomDistance">80</float>
@@ -9414,15 +10027,15 @@ return TrackBuilder
       <float name="HealthDisplayDistance">0</float>
       <float name="NameDisplayDistance">45</float>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="41">
+    <Item class="StarterPlayerScripts" referent="43">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="Folder" referent="42">
+      <Item class="Folder" referent="44">
         <Properties>
           <string name="Name">Client</string>
         </Properties>
-        <Item class="ModuleScript" referent="43">
+        <Item class="ModuleScript" referent="45">
           <Properties>
             <string name="Name">GarageUI</string>
             <string name="Source"><![CDATA[-- The garage: a live 3D preview of your kart plus tabs for kart type (stats),
@@ -9775,7 +10388,7 @@ return GarageUI
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="44">
+        <Item class="ModuleScript" referent="46">
           <Properties>
             <string name="Name">Hud</string>
             <string name="Source"><![CDATA[-- In-race screens: place, lap, item slot with roulette, standings, countdown,
@@ -10004,7 +10617,7 @@ return Hud
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="45">
+        <Item class="ModuleScript" referent="47">
           <Properties>
             <string name="Name">KartController</string>
             <string name="Source"><![CDATA[-- Drives your kart: reads input, runs KartPhysics on this client (you own the
@@ -10460,7 +11073,7 @@ return KartController
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="46">
+        <Item class="ModuleScript" referent="48">
           <Properties>
             <string name="Name">KartVisuals</string>
             <string name="Source"><![CDATA[-- Makes every nearby kart look alive, on this client only: the body leans into
@@ -10595,6 +11208,13 @@ local function animate(kart: Model, dt: number, t: number)
 		end
 	end
 
+	-- Engine note: higher with speed, a little extra on the throttle.
+	local engineSound = root:FindFirstChild("EngineSound") :: Sound?
+	if engineSound then
+		local throttle = math.clamp(accel / 60, 0, 0.3)
+		engineSound.PlaybackSpeed = 0.7 + speedFrac * 1.1 + throttle
+	end
+
 	local exhaust = kart:FindFirstChild("Exhaust")
 	local puff = exhaust and exhaust:FindFirstChild("ExhaustPuff") :: ParticleEmitter?
 	if puff then
@@ -10626,7 +11246,7 @@ return KartVisuals
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="47">
+        <Item class="ModuleScript" referent="49">
           <Properties>
             <string name="Name">LobbyScreens</string>
             <string name="Source"><![CDATA[-- Local wall displays and proximity doors for Kart HQ. SurfaceGuis belong
@@ -10910,7 +11530,7 @@ return LobbyScreens
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="48">
+        <Item class="ModuleScript" referent="50">
           <Properties>
             <string name="Name">LobbyUI</string>
             <string name="Source"><![CDATA[-- Lobby screens: the status bar (phase + countdown, always visible), coins,
@@ -11367,7 +11987,7 @@ return LobbyUI
 ]]></string>
           </Properties>
         </Item>
-        <Item class="LocalScript" referent="49">
+        <Item class="LocalScript" referent="51">
           <Properties>
             <string name="Name">Main</string>
             <string name="Source"><![CDATA[-- Client entry point: wires remotes to the lobby screens, garage, race HUD,
@@ -11649,7 +12269,7 @@ end)
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="50">
+        <Item class="ModuleScript" referent="52">
           <Properties>
             <string name="Name">Spectate</string>
             <string name="Source"><![CDATA[-- Spectator camera: follows a racer's kart from behind. Used by lobby players
@@ -11751,7 +12371,7 @@ return Spectate
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="51">
+        <Item class="ModuleScript" referent="53">
           <Properties>
             <string name="Name">TrackAnimator</string>
             <string name="Source"><![CDATA[-- Animates the current track on this client: crossers (toy robot, toy train,
@@ -11866,7 +12486,7 @@ return TrackAnimator
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="52">
+        <Item class="ModuleScript" referent="54">
           <Properties>
             <string name="Name">TrackPreview</string>
             <string name="Source"><![CDATA[-- Animated mini-map of a track, drawn from the same track data the race
@@ -12010,7 +12630,7 @@ return TrackPreview
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="53">
+        <Item class="ModuleScript" referent="55">
           <Properties>
             <string name="Name">UI</string>
             <string name="Source"><![CDATA[-- Shared look for every screen: rounded panels, chunky buttons sized for
@@ -12271,12 +12891,18 @@ return UI
       </Item>
     </Item>
   </Item>
-  <Item class="Workspace" referent="54">
+  <Item class="Workspace" referent="56">
     <Properties>
       <string name="Name">Workspace</string>
       <float name="Gravity">150</float>
       <bool name="NeedsPivotMigration">false</bool>
       <bool name="StreamingEnabled">false</bool>
     </Properties>
+    <Item class="Terrain" referent="57">
+      <Properties>
+        <string name="Name">Terrain</string>
+        <bool name="Decoration">true</bool>
+      </Properties>
+    </Item>
   </Item>
 </roblox>

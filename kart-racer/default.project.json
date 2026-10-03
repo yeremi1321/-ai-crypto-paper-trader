@@ -41,6 +41,12 @@
       "$properties": {
         "Gravity": 150,
         "StreamingEnabled": false
+      },
+      "Terrain": {
+        "$className": "Terrain",
+        "$properties": {
+          "Decoration": true
+        }
       }
     }
   }

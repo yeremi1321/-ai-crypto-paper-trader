@@ -23,3 +23,12 @@ animation, paint changes, multiplayer, mobile performance or audio playback.
 Lune uses doubles and cannot verify those Roblox behaviours.
 No Windows PC or Roblox Studio connection was available. No third-party
 assets were imported and no game publication or account settings changed.
+
+## Detailed revision
+
+The game checks were repeated successfully after the art revision. Previews
+are 1080×1080; car budgets are 8,348–9,012 triangles, pine budgets 1,412,
+leafy tree budgets 1,256 and rock budgets 320. Distant trees stay below 300.
+The export verifier also checks imported car dimensions and triangle caps.
+The same Studio limitations above still apply. No new gameplay mechanics
+are implied by the added visual instruments, lights, brakes or engine details.

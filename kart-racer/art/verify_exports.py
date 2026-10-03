@@ -8,6 +8,7 @@ for row in json.loads((root/'manifest.json').read_text()):
     meshes=[o for o in bpy.context.scene.objects if o.type=='MESH']
     triangles=0
     for o in meshes:o.data.calc_loop_triangles();triangles+=len(o.data.loop_triangles)
+    assert triangles<row['limit'], (row['name'],triangles,row['limit'])
     assert triangles==row['triangles'], (row['name'],triangles,row['triangles'])
     if row['folder']=='Bodies':
         for n in ('WheelFL','WheelFR','WheelRL','WheelRR'):assert sum(o.name==n for o in meshes)==1
@@ -18,6 +19,9 @@ for row in json.loads((root/'manifest.json').read_text()):
         assert len(meshes)==1
         assert meshes[0].location.length < .001, row['name']
     vertices=[o.matrix_world @ v.co for o in meshes for v in o.data.vertices]
+    bounds=[max(v[k] for v in vertices)-min(v[k] for v in vertices) for k in range(3)]
+    if row['folder']=='Bodies':
+        assert 9<=bounds[1]<=10.1 and bounds[0]<=5.1, (row['name'],bounds)
     assert abs(min(v.z for v in vertices))<.05, (row['name'],'bottom origin')
     print('VERIFIED',row['name'],triangles,flush=True)
 print('All 18 FBX exports verified')

@@ -2,207 +2,220 @@
   {
     "name": "pine_1",
     "folder": "Pines",
-    "triangles": 172,
+    "triangles": 1412,
     "limit": 2000,
     "dimensions_blender": [
-      4.523029327392578,
-      4.539408206939697,
-      8.65000057220459
+      5.08717679977417,
+      5.1169960498809814,
+      8.953586975112557
     ],
     "fbx": "fbx/pine_1.fbx",
     "blend": "blend/pine_1.blend",
     "preview": "previews/pine_1.jpg",
-    "engine_parts": []
+    "engine_parts": [],
+    "mesh_objects": 1
   },
   {
     "name": "pine_2",
     "folder": "Pines",
-    "triangles": 208,
+    "triangles": 1412,
     "limit": 2000,
     "dimensions_blender": [
-      5.853002071380615,
-      6.061251163482666,
-      12.15000057220459
+      6.226388692855835,
+      6.194119215011597,
+      10.453587600961328
     ],
     "fbx": "fbx/pine_2.fbx",
     "blend": "blend/pine_2.blend",
     "preview": "previews/pine_2.jpg",
-    "engine_parts": []
+    "engine_parts": [],
+    "mesh_objects": 1
   },
   {
     "name": "pine_3",
     "folder": "Pines",
-    "triangles": 172,
+    "triangles": 1412,
     "limit": 2000,
     "dimensions_blender": [
-      3.7951114177703857,
-      3.8058364391326904,
-      7.90000057220459
+      4.374752998352051,
+      4.461353540420532,
+      7.953588142991066
     ],
     "fbx": "fbx/pine_3.fbx",
     "blend": "blend/pine_3.blend",
     "preview": "previews/pine_3.jpg",
-    "engine_parts": []
+    "engine_parts": [],
+    "mesh_objects": 1
   },
   {
     "name": "pine_4",
     "folder": "Pines",
-    "triangles": 208,
+    "triangles": 1412,
     "limit": 2000,
     "dimensions_blender": [
-      6.803447723388672,
-      6.547386169433594,
-      13.149999618530273
+      6.837759971618652,
+      7.091691255569458,
+      11.453587478026748
     ],
     "fbx": "fbx/pine_4.fbx",
     "blend": "blend/pine_4.blend",
     "preview": "previews/pine_4.jpg",
-    "engine_parts": []
+    "engine_parts": [],
+    "mesh_objects": 1
   },
   {
     "name": "leafy_1",
     "folder": "Trees",
-    "triangles": 756,
+    "triangles": 1256,
     "limit": 2000,
     "dimensions_blender": [
-      5.56400728225708,
-      4.805261611938477,
-      7.631471633911133
+      5.503671407699585,
+      5.089411735534668,
+      7.428995829075575
     ],
     "fbx": "fbx/leafy_1.fbx",
     "blend": "blend/leafy_1.blend",
     "preview": "previews/leafy_1.jpg",
-    "engine_parts": []
+    "engine_parts": [],
+    "mesh_objects": 1
   },
   {
     "name": "leafy_2",
     "folder": "Trees",
-    "triangles": 756,
+    "triangles": 1256,
     "limit": 2000,
     "dimensions_blender": [
-      5.879226207733154,
-      4.805256366729736,
-      8.806259155273438
+      4.478246212005615,
+      4.004527568817139,
+      8.928996302187443
     ],
     "fbx": "fbx/leafy_2.fbx",
     "blend": "blend/leafy_2.blend",
     "preview": "previews/leafy_2.jpg",
-    "engine_parts": []
+    "engine_parts": [],
+    "mesh_objects": 1
   },
   {
     "name": "leafy_3",
     "folder": "Trees",
-    "triangles": 756,
+    "triangles": 1256,
     "limit": 2000,
     "dimensions_blender": [
-      6.14448881149292,
-      4.805257320404053,
-      7.182055473327637
+      7.545025825500488,
+      6.214791774749756,
+      6.528993673622608
     ],
     "fbx": "fbx/leafy_3.fbx",
     "blend": "blend/leafy_3.blend",
     "preview": "previews/leafy_3.jpg",
-    "engine_parts": []
+    "engine_parts": [],
+    "mesh_objects": 1
   },
   {
     "name": "rock_1",
     "folder": "Rocks",
-    "triangles": 80,
+    "triangles": 320,
     "limit": 1000,
     "dimensions_blender": [
-      4.2565813064575195,
-      2.7843613624572754,
-      2.272803783416748
+      4.825942039489746,
+      2.891720414161682,
+      2.505636692047119
     ],
     "fbx": "fbx/rock_1.fbx",
     "blend": "blend/rock_1.blend",
     "preview": "previews/rock_1.jpg",
-    "engine_parts": []
+    "engine_parts": [],
+    "mesh_objects": 1
   },
   {
     "name": "rock_2",
     "folder": "Rocks",
-    "triangles": 80,
+    "triangles": 320,
     "limit": 1000,
     "dimensions_blender": [
-      4.461239814758301,
-      3.047504186630249,
-      2.3099160194396973
+      3.145833134651184,
+      3.144096255302429,
+      4.169445991516113
     ],
     "fbx": "fbx/rock_2.fbx",
     "blend": "blend/rock_2.blend",
     "preview": "previews/rock_2.jpg",
-    "engine_parts": []
+    "engine_parts": [],
+    "mesh_objects": 1
   },
   {
     "name": "rock_3",
     "folder": "Rocks",
-    "triangles": 80,
+    "triangles": 320,
     "limit": 1000,
     "dimensions_blender": [
-      5.083693504333496,
-      2.9570090770721436,
-      2.307776689529419
+      5.508554935455322,
+      2.2023849487304688,
+      1.6310909986495972
     ],
     "fbx": "fbx/rock_3.fbx",
     "blend": "blend/rock_3.blend",
     "preview": "previews/rock_3.jpg",
-    "engine_parts": []
+    "engine_parts": [],
+    "mesh_objects": 1
   },
   {
     "name": "rock_4",
     "folder": "Rocks",
-    "triangles": 80,
+    "triangles": 320,
     "limit": 1000,
     "dimensions_blender": [
-      4.969944477081299,
-      3.4836678504943848,
-      2.5069632530212402
+      3.509339451789856,
+      3.065142273902893,
+      2.952012538909912
     ],
     "fbx": "fbx/rock_4.fbx",
     "blend": "blend/rock_4.blend",
     "preview": "previews/rock_4.jpg",
-    "engine_parts": []
+    "engine_parts": [],
+    "mesh_objects": 1
   },
   {
     "name": "far_tree_1",
     "folder": "FarTrees",
-    "triangles": 48,
+    "triangles": 120,
     "limit": 300,
     "dimensions_blender": [
-      4.0,
-      4.0,
-      7.300000190734863
+      3.9392309188842773,
+      3.879385232925415,
+      6.650000095367432
     ],
     "fbx": "fbx/far_tree_1.fbx",
     "blend": "blend/far_tree_1.blend",
     "preview": "previews/far_tree_1.jpg",
-    "engine_parts": []
+    "engine_parts": [],
+    "mesh_objects": 1
   },
   {
     "name": "far_tree_2",
     "folder": "FarTrees",
-    "triangles": 40,
+    "triangles": 104,
     "limit": 300,
     "dimensions_blender": [
-      3.93546986579895,
-      3.0623040199279785,
-      7.399999618530273
+      4.828958034515381,
+      4.469399452209473,
+      6.550000190734863
     ],
     "fbx": "fbx/far_tree_2.fbx",
     "blend": "blend/far_tree_2.blend",
     "preview": "previews/far_tree_2.jpg",
-    "engine_parts": []
+    "engine_parts": [],
+    "mesh_objects": 1
   },
   {
     "name": "thunder",
     "folder": "Bodies",
-    "triangles": 4972,
+    "triangles": 8520,
     "limit": 10000,
     "dimensions_blender": [
-      4.949999809265137,
-      9.199999809265137,
-      3.0799999237060547
+      4.84559965133667,
+      9.471651077270508,
+      2.915799856185913
     ],
     "fbx": "fbx/thunder.fbx",
     "blend": "blend/thunder.blend",
@@ -212,23 +225,27 @@
       "IntakeThrottle",
       "IntakeThrottle.001",
       "IntakeThrottle.002"
-    ]
+    ],
+    "mesh_objects": 15
   },
   {
     "name": "v12",
     "folder": "Bodies",
-    "triangles": 5536,
+    "triangles": 9012,
     "limit": 10000,
     "dimensions_blender": [
-      4.949999809265137,
-      9.199999809265137,
-      3.2249999046325684
+      4.84559965133667,
+      9.471651077270508,
+      3.185800075531006
     ],
     "fbx": "fbx/v12.fbx",
     "blend": "blend/v12.blend",
     "preview": "previews/v12.jpg",
     "engine_parts": [
       "EngineIntake",
+      "IntakeThrottle",
+      "IntakeThrottle.001",
+      "IntakeThrottle.002",
       "IntakeStack",
       "IntakeStack.001",
       "IntakeStack.002",
@@ -241,17 +258,18 @@
       "IntakeStack.009",
       "IntakeStack.010",
       "IntakeStack.011"
-    ]
+    ],
+    "mesh_objects": 27
   },
   {
     "name": "blowerrod",
     "folder": "Bodies",
-    "triangles": 4540,
+    "triangles": 8348,
     "limit": 10000,
     "dimensions_blender": [
-      4.949999809265137,
-      9.199999809265137,
-      3.0799999237060547
+      4.84559965133667,
+      9.471651077270508,
+      2.915799856185913
     ],
     "fbx": "fbx/blowerrod.fbx",
     "blend": "blend/blowerrod.blend",
@@ -261,17 +279,18 @@
       "IntakeThrottle",
       "IntakeThrottle.001",
       "IntakeThrottle.002"
-    ]
+    ],
+    "mesh_objects": 15
   },
   {
     "name": "dragster",
     "folder": "Bodies",
-    "triangles": 4864,
+    "triangles": 8468,
     "limit": 10000,
     "dimensions_blender": [
-      4.949999809265137,
-      9.199999809265137,
-      3.0799999237060547
+      4.84559965133667,
+      9.471651077270508,
+      2.915799856185913
     ],
     "fbx": "fbx/dragster.fbx",
     "blend": "blend/dragster.blend",
@@ -281,17 +300,18 @@
       "IntakeThrottle",
       "IntakeThrottle.001",
       "IntakeThrottle.002"
-    ]
+    ],
+    "mesh_objects": 15
   },
   {
     "name": "dunehauler",
     "folder": "Bodies",
-    "triangles": 5652,
+    "triangles": 8992,
     "limit": 10000,
     "dimensions_blender": [
-      4.949999809265137,
-      9.199999809265137,
-      4.050000190734863
+      4.84559965133667,
+      9.471651077270508,
+      3.634239912033081
     ],
     "fbx": "fbx/dunehauler.fbx",
     "blend": "blend/dunehauler.blend",
@@ -301,6 +321,7 @@
       "IntakeThrottle",
       "IntakeThrottle.001",
       "IntakeThrottle.002"
-    ]
+    ],
+    "mesh_objects": 15
   }
 ]

@@ -215,3 +215,10 @@ manual children during live Rojo sync. A fresh build still has no imported
 meshes: save Roblox asset models into the source project after review.
 No Studio runtime, render, physics, avatar-fit or asset-audio checks have
 been completed here. Original source renders must be reviewed before import.
+
+The Blender kit now has a detailed revision with sculpted car panels, curved
+wheel arches, treaded tyres, inset lights, mirrors, grille slats, instruments
+and engine drive details. Nature models have branches, root flares, smoother
+canopies and weathered rock material patches. Review the 1080×1080 renders
+and per-model triangle counts under `art/` before importing; Studio rendering
+and actual avatar/wheel behaviour remain unverified.

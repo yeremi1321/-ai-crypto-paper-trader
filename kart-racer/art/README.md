@@ -78,3 +78,32 @@ https://create.roblox.com/store/asset/6503281311
 Its listing says free to use with no credit required. Contents, triangle
 counts and scripts still need inspection in Studio before adding anything.
 The original models in this directory are the primary proposed nature kit.
+
+## Detailed model revision
+
+1080×1080 source previews replace the first rough kit. Cars use sculpted
+longitudinal body sections, tyre sidewalls and tread, inset lamp lenses and
+housings, open rim centres, brake rotors/calipers, curved wheel arches,
+grilles, cooling vents, mirrors, gauges, seat stitching, towing eyes, fuel
+caps, rear diffusers and engine pulleys, belts, hoses and headers. V12 and
+dragster have rear motors and aero wings; the hauler has a braced cage/light
+bar; the rod has a narrower front, larger rear tyres and a chrome hoop.
+These are visual details, not new driving or damage mechanics.
+
+Pines now have radial branches, needle clusters and root flares. Leafy trees
+have forked branches, irregular smoother foliage and three canopy shapes.
+Rocks have different proportions, rounded weathering and mineral/moss material
+patches. Distant trees retain the 300-triangle cap. There are no textures to
+download; colours and material slots define these surfaces. Roblox import
+may need material/SurfaceAppearance setup to preserve the appearance of
+multi-material meshes such as wheels; that is not verified by Blender export.
+
+To rebuild only selected models, append their names after `--`, for example:
+`blender --background --python art/build_assets.py -- v12 dragster`.
+The manifest preserves the other entries and is written after each model.
+
+Static car details are batched by material to reduce the imported MeshPart
+count. Four wheels and the animated engine components remain separate. The
+manifest includes `mesh_objects`; all refined cars have fewer than 30 mesh
+objects. Blender metallic/roughness settings still need checking after Studio
+import; they are not a substitute for Roblox SurfaceAppearance setup.

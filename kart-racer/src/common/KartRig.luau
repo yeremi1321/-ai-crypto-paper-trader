@@ -40,6 +40,12 @@ local function visual(model: Model, root: BasePart, name: string, size: Vector3,
 	local p: BasePart
 	if shape == "Wedge" then
 		p = Instance.new("WedgePart")
+	elseif shape == "Ellipsoid" then
+		local part = Instance.new("Part")
+		local mesh = Instance.new("SpecialMesh")
+		mesh.MeshType = Enum.MeshType.Sphere
+		mesh.Parent = part
+		p = part
 	else
 		local part = Instance.new("Part")
 		if shape == "Ball" then
@@ -158,12 +164,77 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 
 	for i, part in body.parts do
 		local color, material, transparency = roleStyle(part.role, main, accent)
+		if part.color then
+			color = Color3.fromRGB(part.color[1], part.color[2], part.color[3])
+		end
+		if part.material then
+			material = (Enum.Material :: any)[part.material] or material
+		end
+		transparency = part.transparency or transparency
 		local rot = part.rotation or { 0, 0, 0 }
-		local offset = drop
-			* CFrame.new(part.offset[1], part.offset[2], part.offset[3])
+		local localCf = CFrame.new(part.offset[1], part.offset[2], part.offset[3])
 			* CFrame.Angles(math.rad(rot[1]), math.rad(rot[2]), math.rad(rot[3]))
-		local p = visual(model, root, `Body{i}`, Vector3.new(part.size[1], part.size[2], part.size[3]), offset, color, material, part.shape, bodyRoot)
+		local p = visual(model, root, `Body{i}`, Vector3.new(part.size[1], part.size[2], part.size[3]), drop * localCf, color, material, part.shape, bodyRoot)
 		p.Transparency = transparency
+		p.Reflectance = part.reflectance or 0
+
+		if part.anim then
+			-- Swap the weld for a Motor6D so the client can animate this part.
+			local w = p:FindFirstChildOfClass("WeldConstraint")
+			if w then
+				w:Destroy()
+			end
+			local m = Instance.new("Motor6D")
+			m.Name = "Anim"
+			m.Part0 = bodyRoot
+			m.Part1 = p
+			if part.anim == "orbit" then
+				-- Pivot on the kart's centre line so it circles the kart.
+				m.C0 = CFrame.new(0, part.offset[2], 0)
+				m.C1 = CFrame.new(-part.offset[1], 0, -part.offset[3])
+			else
+				m.C0 = localCf
+				m.C1 = CFrame.new()
+			end
+			m:SetAttribute("AnimKind", part.anim)
+			m:SetAttribute("Side", if part.offset[1] < 0 then -1 else 1)
+			m.Parent = bodyRoot
+		end
+
+		if part.text then
+			for _, face in { Enum.NormalId.Left, Enum.NormalId.Right } do
+				local gui = Instance.new("SurfaceGui")
+				gui.Face = face
+				gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+				gui.PixelsPerStud = 30
+				gui.Parent = p
+				local label = Instance.new("TextLabel")
+				label.Size = UDim2.fromScale(1, 1)
+				label.BackgroundTransparency = 1
+				label.Font = Enum.Font.PermanentMarker
+				label.TextScaled = true
+				label.TextColor3 = Color3.fromRGB(40, 40, 70)
+				label.Rotation = -6
+				label.Text = part.text
+				label.Parent = gui
+			end
+		end
+
+		if part.bubbles then
+			local bubbles = Instance.new("ParticleEmitter")
+			bubbles.Name = "Bubbles"
+			bubbles.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+			bubbles.Color = ColorSequence.new(Color3.fromRGB(210, 240, 255), Color3.fromRGB(255, 210, 245))
+			bubbles.Size = NumberSequence.new(0.4, 1.1)
+			bubbles.Transparency = NumberSequence.new(0.2, 1)
+			bubbles.Lifetime = NumberRange.new(0.6, 1.2)
+			bubbles.Speed = NumberRange.new(4, 8)
+			bubbles.SpreadAngle = Vector2.new(30, 30)
+			bubbles.Acceleration = Vector3.new(0, 6, 0)
+			bubbles.EmissionDirection = Enum.NormalId.Back
+			bubbles.Rate = 14
+			bubbles.Parent = p
+		end
 	end
 	local ex = body.exhaust
 	local exhaust = visual(model, root, "Exhaust", Vector3.new(1.2, 0.6, 0.4), drop * CFrame.new(ex[1], ex[2], ex[3]), Color3.fromRGB(255, 140, 40), Enum.Material.Neon, nil, bodyRoot)
@@ -398,6 +469,10 @@ function KartRig.setEffects(model: Model, driftLevel: number, boosting: boolean)
 	local exhaust = model:FindFirstChild("Exhaust") :: BasePart?
 	if exhaust then
 		exhaust.Transparency = if boosting then 0.1 else 1
+	end
+	-- Lets clients animate boost-only details (like the toaster's toast).
+	if model:GetAttribute("Boosting") ~= boosting then
+		model:SetAttribute("Boosting", boosting)
 	end
 end
 

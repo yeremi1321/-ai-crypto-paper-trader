@@ -45,3 +45,27 @@ T.test("CPU drivers get varied looks", function()
 	end
 	T.ok(nb >= 5 and nc >= 5, `{nb} bodies, {nc} colours`)
 end)
+
+T.test("creative karts: valid animations, prices and free choices", function()
+	local anims = { blink = true, toast = true, flap = true, flutter = true, claw = true, wobble = true, rattle = true, orbit = true }
+	local free = 0
+	for _, body in KartBodies.List do
+		T.ok((body.price or 0) >= 0, `{body.id} price`)
+		if (body.price or 0) == 0 then
+			free += 1
+		end
+		for i, part in body.parts do
+			if part.anim then
+				T.ok(anims[part.anim], `{body.id} part {i}: unknown animation {part.anim}`)
+			end
+			if part.color then
+				T.eq(#part.color, 3, `{body.id} part {i} colour`)
+			end
+			if part.text then
+				T.ok(#part.text > 0)
+			end
+		end
+	end
+	T.ok(free >= 3, "need a few free karts to start with")
+	T.ok(#KartBodies.List >= 10, "creative kart roster")
+end)

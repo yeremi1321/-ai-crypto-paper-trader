@@ -139,6 +139,12 @@ local function visual(model: Model, root: BasePart, name: string, size: Vector3,
 	local p: BasePart
 	if shape == "Wedge" then
 		p = Instance.new("WedgePart")
+	elseif shape == "Ellipsoid" then
+		local part = Instance.new("Part")
+		local mesh = Instance.new("SpecialMesh")
+		mesh.MeshType = Enum.MeshType.Sphere
+		mesh.Parent = part
+		p = part
 	else
 		local part = Instance.new("Part")
 		if shape == "Ball" then
@@ -257,12 +263,77 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 
 	for i, part in body.parts do
 		local color, material, transparency = roleStyle(part.role, main, accent)
+		if part.color then
+			color = Color3.fromRGB(part.color[1], part.color[2], part.color[3])
+		end
+		if part.material then
+			material = (Enum.Material :: any)[part.material] or material
+		end
+		transparency = part.transparency or transparency
 		local rot = part.rotation or { 0, 0, 0 }
-		local offset = drop
-			* CFrame.new(part.offset[1], part.offset[2], part.offset[3])
+		local localCf = CFrame.new(part.offset[1], part.offset[2], part.offset[3])
 			* CFrame.Angles(math.rad(rot[1]), math.rad(rot[2]), math.rad(rot[3]))
-		local p = visual(model, root, `Body{i}`, Vector3.new(part.size[1], part.size[2], part.size[3]), offset, color, material, part.shape, bodyRoot)
+		local p = visual(model, root, `Body{i}`, Vector3.new(part.size[1], part.size[2], part.size[3]), drop * localCf, color, material, part.shape, bodyRoot)
 		p.Transparency = transparency
+		p.Reflectance = part.reflectance or 0
+
+		if part.anim then
+			-- Swap the weld for a Motor6D so the client can animate this part.
+			local w = p:FindFirstChildOfClass("WeldConstraint")
+			if w then
+				w:Destroy()
+			end
+			local m = Instance.new("Motor6D")
+			m.Name = "Anim"
+			m.Part0 = bodyRoot
+			m.Part1 = p
+			if part.anim == "orbit" then
+				-- Pivot on the kart's centre line so it circles the kart.
+				m.C0 = CFrame.new(0, part.offset[2], 0)
+				m.C1 = CFrame.new(-part.offset[1], 0, -part.offset[3])
+			else
+				m.C0 = localCf
+				m.C1 = CFrame.new()
+			end
+			m:SetAttribute("AnimKind", part.anim)
+			m:SetAttribute("Side", if part.offset[1] < 0 then -1 else 1)
+			m.Parent = bodyRoot
+		end
+
+		if part.text then
+			for _, face in { Enum.NormalId.Left, Enum.NormalId.Right } do
+				local gui = Instance.new("SurfaceGui")
+				gui.Face = face
+				gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+				gui.PixelsPerStud = 30
+				gui.Parent = p
+				local label = Instance.new("TextLabel")
+				label.Size = UDim2.fromScale(1, 1)
+				label.BackgroundTransparency = 1
+				label.Font = Enum.Font.PermanentMarker
+				label.TextScaled = true
+				label.TextColor3 = Color3.fromRGB(40, 40, 70)
+				label.Rotation = -6
+				label.Text = part.text
+				label.Parent = gui
+			end
+		end
+
+		if part.bubbles then
+			local bubbles = Instance.new("ParticleEmitter")
+			bubbles.Name = "Bubbles"
+			bubbles.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+			bubbles.Color = ColorSequence.new(Color3.fromRGB(210, 240, 255), Color3.fromRGB(255, 210, 245))
+			bubbles.Size = NumberSequence.new(0.4, 1.1)
+			bubbles.Transparency = NumberSequence.new(0.2, 1)
+			bubbles.Lifetime = NumberRange.new(0.6, 1.2)
+			bubbles.Speed = NumberRange.new(4, 8)
+			bubbles.SpreadAngle = Vector2.new(30, 30)
+			bubbles.Acceleration = Vector3.new(0, 6, 0)
+			bubbles.EmissionDirection = Enum.NormalId.Back
+			bubbles.Rate = 14
+			bubbles.Parent = p
+		end
 	end
 	local ex = body.exhaust
 	local exhaust = visual(model, root, "Exhaust", Vector3.new(1.2, 0.6, 0.4), drop * CFrame.new(ex[1], ex[2], ex[3]), Color3.fromRGB(255, 140, 40), Enum.Material.Neon, nil, bodyRoot)
@@ -497,6 +568,10 @@ function KartRig.setEffects(model: Model, driftLevel: number, boosting: boolean)
 	local exhaust = model:FindFirstChild("Exhaust") :: BasePart?
 	if exhaust then
 		exhaust.Transparency = if boosting then 0.1 else 1
+	end
+	-- Lets clients animate boost-only details (like the toaster's toast).
+	if model:GetAttribute("Boosting") ~= boosting then
+		model:SetAttribute("Boosting", boosting)
 	end
 end
 
@@ -967,13 +1042,26 @@ export type BodyPart = {
 	size: { number },
 	offset: { number },
 	role: "main" | "accent" | "dark" | "glass" | "chrome" | "light",
-	shape: ("Block" | "Ball" | "Cylinder" | "Wedge")?,
+	-- Ellipsoid = a smooth stretched sphere (best for rounded, toy-like shapes).
+	shape: ("Block" | "Ball" | "Cylinder" | "Wedge" | "Ellipsoid")?,
 	rotation: { number }?, -- degrees x, y, z
+	color: { number }?, -- fixed colour instead of the role's (eyes, toast, cardboard)
+	material: string?, -- e.g. "Glass" or "Neon" instead of the role's
+	transparency: number?,
+	reflectance: number?,
+	-- Animated parts (client/KartVisuals): "blink" eyelids, "toast" pops up
+	-- when boosting, "flap" wings, "flutter" laces, "claw" snips, "wobble"
+	-- jelly, "rattle" lid, "orbit" lights circling the kart.
+	anim: string?,
+	text: string?, -- marker drawing on both sides of this part
+	bubbles: boolean?, -- this part blows bubbles
 }
 
 export type Body = {
 	id: string,
 	name: string,
+	icon: string?,
+	price: number?, -- coins to unlock (0 or nil = free)
 	wheelRadius: number,
 	wheelWidth: number,
 	wheels: { { number } }, -- x, z of each wheel; the two with the largest z are rear wheels
@@ -1007,23 +1095,285 @@ KartBodies.List = {
 	{
 		id = "classic",
 		name = "Classic",
-		wheelRadius = 0.8,
-		wheelWidth = 0.9,
+		icon = "🚗",
+		price = 0,
+		wheelRadius = 0.85,
+		wheelWidth = 1.1,
 		wheels = WHEELS_STANDARD,
-		seat = { 0, 0.6, 0.6 },
+		seat = { 0, 0.6, 0.9 },
 		exhaust = { 0, 0.6, 3.6 },
 		parts = {
-			{ size = { 4.6, 0.6, 7 }, offset = { 0, 0, 0 }, role = "dark" },
-			{ size = { 4.2, 1.2, 4.4 }, offset = { 0, 0.8, -0.6 }, role = "main" },
-			{ size = { 3.4, 0.8, 1.6 }, offset = { 0, 0.5, -3.4 }, role = "main" },
-			{ size = { 4.4, 0.25, 1 }, offset = { 0, 2.2, 3.2 }, role = "accent" },
-			{ size = { 0.3, 1.4, 0.3 }, offset = { 0, 1.4, 3.2 }, role = "dark" },
-			{ size = { 3.6, 0.3, 0.3 }, offset = { 0, 0.7, -4.2 }, role = "chrome" },
+			{ size = { 4.6, 0.5, 7 }, offset = { 0, 0, 0 }, role = "dark" },
+			{ size = { 4.2, 1.8, 5 }, offset = { 0, 0.9, -0.9 }, role = "main", shape = "Ellipsoid", reflectance = 0.08 },
+			{ size = { 3.4, 1.1, 2.6 }, offset = { 0, 0.5, -3 }, role = "main", shape = "Ellipsoid" },
+			{ size = { 1.1, 1.1, 3.8 }, offset = { -2.2, 0.5, 0.6 }, role = "accent", shape = "Ellipsoid" },
+			{ size = { 1.1, 1.1, 3.8 }, offset = { 2.2, 0.5, 0.6 }, role = "accent", shape = "Ellipsoid" },
+			{ size = { 4.4, 0.3, 1.1 }, offset = { 0, 2.2, 3.2 }, role = "accent", shape = "Ellipsoid" },
+			{ size = { 0.3, 1.4, 0.3 }, offset = { -1.2, 1.4, 3.2 }, role = "dark" },
+			{ size = { 0.3, 1.4, 0.3 }, offset = { 1.2, 1.4, 3.2 }, role = "dark" },
+			{ size = { 3.8, 0.5, 0.5 }, offset = { 0, 0.4, -4.1 }, role = "chrome", shape = "Cylinder" },
+			{ size = { 0.9, 0.55, 0.35 }, offset = { -1.2, 0.9, -3.35 }, role = "light", shape = "Ellipsoid" },
+			{ size = { 0.9, 0.55, 0.35 }, offset = { 1.2, 0.9, -3.35 }, role = "light", shape = "Ellipsoid" },
+		},
+	},
+	{
+		id = "toaster",
+		name = "Toaster Terror",
+		icon = "🍞",
+		price = 400,
+		wheelRadius = 0.85,
+		wheelWidth = 1.2,
+		wheels = WHEELS_STANDARD,
+		seat = { 0, 0.6, 1.7 },
+		exhaust = { 0, 0.6, 3.7 },
+		parts = {
+			{ size = { 4.6, 0.6, 7.2 }, offset = { 0, 0, 0 }, role = "dark" },
+			{ size = { 4.2, 3, 3.8 }, offset = { 0, 1.7, -1.4 }, role = "main", reflectance = 0.15 },
+			{ size = { 4.3, 0.25, 3.9 }, offset = { 0, 3.25, -1.4 }, role = "chrome" },
+			{ size = { 1.1, 0.24, 2.8 }, offset = { -0.95, 3.32, -1.4 }, role = "dark" },
+			{ size = { 1.1, 0.24, 2.8 }, offset = { 0.95, 3.32, -1.4 }, role = "dark" },
+			{ size = { 0.9, 1.8, 2.4 }, offset = { -0.95, 2.6, -1.4 }, role = "main", color = { 225, 170, 90 }, anim = "toast" },
+			{ size = { 0.9, 1.8, 2.4 }, offset = { 0.95, 2.6, -1.4 }, role = "main", color = { 225, 170, 90 }, anim = "toast" },
+			{ size = { 0.35, 1.2, 0.35 }, offset = { 2.25, 2.3, -0.4 }, role = "chrome" },
+			{ size = { 0.8, 0.5, 0.8 }, offset = { 2.25, 3, -0.4 }, role = "dark", shape = "Ellipsoid" },
+			{ size = { 1, 1.1, 0.4 }, offset = { -0.85, 2, -3.32 }, role = "main", color = { 255, 255, 255 }, shape = "Ellipsoid" },
+			{ size = { 1, 1.1, 0.4 }, offset = { 0.85, 2, -3.32 }, role = "main", color = { 255, 255, 255 }, shape = "Ellipsoid" },
+			{ size = { 0.5, 0.5, 0.5 }, offset = { -0.85, 1.95, -3.5 }, role = "dark", shape = "Ball" },
+			{ size = { 0.5, 0.5, 0.5 }, offset = { 0.85, 1.95, -3.5 }, role = "dark", shape = "Ball" },
+			{ size = { 1.1, 0.6, 0.45 }, offset = { -0.85, 2.7, -3.36 }, role = "main", shape = "Ellipsoid", anim = "blink" },
+			{ size = { 1.1, 0.6, 0.45 }, offset = { 0.85, 2.7, -3.36 }, role = "main", shape = "Ellipsoid", anim = "blink" },
+			{ size = { 4.6, 1.3, 2.6 }, offset = { 0, 0.6, 2.4 }, role = "accent", shape = "Ellipsoid" },
+		},
+	},
+	{
+		id = "bubbleBuggy",
+		name = "Bubble Buggy",
+		icon = "🧴",
+		price = 0,
+		wheelRadius = 0.75,
+		wheelWidth = 1,
+		wheels = { { -2.2, -2.2 }, { 2.2, -2.2 }, { -2.2, 2.2 }, { 2.2, 2.2 } },
+		seat = { 0, 0.7, 1.4 },
+		exhaust = { 0, 0.7, 3.3 },
+		parts = {
+			{ size = { 4.4, 0.5, 6 }, offset = { 0, -0.1, 0 }, role = "dark" },
+			{ size = { 4.4, 2.4, 6.6 }, offset = { 0, 0.9, 0 }, role = "main", shape = "Ellipsoid", reflectance = 0.25, transparency = 0.1 },
+			{ size = { 4.5, 1.2, 3.2 }, offset = { 0, 1, -0.6 }, role = "main", color = { 255, 255, 255 }, shape = "Ellipsoid", text = "SUDS" },
+			{ size = { 1, 1.8, 1 }, offset = { 0, 2.4, -2.2 }, role = "accent", shape = "Cylinder", rotation = { 0, 0, 90 } },
+			{ size = { 0.6, 0.4, 1.6 }, offset = { 0, 3.35, -2.6 }, role = "accent" },
+			{ size = { 1, 1, 1 }, offset = { 0.9, 2.1, 0.6 }, role = "main", color = { 255, 255, 255 }, shape = "Ball" },
+			{ size = { 0.8, 0.8, 0.8 }, offset = { -0.7, 2, 0.2 }, role = "main", color = { 255, 255, 255 }, shape = "Ball" },
+			{ size = { 0.9, 1, 0.4 }, offset = { -0.7, 1.4, -3.15 }, role = "main", color = { 255, 255, 255 }, shape = "Ellipsoid" },
+			{ size = { 0.9, 1, 0.4 }, offset = { 0.7, 1.4, -3.15 }, role = "main", color = { 255, 255, 255 }, shape = "Ellipsoid" },
+			{ size = { 0.45, 0.45, 0.45 }, offset = { -0.7, 1.35, -3.32 }, role = "dark", shape = "Ball" },
+			{ size = { 0.45, 0.45, 0.45 }, offset = { 0.7, 1.35, -3.32 }, role = "dark", shape = "Ball" },
+			{ size = { 1, 0.55, 0.45 }, offset = { -0.7, 2, -3.18 }, role = "main", shape = "Ellipsoid", anim = "blink" },
+			{ size = { 1, 0.55, 0.45 }, offset = { 0.7, 2, -3.18 }, role = "main", shape = "Ellipsoid", anim = "blink" },
+			{ size = { 0.8, 0.8, 0.8 }, offset = { 0, 0.7, 3.3 }, role = "chrome", shape = "Ball", bubbles = true },
+		},
+	},
+	{
+		id = "frog",
+		name = "Frog Hopper",
+		icon = "🐸",
+		price = 0,
+		wheelRadius = 0.8,
+		wheelWidth = 1.1,
+		wheels = { { -2.4, -2.2 }, { 2.4, -2.2 }, { -2.4, 2.3 }, { 2.4, 2.3 } },
+		seat = { 0, 0.8, 1.2 },
+		exhaust = { 0, 0.6, 3.2 },
+		parts = {
+			{ size = { 4.8, 2.2, 6.2 }, offset = { 0, 0.9, 0 }, role = "main", shape = "Ellipsoid", reflectance = 0.06 },
+			{ size = { 4, 1.4, 5 }, offset = { 0, 0.45, -0.2 }, role = "main", color = { 240, 235, 200 }, shape = "Ellipsoid" },
+			{ size = { 1.7, 1.7, 1.7 }, offset = { -1.2, 2.2, -1.9 }, role = "main", shape = "Ellipsoid" },
+			{ size = { 1.7, 1.7, 1.7 }, offset = { 1.2, 2.2, -1.9 }, role = "main", shape = "Ellipsoid" },
+			{ size = { 1.15, 1.15, 1.15 }, offset = { -1.2, 2.35, -2.5 }, role = "light", shape = "Ball" },
+			{ size = { 1.15, 1.15, 1.15 }, offset = { 1.2, 2.35, -2.5 }, role = "light", shape = "Ball" },
+			{ size = { 0.55, 0.55, 0.55 }, offset = { -1.2, 2.35, -3 }, role = "dark", shape = "Ball" },
+			{ size = { 0.55, 0.55, 0.55 }, offset = { 1.2, 2.35, -3 }, role = "dark", shape = "Ball" },
+			{ size = { 1.8, 0.9, 1.8 }, offset = { -1.2, 2.95, -1.95 }, role = "main", shape = "Ellipsoid", anim = "blink" },
+			{ size = { 1.8, 0.9, 1.8 }, offset = { 1.2, 2.95, -1.95 }, role = "main", shape = "Ellipsoid", anim = "blink" },
+			{ size = { 2.6, 0.14, 0.12 }, offset = { 0, 1.25, -3.08 }, role = "dark" },
+			{ size = { 1.4, 1.2, 2.6 }, offset = { -2.4, 0.7, 1.6 }, role = "main", shape = "Ellipsoid" },
+			{ size = { 1.4, 1.2, 2.6 }, offset = { 2.4, 0.7, 1.6 }, role = "main", shape = "Ellipsoid" },
+			{ size = { 1.3, 0.45, 1.6 }, offset = { -2.1, -0.25, -2.6 }, role = "accent", shape = "Ellipsoid" },
+			{ size = { 1.3, 0.45, 1.6 }, offset = { 2.1, -0.25, -2.6 }, role = "accent", shape = "Ellipsoid" },
+		},
+	},
+	{
+		id = "ufo",
+		name = "UFO Cruiser",
+		icon = "🛸",
+		price = 600,
+		wheelRadius = 0.55,
+		wheelWidth = 0.8,
+		wheels = { { -2, -2 }, { 2, -2 }, { -2, 2 }, { 2, 2 } },
+		seat = { 0, 0.9, 0.4 },
+		exhaust = { 0, 0.5, 3.4 },
+		parts = {
+			{ size = { 6.6, 1.4, 6.6 }, offset = { 0, 1, 0 }, role = "main", shape = "Ellipsoid", reflectance = 0.3 },
+			{ size = { 7, 0.5, 7 }, offset = { 0, 0.9, 0 }, role = "accent", shape = "Ellipsoid" },
+			{ size = { 3.4, 2.8, 3.4 }, offset = { 0, 2, 0.4 }, role = "glass", shape = "Ellipsoid" },
+			{ size = { 0.5, 0.5, 0.5 }, offset = { 0, 3.5, 0.4 }, role = "light", shape = "Ball" },
+			{ size = { 2.2, 0.2, 2.2 }, offset = { 0, 0.15, 0 }, role = "light", shape = "Cylinder", rotation = { 0, 0, 90 }, color = { 140, 230, 255 }, transparency = 0.3 },
+			{ size = { 0.6, 0.6, 0.6 }, offset = { 3.3, 1, 0 }, role = "light", shape = "Ball", color = { 255, 90, 160 }, anim = "orbit" },
+			{ size = { 0.6, 0.6, 0.6 }, offset = { -3.3, 1, 0 }, role = "light", shape = "Ball", color = { 120, 220, 255 }, anim = "orbit" },
+			{ size = { 0.6, 0.6, 0.6 }, offset = { 0, 1, 3.3 }, role = "light", shape = "Ball", color = { 255, 220, 80 }, anim = "orbit" },
+			{ size = { 0.6, 0.6, 0.6 }, offset = { 0, 1, -3.3 }, role = "light", shape = "Ball", color = { 120, 255, 150 }, anim = "orbit" },
+		},
+	},
+	{
+		id = "dragon",
+		name = "Dragon Hatchling",
+		icon = "🐉",
+		price = 800,
+		wheelRadius = 0.8,
+		wheelWidth = 1.1,
+		wheels = { { -2.3, -2.2 }, { 2.3, -2.2 }, { -2.3, 2.3 }, { 2.3, 2.3 } },
+		seat = { 0, 0.7, 1 },
+		exhaust = { 0, 0.8, 3.8 },
+		parts = {
+			{ size = { 4.4, 2.6, 5.6 }, offset = { 0, 0.8, 0.4 }, role = "main", color = { 248, 242, 222 }, shape = "Ellipsoid" },
+			{ size = { 0.9, 0.9, 0.9 }, offset = { -2.05, 1.1, 0.4 }, role = "accent", shape = "Ball" },
+			{ size = { 0.7, 0.7, 0.7 }, offset = { 2.05, 0.8, 1.2 }, role = "accent", shape = "Ball" },
+			{ size = { 0.8, 0.8, 0.8 }, offset = { 1.8, 1.4, -0.8 }, role = "accent", shape = "Ball" },
+			{ size = { 2.6, 2.2, 2.8 }, offset = { 0, 2.4, -1.9 }, role = "main", shape = "Ellipsoid" },
+			{ size = { 1.8, 1.2, 1.8 }, offset = { 0, 2.1, -3.2 }, role = "main", shape = "Ellipsoid" },
+			{ size = { 0.3, 0.3, 0.3 }, offset = { -0.35, 2.3, -4.05 }, role = "dark", shape = "Ball" },
+			{ size = { 0.3, 0.3, 0.3 }, offset = { 0.35, 2.3, -4.05 }, role = "dark", shape = "Ball" },
+			{ size = { 0.9, 1, 0.5 }, offset = { -0.7, 2.9, -2.9 }, role = "main", color = { 255, 255, 255 }, shape = "Ellipsoid" },
+			{ size = { 0.9, 1, 0.5 }, offset = { 0.7, 2.9, -2.9 }, role = "main", color = { 255, 255, 255 }, shape = "Ellipsoid" },
+			{ size = { 0.45, 0.6, 0.3 }, offset = { -0.7, 2.85, -3.12 }, role = "dark", shape = "Ellipsoid" },
+			{ size = { 0.45, 0.6, 0.3 }, offset = { 0.7, 2.85, -3.12 }, role = "dark", shape = "Ellipsoid" },
+			{ size = { 1, 0.55, 0.55 }, offset = { -0.7, 3.45, -2.92 }, role = "main", shape = "Ellipsoid", anim = "blink" },
+			{ size = { 1, 0.55, 0.55 }, offset = { 0.7, 3.45, -2.92 }, role = "main", shape = "Ellipsoid", anim = "blink" },
+			{ size = { 0.5, 1.4, 0.5 }, offset = { -0.7, 3.6, -1.5 }, role = "accent", shape = "Ellipsoid", rotation = { -25, 0, -12 } },
+			{ size = { 0.5, 1.4, 0.5 }, offset = { 0.7, 3.6, -1.5 }, role = "accent", shape = "Ellipsoid", rotation = { -25, 0, 12 } },
+			{ size = { 3.2, 0.3, 1.9 }, offset = { -2.6, 2, 0.6 }, role = "main", shape = "Ellipsoid", anim = "flap" },
+			{ size = { 3.2, 0.3, 1.9 }, offset = { 2.6, 2, 0.6 }, role = "main", shape = "Ellipsoid", anim = "flap" },
+			{ size = { 1, 1, 2.8 }, offset = { 0, 0.9, 3.4 }, role = "main", shape = "Ellipsoid", rotation = { 20, 0, 0 } },
+			{ size = { 0.8, 0.8, 0.8 }, offset = { 0, 0.4, 4.7 }, role = "accent", shape = "Ball" },
+		},
+	},
+	{
+		id = "sneaker",
+		name = "Sneaker Speeder",
+		icon = "👟",
+		price = 500,
+		wheelRadius = 0.8,
+		wheelWidth = 1.1,
+		wheels = { { -2.4, -2.6 }, { 2.4, -2.6 }, { -2.4, 2.5 }, { 2.4, 2.5 } },
+		seat = { 0, 0.9, 1.9 },
+		exhaust = { 0, 0.4, 3.9 },
+		parts = {
+			{ size = { 4.6, 0.9, 7.6 }, offset = { 0, 0.1, 0 }, role = "main", color = { 250, 250, 250 }, shape = "Ellipsoid" },
+			{ size = { 4.2, 2.4, 6.4 }, offset = { 0, 1.1, 0.4 }, role = "main", shape = "Ellipsoid" },
+			{ size = { 3.8, 1.6, 2.4 }, offset = { 0, 0.8, -2.6 }, role = "accent", shape = "Ellipsoid" },
+			{ size = { 3.2, 0.4, 2.6 }, offset = { 0, 2.25, 1.8 }, role = "dark", shape = "Ellipsoid" },
+			{ size = { 2, 1.4, 0.6 }, offset = { 0, 2.6, 0.9 }, role = "main", shape = "Ellipsoid", rotation = { -25, 0, 0 } },
+			{ size = { 0.2, 0.8, 3.6 }, offset = { -2.12, 1.2, 0.6 }, role = "accent", shape = "Ellipsoid", rotation = { 0, 0, 10 } },
+			{ size = { 0.2, 0.8, 3.6 }, offset = { 2.12, 1.2, 0.6 }, role = "accent", shape = "Ellipsoid", rotation = { 0, 0, -10 } },
+			{ size = { 3, 0.25, 0.35 }, offset = { 0, 2.2, -1.2 }, role = "main", color = { 255, 255, 255 } },
+			{ size = { 3, 0.25, 0.35 }, offset = { 0, 2.3, -0.4 }, role = "main", color = { 255, 255, 255 } },
+			{ size = { 0.8, 0.3, 1.3 }, offset = { -0.9, 2.45, -1.6 }, role = "main", color = { 255, 255, 255 }, shape = "Ellipsoid", anim = "flutter" },
+			{ size = { 0.8, 0.3, 1.3 }, offset = { 0.9, 2.45, -1.6 }, role = "main", color = { 255, 255, 255 }, shape = "Ellipsoid", anim = "flutter" },
+		},
+	},
+	{
+		id = "crab",
+		name = "Crab Cab",
+		icon = "🦀",
+		price = 500,
+		wheelRadius = 0.8,
+		wheelWidth = 1.1,
+		wheels = WHEELS_STANDARD,
+		seat = { 0, 0.7, 1.4 },
+		exhaust = { 0, 0.5, 3.4 },
+		parts = {
+			{ size = { 4.6, 0.5, 6.4 }, offset = { 0, 0, 0.2 }, role = "dark" },
+			{ size = { 5.4, 2.2, 4.4 }, offset = { 0, 1.1, -0.8 }, role = "main", shape = "Ellipsoid", reflectance = 0.1 },
+			{ size = { 1, 1, 1 }, offset = { -1.3, 2, -0.5 }, role = "accent", shape = "Ball" },
+			{ size = { 0.8, 0.8, 0.8 }, offset = { 1.4, 1.9, -1.2 }, role = "accent", shape = "Ball" },
+			{ size = { 0.35, 1.4, 0.35 }, offset = { -0.8, 2.4, -2.4 }, role = "main", shape = "Cylinder", rotation = { 0, 0, 90 } },
+			{ size = { 0.35, 1.4, 0.35 }, offset = { 0.8, 2.4, -2.4 }, role = "main", shape = "Cylinder", rotation = { 0, 0, 90 } },
+			{ size = { 0.85, 0.85, 0.85 }, offset = { -0.8, 3.2, -2.4 }, role = "main", color = { 255, 255, 255 }, shape = "Ball" },
+			{ size = { 0.85, 0.85, 0.85 }, offset = { 0.8, 3.2, -2.4 }, role = "main", color = { 255, 255, 255 }, shape = "Ball" },
+			{ size = { 0.4, 0.4, 0.4 }, offset = { -0.8, 3.2, -2.8 }, role = "dark", shape = "Ball" },
+			{ size = { 0.4, 0.4, 0.4 }, offset = { 0.8, 3.2, -2.8 }, role = "dark", shape = "Ball" },
+			{ size = { 0.95, 0.5, 0.95 }, offset = { -0.8, 3.55, -2.4 }, role = "main", shape = "Ellipsoid", anim = "blink" },
+			{ size = { 0.95, 0.5, 0.95 }, offset = { 0.8, 3.55, -2.4 }, role = "main", shape = "Ellipsoid", anim = "blink" },
+			{ size = { 1.4, 1.2, 2.2 }, offset = { -2.9, 1.1, -2.6 }, role = "accent", shape = "Ellipsoid", anim = "claw" },
+			{ size = { 1.4, 1.2, 2.2 }, offset = { 2.9, 1.1, -2.6 }, role = "accent", shape = "Ellipsoid", anim = "claw" },
+			{ size = { 1.6, 0.3, 0.3 }, offset = { -2.8, 0.3, 0.6 }, role = "dark", rotation = { 0, 0, 25 } },
+			{ size = { 1.6, 0.3, 0.3 }, offset = { 2.8, 0.3, 0.6 }, role = "dark", rotation = { 0, 0, -25 } },
+		},
+	},
+	{
+		id = "jelly",
+		name = "Jelly Racer",
+		icon = "🍮",
+		price = 400,
+		wheelRadius = 0.8,
+		wheelWidth = 1.1,
+		wheels = WHEELS_STANDARD,
+		seat = { 0, 0.6, 2 },
+		exhaust = { 0, 0.5, 3.7 },
+		parts = {
+			{ size = { 4.6, 0.5, 7 }, offset = { 0, 0, 0 }, role = "dark" },
+			{ size = { 4.6, 2.6, 5.4 }, offset = { 0, 1.4, -0.6 }, role = "main", shape = "Ellipsoid", material = "Glass", transparency = 0.3, anim = "wobble" },
+			{ size = { 1, 1, 1 }, offset = { 0.6, 1.2, -1 }, role = "accent", shape = "Ball" },
+			{ size = { 0.8, 0.8, 0.8 }, offset = { -0.8, 1.6, -0.2 }, role = "accent", shape = "Ball" },
+			{ size = { 0.7, 0.7, 0.7 }, offset = { 0.2, 1, 0.4 }, role = "accent", shape = "Ball" },
+			{ size = { 3, 0.8, 3 }, offset = { 0, 2.8, -0.8 }, role = "main", color = { 255, 252, 245 }, shape = "Ellipsoid", anim = "wobble" },
+			{ size = { 0.9, 0.9, 0.9 }, offset = { 0, 3.4, -0.8 }, role = "main", color = { 220, 30, 50 }, shape = "Ball", anim = "wobble" },
+			{ size = { 4.6, 0.6, 1.4 }, offset = { 0, 0.4, 2.8 }, role = "accent", shape = "Ellipsoid" },
+		},
+	},
+	{
+		id = "cardboard",
+		name = "Cardboard Champion",
+		icon = "📦",
+		price = 200,
+		wheelRadius = 0.85,
+		wheelWidth = 1.1,
+		wheels = WHEELS_STANDARD,
+		seat = { 0, 0.8, 1.7 },
+		exhaust = { 0, 0.5, 3.6 },
+		parts = {
+			{ size = { 4.4, 2.6, 5.2 }, offset = { 0, 1.4, -0.7 }, role = "main", color = { 205, 165, 115 }, text = "VROOM!" },
+			{ size = { 4.45, 0.1, 0.8 }, offset = { 0, 2.73, -0.7 }, role = "main", color = { 230, 210, 160 }, transparency = 0.2 },
+			{ size = { 4.4, 0.15, 1.8 }, offset = { 0, 3.2, -3.6 }, role = "main", color = { 195, 155, 105 }, rotation = { 40, 0, 0 } },
+			{ size = { 1.8, 1.8, 0.1 }, offset = { 0, 1.5, -3.32 }, role = "main", color = { 255, 255, 255 }, shape = "Ellipsoid", text = "1" },
+			{ size = { 4.6, 0.5, 7 }, offset = { 0, 0, 0 }, role = "dark" },
+			{ size = { 4.4, 1.2, 1.6 }, offset = { 0, 0.6, 2.6 }, role = "accent" },
+		},
+	},
+	{
+		id = "dumpster",
+		name = "Dumpster Rocket",
+		icon = "🗑️",
+		price = 600,
+		wheelRadius = 0.8,
+		wheelWidth = 1.2,
+		wheels = WHEELS_STANDARD,
+		seat = { 0, 1.1, 0.2 },
+		exhaust = { 0, 1.2, 4.2 },
+		parts = {
+			{ size = { 4.4, 2.4, 5 }, offset = { 0, 1.3, -0.4 }, role = "main" },
+			{ size = { 4.5, 0.3, 0.3 }, offset = { 0, 2.1, -2.95 }, role = "accent" },
+			{ size = { 4.5, 0.3, 0.3 }, offset = { 0, 0.9, -2.95 }, role = "accent" },
+			{ size = { 4.6, 0.3, 5.2 }, offset = { 0, 3.6, 2.2 }, role = "dark", rotation = { 70, 0, 0 }, anim = "rattle" },
+			{ size = { 2.4, 1.5, 1.5 }, offset = { 0, 1.2, 2.8 }, role = "chrome", shape = "Cylinder", rotation = { 0, 90, 0 } },
+			{ size = { 0.3, 1.2, 1.2 }, offset = { -1, 1.2, 3.6 }, role = "accent", shape = "Wedge" },
+			{ size = { 0.3, 1.2, 1.2 }, offset = { 1, 1.2, 3.6 }, role = "accent", shape = "Wedge" },
+			{ size = { 4.6, 0.5, 6.8 }, offset = { 0, 0, 0.2 }, role = "dark" },
 		},
 	},
 	{
 		id = "racer",
 		name = "Wedge Racer",
+		icon = "📐",
+		price = 150,
 		wheelRadius = 0.75,
 		wheelWidth = 1,
 		wheels = { { -2.6, -2.6 }, { 2.6, -2.6 }, { -2.6, 2.6 }, { 2.6, 2.6 } },
@@ -1044,6 +1394,8 @@ KartBodies.List = {
 	{
 		id = "buggy",
 		name = "Dune Buggy",
+		icon = "🏜️",
+		price = 150,
 		wheelRadius = 1.05,
 		wheelWidth = 1.2,
 		wheels = { { -2.7, -2.5 }, { 2.7, -2.5 }, { -2.7, 2.5 }, { 2.7, 2.5 } },
@@ -1069,6 +1421,8 @@ KartBodies.List = {
 	{
 		id = "muscle",
 		name = "Muscle",
+		icon = "💪",
+		price = 200,
 		wheelRadius = 0.9,
 		wheelWidth = 1.3,
 		wheels = { { -2.6, -2.6 }, { 2.6, -2.6 }, { -2.6, 2.5 }, { 2.6, 2.5 } },
@@ -1087,26 +1441,10 @@ KartBodies.List = {
 		},
 	},
 	{
-		id = "bubble",
-		name = "Bubble",
-		wheelRadius = 0.7,
-		wheelWidth = 0.9,
-		wheels = { { -2.2, -2 }, { 2.2, -2 }, { -2.2, 2 }, { 2.2, 2 } },
-		seat = { 0, 0.5, 0.3 },
-		exhaust = { 0, 0.5, 3 },
-		parts = {
-			{ size = { 4.6, 4.6, 4.6 }, offset = { 0, 0.9, 0.2 }, role = "main", shape = "Ball" },
-			{ size = { 3.4, 3.4, 3.4 }, offset = { 0, 1.9, -0.4 }, role = "glass", shape = "Ball" },
-			{ size = { 4.2, 0.5, 6 }, offset = { 0, -0.1, 0 }, role = "dark" },
-			{ size = { 1.2, 1.2, 1.2 }, offset = { -1.4, 0.8, -2.2 }, role = "light", shape = "Ball" },
-			{ size = { 1.2, 1.2, 1.2 }, offset = { 1.4, 0.8, -2.2 }, role = "light", shape = "Ball" },
-			{ size = { 0.25, 1.8, 0.25 }, offset = { 1.2, 3.6, 1.6 }, role = "dark" },
-			{ size = { 0.9, 0.9, 0.9 }, offset = { 1.2, 4.6, 1.6 }, role = "accent", shape = "Ball" },
-		},
-	},
-	{
 		id = "formula",
 		name = "Formula",
+		icon = "🏎️",
+		price = 300,
 		wheelRadius = 0.85,
 		wheelWidth = 1.2,
 		wheels = { { -2.8, -2.8 }, { 2.8, -2.8 }, { -2.8, 2.6 }, { 2.8, 2.6 } },
@@ -8268,7 +8606,7 @@ local KartVisuals = {}
 -- "Fewer effects" setting: quieter exhaust and no trails on other karts.
 KartVisuals.reduced = false
 
-type Anim = { spin: number, lastSpeed: number, lastVy: number, squash: number, lean: number, pitch: number, steer: number }
+type Anim = { spin: number, lastSpeed: number, lastVy: number, squash: number, lean: number, pitch: number, steer: number, toast: number, seed: number }
 local anims: { [Model]: Anim } = setmetatable({}, { __mode = "k" }) :: any
 
 local FOLDERS = { "Karts", "PracticeKarts" }
@@ -8296,7 +8634,7 @@ local function animate(kart: Model, dt: number, t: number)
 	end
 	local anim = anims[kart]
 	if not anim then
-		anim = { spin = 0, lastSpeed = 0, lastVy = 0, squash = 0, lean = 0, pitch = 0, steer = 0 }
+		anim = { spin = 0, lastSpeed = 0, lastVy = 0, squash = 0, lean = 0, pitch = 0, steer = 0, toast = 0, seed = math.random() * 10 }
 		anims[kart] = anim
 	end
 	local vel = root.AssemblyLinearVelocity
@@ -8340,6 +8678,43 @@ local function animate(kart: Model, dt: number, t: number)
 			local steer = if joint:GetAttribute("Front") then anim.steer else 0
 			-- Rolling forward (-z) turns the wheel's top toward the front.
 			joint.Transform = CFrame.Angles(0, -steer, 0) * CFrame.Angles(-anim.spin, 0, 0)
+		end
+	end
+
+	-- Character parts: blinking eyes, popping toast, flapping wings and more.
+	local bodyRoot = kart:FindFirstChild("BodyRoot")
+	if bodyRoot then
+		local boosting = kart:GetAttribute("Boosting") == true or speed > 104
+		anim.toast += ((if boosting then 1 else 0) - anim.toast) * math.min(1, dt * 10)
+		local airborne = math.abs(vel.Y) > 6
+		local blinking = ((t + anim.seed) % 3.2) < 0.14
+		for _, joint in bodyRoot:GetChildren() do
+			if joint:IsA("Motor6D") and joint.Name == "Anim" then
+				local kind = joint:GetAttribute("AnimKind")
+				local side = joint:GetAttribute("Side") or 1
+				local cf = CFrame.new()
+				if kind == "blink" then
+					cf = CFrame.new(0, if blinking then -0.55 else 0, 0)
+				elseif kind == "toast" then
+					cf = CFrame.new(0, anim.toast * 1.3 + math.abs(math.sin(t * 9)) * 0.15 * anim.toast, 0)
+				elseif kind == "flap" then
+					local rate = if airborne then 14 else 3
+					local amp = if airborne then 0.6 else 0.12
+					cf = CFrame.Angles(0, 0, side * math.sin(t * rate + anim.seed) * amp)
+				elseif kind == "flutter" then
+					cf = CFrame.Angles(math.sin(t * 18 + side) * 0.35 * speedFrac + 0.05, 0, 0)
+				elseif kind == "claw" then
+					cf = CFrame.Angles(0, side * math.max(0, math.sin(t * 5 + anim.seed)) ^ 4 * 0.5, 0)
+				elseif kind == "wobble" then
+					local k = 1 + speedFrac + anim.squash * 4
+					cf = CFrame.new(0, math.sin(t * 9) * 0.05 * k, 0) * CFrame.Angles(math.sin(t * 7) * 0.05 * k, 0, math.cos(t * 6) * 0.05 * k)
+				elseif kind == "rattle" then
+					cf = CFrame.Angles(math.sin(t * 30 + anim.seed) * 0.06 * speedFrac - anim.squash * 0.4, 0, 0)
+				elseif kind == "orbit" then
+					cf = CFrame.Angles(0, t * 2.5, 0)
+				end
+				joint.Transform = cf
+			end
 		end
 	end
 

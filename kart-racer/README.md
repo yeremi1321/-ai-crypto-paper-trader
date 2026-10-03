@@ -1,130 +1,172 @@
 # Kart Racer (Roblox)
 
-An arcade kart racer in the spirit of classic kart games, with original
-characters, karts, items and tracks. Your Roblox avatar drives. Pick a kart,
-ready up, and race a 3-track Grand Prix against friends, with CPU drivers
-filling the empty spots of the 8-kart grid.
-
-## What's in it
-
-- **Three big tracks** with their own lighting and scenery: Sunny Loop (trees,
-  grandstands, flags), Canyon Climb (hills, mesas, rocks, cacti, golden-hour
-  haze) and Neon Eight (a figure-eight with a bridge at night, among glowing
-  towers). Curbs, lane lines and boost pads on the road.
-- **Six kart body designs** (Classic, Wedge Racer, Dune Buggy, Muscle, Bubble,
-  Formula) with 12 paint and 12 trim colours, picked in the lobby. Bodies are
-  looks only; the three kart classes (Zippy, Classic, Brute) set the stats.
-- **Drifting and mini-turbos.** Hold drift through a corner and the sparks go blue,
-  then orange, then purple. Let go for a bigger boost the longer you held it.
-- **Rocket start.** Hit the gas between "2" and "1" on the countdown.
-- **Boost pads, grass shoulders that slow you down, walls, and a wrong-way warning.**
-- **Item boxes and 7 items:** Nitro, Triple Nitro, Oil Slick, Bouncer,
-  Homing Rocket, Leader Bolt (hits 1st place) and Overdrive (invincible speed).
-  Drivers near the back get better items.
-- **CPU drivers** take racing lines, drift, use items, and catch up a little when
-  far behind (never faster than players can manage).
-- **Grand Prix points** (15-12-10-8-6-4-2-1), grid order reversed by standings,
-  and final cup results.
-- Respawns when you fall off, lap counting that blocks shortcuts, and touch
-  buttons on phones and tablets.
+A colourful party kart racer: tiny racers in an oversized world. Original
+characters, karts, items and tracks.
 
 ## Run it
 
-**Easiest:** download `KartRacer.rbxlx` from this folder and double-click it (or use
-File → Open in Roblox Studio), then press Play. It is a snapshot built from
-`src/` with `rojo build . -o KartRacer.rbxlx`, so rebuild it after changing code.
+**Easiest:** open `KartRacer.rbxlx` in Roblox Studio and press Play. It's a
+snapshot built from `src/` (`rojo build . -o KartRacer.rbxlx`), so rebuild it
+after changing code.
 
-**For development:**
+**For development:** install [Rojo](https://rojo.space) and its Studio plugin,
+run `rojo serve` here, and connect from Studio.
 
-1. Install [Rojo](https://rojo.space) and the Rojo Studio plugin.
-2. From this folder: `rojo serve`, then connect from Studio in an empty Baseplate place.
-3. Press Play, pick a kart and press **READY**. Solo play starts straight away with 7 CPU drivers.
-   To race friends, use Test → Clients and Servers or publish the place.
+To test saving in Studio, turn on *Game Settings → Security → Enable Studio
+Access to API Services*. Without it the game runs, but progress isn't saved,
+and you're told so.
 
-### Controls
+## How a round works
+
+**Lobby** → **ready up** (button or the READY arch) → **map voting** (20s, three
+tracks, use pads or cards, change your vote any time, ties are random) →
+**race** on the starting grid with a 3-2-1-GO countdown → **results** with coins
+and awards → **back to the lobby**.
+
+- Only players who ready up race and vote. Everyone else can explore, practise
+  or watch.
+- CPU drivers fill empty spots, so one player can race alone.
+- Late joiners spawn in the lobby and can watch or ready up for the next race.
+- Finished racers spectate the rest. Once the first player finishes, the others
+  get 30 seconds, so one slow racer can't hold up the round.
+
+## The Kart Carnival lobby
+
+- Spawn plaza with a status board showing the phase and countdown
+- Voting pads with miniature track displays
+- READY arch
+- Garage with display spots for players' karts
+- Podium for the last race's top three (they get confetti)
+- Live spectator screen
+- Photo spot and Ferris wheel
+- Practice loop with a drift circle, a jump ramp and a boost tunnel
+- Six hidden golden tokens
+
+## Driving
+
+- **Basics:** responsive steering and braking, plus drifting with blue → orange →
+  purple mini-turbos.
+- **Boosts:** a rocket start, boost pads, slipstreaming behind other karts, and
+  ramp tricks (press drift in the air, land for a boost).
+- **Feel:** karts lean into turns, dip under braking, bounce on the suspension,
+  squash on landing, steer their front wheels and puff exhaust.
+- **Recovery:** auto-respawn if you fall off, a reset button (R), and an
+  auto-reset if you're stuck.
 
 | Action | Keyboard | Gamepad | Touch |
 | --- | --- | --- | --- |
-| Gas / brake / steer | W S A D | R2 / L2 / stick | thumbstick |
-| Drift (hold) | Space or Shift | R1 | DRIFT |
-| Use item | E | X | ITEM |
+| Gas / brake / steer | W S A D | R2 / L2 / stick | thumbstick (or auto-accelerate) |
+| Drift / trick in the air | Space or Shift | R1 | DRIFT |
+| Use item (hold S to aim back) | E | X | ITEM |
+| Reset kart | R | Y | ↺ |
+| Horn | H | D-pad up | |
 
-## Customising tracks and karts
+## Tracks
 
-**Bigger tracks:** in `src/shared/Tracks.luau`, raise a track's `scale` (stretches
-the whole layout, hills included) and `width` (road width in studs).
+| Track | Feature |
+| --- | --- |
+| 🧸 Midnight Toy Room | Ruler bridge, block ramps, a dash under the bed, toy robot and train crossings, corner shortcut |
+| 🍳 Kitchen Chaos | Toaster launch onto a countertop shelf that bridges the start, conveyors, spatula ramps, syrup, cutting-board shortcut |
+| 🐞 Backyard Bug Rally | Hose tunnel, flowerpot jumps, crossing beetles, sprinklers that turn the dirt slippery, hollow-log shortcut |
+| 🌳 Sunny Loop / 🏜️ Canyon Climb / 🌃 Neon Eight | Earlier tracks: fast corners, hills, figure-eight bridge |
 
-**New track shapes:** edit or add `controls`, the points the road passes through
-in driving order. The road is smoothed between them automatically.
+Shortcuts are skill-based (narrow gaps in the wall) and can never skip a lap
+checkpoint.
 
-**Scenery:** `src/shared/Scenery.luau` sets how many of each prop each theme gets
-and how far from the road they go. `src/server/Props.luau` sets what each prop
-looks like. To add a new prop, add a builder there and list it under a theme.
+## Items
 
-**Lighting and colours:** each theme in `Tracks.Themes` has the time of day,
-atmosphere (haze, colour), bloom, colour tint, and road / curb / line colours.
+| Item | What it does |
+| --- | --- |
+| 🚀 Wind-up Rocket | Rolls along the road and pops on the first kart it meets. Racers ahead get a warning. |
+| 🍿 Popcorn Bomb | Thrown ahead (or dropped behind). Blinks, then pops. |
+| 🍮 Jelly Puddle | Sticky trap that slows whoever drives in |
+| 🫧 Bubble Shield | Blocks one attack |
+| 🥤 Turbo Soda | Speed boost |
+| 🌀 Spring Mine | Trap that boings karts into the air |
 
-**Kart designs:** `src/shared/KartBodies.luau`. Each body is a list of boxes,
-balls, cylinders and wedges with a size, an offset and a colour role (paint,
-trim, dark, glass, chrome, light). Copy a body, change the parts, and it shows
-up in the lobby picker. Add colours to `Palette` for more paint options.
+Odds depend on your position: more defence at the front, more boosts and
+attacks at the back.
 
-After any change, run the tests (below). They check that tracks are still
-drivable and that no scenery lands on the road. Then rebuild the place file:
-`rojo build . -o KartRacer.rbxlx`.
+Every hit gives a few seconds of protection. Traps expire, and there are limits
+on traps per racer and on active hazards.
 
-## Layout
+## Karts
+
+Fifteen bodies:
+- Classic, Toaster Terror (toast pops up when boosting), Bubble Buggy (bubble
+  exhaust), Frog Hopper (blinking headlight eyes), UFO Cruiser (orbiting
+  lights), Dragon Hatchling (flapping wings), Sneaker Speeder (fluttering
+  laces), Crab Cab (snipping claws), Jelly Racer (wobbles), Cardboard Champion
+  (marker drawings) and Dumpster Rocket (rattling lid);
+- plus the earlier Wedge Racer, Dune Buggy, Muscle and Formula.
+
+Bodies are looks only. Three engine types (Zippy, Classic, Brute) set the stats,
+and they're balanced against each other.
+
+## Progression
+
+- **Coins** for every race, plus **awards**: Best Comeback, Cleanest Driver,
+  Shortcut Expert and High Flyer.
+- **One-time challenges**, **mastery badges** for each track (bronze, silver,
+  gold), **personal best laps**, and **golden tokens** in the lobby.
+- **Garage** with a live 3D preview. Unlock and equip bodies, paint and trim,
+  wheels, stickers, horns, trails, a licence plate and a kart name (both go
+  through Roblox's text filter).
+- **Settings:** auto-accelerate, fewer effects, camera further back.
+- **Saved:** unlocks, equipped cosmetics, settings, records and progress.
+
+## Code layout
 
 ```
-kart-racer/
-  default.project.json
-  src/shared/      pure game rules, tested outside Studio
-    Karts          kart bodies + CPU drivers
-    KartPhysics    arcade handling: speed, steering, drift, mini-turbos, hits
-    Track          spline centerline, projection, surfaces, grid, lap progress
-    Tracks         the three tracks, their themes and lighting, the cup
-    Scenery        where props go around each track
-    KartBodies     kart body designs and paint palette
-    Items          item list and position-weighted rolls
-    RaceRules      placings, points, rocket start, CPU catch-up
-    AIDriver       CPU steering, drifting and braking
-    RemoteNames
-  src/common/
-    KartRig        builds a kart and connects KartPhysics to Roblox physics
-  src/server/
-    RaceService    lobby, Grand Prix, grid, laps, respawns, CPUs, results
-    ItemService    item boxes, oil, bouncers, rockets, leader bolt
-    TrackBuilder   turns a track's centerline into parts, markings and lighting
-    Props          scenery models (trees, rocks, towers, grandstands...)
-  src/client/
-    KartController input, drives your kart, chase camera
-    Hud            lobby, race HUD, item roulette, results, touch buttons
-  tests/
+src/shared/    pure game rules, tested outside Roblox with Lune
+  KartPhysics  handling, drift, turbos, slipstream, tricks, surfaces
+  Track        centreline, projection, laps, zones, crossers, shortcuts
+  Tracks       every track and theme; Scenery = where props go
+  Items        item list and position-weighted odds
+  Voting       options, tally, winner
+  Rewards      coins, awards, challenges, mastery badges
+  PlayerData   save data and every rule for changing it
+  Cosmetics    wheels, stickers, horns, trails, text rules
+  KartBodies   kart designs (data) and paint palette
+  LobbyLayout  where everything in the lobby goes
+src/common/    Roblox code shared by server and client
+  KartRig      builds and drives a kart; Shapes = rounded parts; Atmos = lighting
+src/server/
+  RoundService    lobby → vote → race → results loop, garage actions, tokens
+  RaceService     one race: grid, laps, respawns, CPUs, crossers, results
+  ItemService     item boxes and all six items
+  DataService     saving with retries and safe failure
+  TrackBuilder / Landmarks / Props / LobbyBuilder   world building
+src/client/
+  KartController  your kart, camera, input
+  KartVisuals     lean, wheels, character animations
+  TrackAnimator   crossers, sprinklers
+  LobbyUI / GarageUI / Hud / UI / Spectate   screens
 ```
-
-How a kart moves: an invisible ball carries the kart. KartPhysics decides
-speed and heading. A `LinearVelocity` pushes the ball horizontally (vertical
-movement is left to gravity, so hills and jumps work), and an
-`AlignOrientation` turns the visible body to match the heading and road slope.
-Your client simulates your own kart; the server simulates the CPU karts with
-the same code.
 
 ## Tests
 
-With [Lune](https://github.com/lune-org/lune) installed (`cargo install lune --locked`):
-
 ```sh
-lune run tests/run      # 40 tests, including a full 8-CPU race on every track
-lune run tests/syntax   # every .luau file compiles
-lune run tests/smoke    # builds every track, kart and item box in Lune's Roblox DOM
+lune run tests/run      # 78 tests, including an 8-CPU race on every track
+lune run tests/syntax   # every file compiles
+lune run tests/smoke    # builds every track, kart, item and the lobby in Lune's Roblox DOM
 ```
 
-The simulation runs the real handling, track and AI code, so editing a track
-into an undrivable shape (corners too tight, slopes too steep) fails the tests.
-Lap times in the simulation are about 32–42 seconds.
+## Assets to replace
 
-## Original, not Nintendo
+Everything is built from Roblox's own parts: boxes, spheres, stretched spheres
+(SpecialMesh), cylinders and wedges. That keeps the game working without
+uploads. These will look much better as custom meshes or sounds:
 
-Kart racing as a genre is fair game, but Nintendo's characters, names, item
-designs (shells, bananas, mushrooms, stars) and track designs are not. Keep
-everything original before publishing.
+- **Kart bodies:** each body in `KartBodies.List`. Swap parts for MeshParts, and
+  keep the simple ball collider.
+- **Landmarks:** bed, toaster, cereal bowl, flowerpot, toy chest, crossers
+  (robot, train, beetle), giant props (`Landmarks.luau`, `Props.luau`).
+- **Sounds (none yet):**
+  - engine, drift, boost: no slots yet, needs adding;
+  - item sounds: `ItemService.Sounds`;
+  - horns: `Cosmetics.Horns[].soundId`;
+  - countdown, music: no slots yet.
+- **Track images** for the voting cards. They use emoji and theme colours for now.
+
+Keep everything original: no Nintendo names, characters, items or tracks.

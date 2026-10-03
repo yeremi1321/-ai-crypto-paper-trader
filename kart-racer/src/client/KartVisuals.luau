@@ -13,7 +13,7 @@ local KartVisuals = {}
 -- "Fewer effects" setting: quieter exhaust and no trails on other karts.
 KartVisuals.reduced = false
 
-type Anim = { spin: number, lastSpeed: number, lastVy: number, squash: number, lean: number, pitch: number, steer: number }
+type Anim = { spin: number, lastSpeed: number, lastVy: number, squash: number, lean: number, pitch: number, steer: number, toast: number, seed: number }
 local anims: { [Model]: Anim } = setmetatable({}, { __mode = "k" }) :: any
 
 local FOLDERS = { "Karts", "PracticeKarts" }
@@ -41,7 +41,7 @@ local function animate(kart: Model, dt: number, t: number)
 	end
 	local anim = anims[kart]
 	if not anim then
-		anim = { spin = 0, lastSpeed = 0, lastVy = 0, squash = 0, lean = 0, pitch = 0, steer = 0 }
+		anim = { spin = 0, lastSpeed = 0, lastVy = 0, squash = 0, lean = 0, pitch = 0, steer = 0, toast = 0, seed = math.random() * 10 }
 		anims[kart] = anim
 	end
 	local vel = root.AssemblyLinearVelocity
@@ -85,6 +85,43 @@ local function animate(kart: Model, dt: number, t: number)
 			local steer = if joint:GetAttribute("Front") then anim.steer else 0
 			-- Rolling forward (-z) turns the wheel's top toward the front.
 			joint.Transform = CFrame.Angles(0, -steer, 0) * CFrame.Angles(-anim.spin, 0, 0)
+		end
+	end
+
+	-- Character parts: blinking eyes, popping toast, flapping wings and more.
+	local bodyRoot = kart:FindFirstChild("BodyRoot")
+	if bodyRoot then
+		local boosting = kart:GetAttribute("Boosting") == true or speed > 104
+		anim.toast += ((if boosting then 1 else 0) - anim.toast) * math.min(1, dt * 10)
+		local airborne = math.abs(vel.Y) > 6
+		local blinking = ((t + anim.seed) % 3.2) < 0.14
+		for _, joint in bodyRoot:GetChildren() do
+			if joint:IsA("Motor6D") and joint.Name == "Anim" then
+				local kind = joint:GetAttribute("AnimKind")
+				local side = joint:GetAttribute("Side") or 1
+				local cf = CFrame.new()
+				if kind == "blink" then
+					cf = CFrame.new(0, if blinking then -0.55 else 0, 0)
+				elseif kind == "toast" then
+					cf = CFrame.new(0, anim.toast * 1.3 + math.abs(math.sin(t * 9)) * 0.15 * anim.toast, 0)
+				elseif kind == "flap" then
+					local rate = if airborne then 14 else 3
+					local amp = if airborne then 0.6 else 0.12
+					cf = CFrame.Angles(0, 0, side * math.sin(t * rate + anim.seed) * amp)
+				elseif kind == "flutter" then
+					cf = CFrame.Angles(math.sin(t * 18 + side) * 0.35 * speedFrac + 0.05, 0, 0)
+				elseif kind == "claw" then
+					cf = CFrame.Angles(0, side * math.max(0, math.sin(t * 5 + anim.seed)) ^ 4 * 0.5, 0)
+				elseif kind == "wobble" then
+					local k = 1 + speedFrac + anim.squash * 4
+					cf = CFrame.new(0, math.sin(t * 9) * 0.05 * k, 0) * CFrame.Angles(math.sin(t * 7) * 0.05 * k, 0, math.cos(t * 6) * 0.05 * k)
+				elseif kind == "rattle" then
+					cf = CFrame.Angles(math.sin(t * 30 + anim.seed) * 0.06 * speedFrac - anim.squash * 0.4, 0, 0)
+				elseif kind == "orbit" then
+					cf = CFrame.Angles(0, t * 2.5, 0)
+				end
+				joint.Transform = cf
+			end
 		end
 	end
 

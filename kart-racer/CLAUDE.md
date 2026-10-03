@@ -23,7 +23,7 @@ All six stages of the first playable build are written:
   countdowns, unique voter counts and door transforms; it cannot render UI.
 - **What hasn't been checked:** physics, input, UI layout, networking,
   DataStores and text filtering.
-- **Checks:** `lune run tests/run` (80 tests), `tests/syntax` and `tests/smoke`
+- **Checks:** `lune run tests/run` (82 tests), `tests/syntax` and `tests/smoke`
   all pass.
 
 ## Setup on this PC
@@ -39,18 +39,17 @@ All six stages of the first playable build are written:
 
 1. **Boot.** No errors in Output. You spawn on the raised entrance in indoor Kart HQ. The wall screen
    cycles track previews; the status board, four pad signs and HUD show.
-2. **Practice loop.** Press E at the PRACTICE sign. The kart drives forward on
-   W (if it goes backwards, check `KartPhysics.forward` and the yaw maths in
-   `KartRig.apply`). Space drifts and doesn't jump you out of the seat. The
-   ramp launches you, and a trick in the air gives a boost. R resets.
+2. **Compact lobby.** No practice track, lounge or viewing room. Verify the
+   short stairs, side ramps, soft lighting, garage, trophies and party bays.
 3. **Ready → vote → race.** READY or stepping onto a pad starts the countdown.
    Check all four pads (three tracks plus Random), card votes, wall counts and
-   headshots, the winner reveal, gold departure glow, live standings on both
-   screens, results top three, and return to the lobby. Confirm countdowns
+   headshots, the winner reveal, gold departure glow, live standings on the
+   chamber screen, results top three, and return to the lobby. Confirm countdowns
    use server time and names/health labels and the Invisicam camera behave.
    Walk toward and away from room doors: panels, glass and strips slide
    together without drifting. Departure doors stay shut unless Lit is true.
-4. **Each new track:** the toy room bed tunnel, robot and train; the kitchen
+4. **Each new track:** Emberstone Citadel gates, clear road under arches,
+   lava channels outside barriers, elevated bridge and ramp; the toy room bed tunnel, robot and train; the kitchen
    toaster launch up to the shelf, the conveyors and syrup; the backyard hose,
    sprinklers and beetles. Try the shortcuts.
 5. **Items:** each of the six, warnings, the shield blocking, and hit protection.
@@ -65,9 +64,9 @@ All six stages of the first playable build are written:
 ## Kart HQ client integration
 
 - `LobbyBuilder` builds chamber/rooms and exposes `setPodium`, `setKartDisplay`,
-  `setDeparture`, `celebrate`, the three room prompts, and collectibles.
+  `setDeparture`, `celebrate`, the garage prompt, and collectibles.
 - `LobbyScreens` owns PlayerGui SurfaceGuis with Adornee references to the
-  chamber vote screen/status board/four pad signs and lounge screen. Round
+  chamber vote screen/status board/four pad signs. Round
   events call `setState`; RenderStepped calls `step(dt)` for previews,
   countdowns, thumbnail loading, and local sliding doors.
 - Door movement stores closed CFrames and offsets every Side-marked part on
@@ -75,6 +74,20 @@ All six stages of the first playable build are written:
 - Lobby lighting uses `Atmos.apply("hq")`, including after spectating/results.
 - Streaming is disabled; walking camera uses Invisicam, zoom max 80, avatar
   name distance 45, health distance 0.
+
+## Current visual revision
+
+- Chamber shrunk from 240 × 300 to 136 × 156 studs, ceiling from 110 to 44.
+- Practice and viewing rooms are not built; their room prompts are removed.
+  `LobbyScreens` no longer waits for a lounge to exist. Spectating HUD remains.
+- HQ bloom is 0.04; matte trim replaces broad neon strips. Warm white fixtures
+  provide visibility, and departure color pulses are restrained.
+- Emberstone Citadel is in the vote pool. `FortressBuilder` adds original
+  stone gates, towers, arches, torches, lava canals and basalt spires.
+- Three original racing body cosmetics added, with twin exhaust details on
+  the existing starter kart. Cosmetics do not alter class performance.
+- Lune checks cover absent rooms, six chamber screens, five sliding doors,
+  reachable tokens, fortress gates/canals and racing every track.
 
 ## Known gaps and next steps
 

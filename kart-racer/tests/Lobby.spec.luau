@@ -23,15 +23,18 @@ T.test("vote pads are found by position and don't overlap", function()
 	T.ok(LobbyLayout.inChamber(LobbyLayout.Spawn.x, LobbyLayout.Spawn.z))
 end)
 
-T.test("practice loop sits inside the practice area, away from the chamber", function()
-	local track = Track.build(LobbyLayout.PracticeTrack)
-	local area = LobbyLayout.PracticeArea
-	for _, p in track.points do
-		T.ok(p.x > area.min.x and p.x < area.max.x and p.z > area.min.z and p.z < area.max.z, "loop leaves the practice area")
-		T.ok(not LobbyLayout.inChamber(p.x, p.z), "loop crosses the chamber")
-	end
-	T.eq(Tracks.get("practice"), LobbyLayout.PracticeTrack)
-	T.ok(#LobbyLayout.PracticeTrack.ramps >= 1, "practice has a jump ramp")
+T.test("compact lobby has no practice or viewing rooms", function()
+ T.eq(LobbyLayout.roomById("practice"), nil)
+ T.eq(LobbyLayout.roomById("lounge"), nil)
+ T.ok(LobbyLayout.HalfWidth * 2 <= 140)
+ T.ok(LobbyLayout.HalfDepth * 2 <= 160)
+ for _, token in LobbyLayout.Collectibles do
+  local accessible = LobbyLayout.inChamber(token.x, token.z)
+  for _, room in LobbyLayout.Rooms do
+   accessible = accessible or LobbyLayout.inBox(room.box, token.x, token.z)
+  end
+  T.ok(accessible, "collectible is inside a retained area")
+ end
 end)
 
 T.test("vote pool tracks have voting card info", function()

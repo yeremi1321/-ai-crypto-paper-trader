@@ -23,6 +23,10 @@ local Scenery = {}
 type Rule = { kind: string, count: number, near: number, far: number, minSize: number, maxSize: number, radius: number }
 
 Scenery.Themes = {
+	fortress = {
+		{ kind = "rock", count = 130, near = 15, far = 230, minSize = 0.8, maxSize = 2, radius = 8 },
+		{ kind = "mesa", count = 18, near = 70, far = 300, minSize = 0.8, maxSize = 1.4, radius = 35 },
+	},
 	sunny = {
 		{ kind = "tree", count = 170, near = 12, far = 220, minSize = 0.8, maxSize = 1.5, radius = 8 },
 		{ kind = "bush", count = 80, near = 6, far = 120, minSize = 0.7, maxSize = 1.3, radius = 4 },

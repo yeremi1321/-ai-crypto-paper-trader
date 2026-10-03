@@ -32,20 +32,20 @@ and awards → **back to the lobby**.
 
 ## The indoor Kart HQ lobby
 
-- Tall enclosed voting chamber with a raised entrance, stairs, side ramps,
-  walkways, rounded panels, and cyan accent lights
+- Compact 136 × 156-stud voting chamber with a raised entrance, short stairs,
+  side ramps, matte gray-blue finishes, and soft white lighting
 - Giant wall screen: cycling animated track previews while waiting; three
   track columns plus Random with counts and voter headshots during voting;
   a full-screen winner reveal; live standings; and the results top three
 - Overhead phase/countdown board and four numbered pad signs; stepping onto
   a pad readies you up, and pads/cards choose a track during voting
-- Connected garage, viewing lounge with live standings, trophy room,
-  party bays, and enclosed practice hall (drift, ramp, and boost sections)
+- Connected garage, trophy room, and party bays. Practice and viewing rooms
+  have been removed; spectating remains available through the HUD.
 - Proximity sliding doors; departure doors unlock only when the server lights
   them and pulse gold while lit
 - Player kart displays, podium celebration, and six hidden golden tokens
 
-`LobbyScreens` draws wall SurfaceGuis in each player's PlayerGui and animates
+`LobbyScreens` draws the six chamber SurfaceGuis in each player's PlayerGui and animates
 local doors. Server round state drives all displays; clients do not choose
 results or authorize departure. Random votes resolve to one of the three
 tracks and count toward that track; the Random column also shows who used it.
@@ -77,6 +77,7 @@ walking camera uses Invisicam with an 80-stud maximum zoom.
 
 | Track | Feature |
 | --- | --- |
+| 🔥 Emberstone Citadel | Cobblestone gates, stone arches, battlement towers, lava canals, warm torches, basalt spires, raised bridge and ramp |
 | 🧸 Midnight Toy Room | Ruler bridge, block ramps, a dash under the bed, toy robot and train crossings, corner shortcut |
 | 🍳 Kitchen Chaos | Toaster launch onto a countertop shelf that bridges the start, conveyors, spatula ramps, syrup, cutting-board shortcut |
 | 🐞 Backyard Bug Rally | Hose tunnel, flowerpot jumps, crossing beetles, sprinklers that turn the dirt slippery, hollow-log shortcut |
@@ -104,7 +105,9 @@ on traps per racer and on active hazards.
 
 ## Karts
 
-Fifteen bodies:
+Eighteen bodies:
+- Ember GT, Arrow Sprint, and Rally Comet: low open cockpits, wide wheels,
+  spoilers, grille details, and twin chrome exhausts;
 - Classic, Toaster Terror (toast pops up when boosting), Bubble Buggy (bubble
   exhaust), Frog Hopper (blinking headlight eyes), UFO Cruiser (orbiting
   lights), Dragon Hatchling (flapping wings), Sneaker Speeder (fluttering
@@ -148,7 +151,7 @@ src/server/
   RaceService     one race: grid, laps, respawns, CPUs, crossers, results
   ItemService     item boxes and all six items
   DataService     saving with retries and safe failure
-  TrackBuilder / Landmarks / Props / LobbyBuilder   world building
+  TrackBuilder / FortressBuilder / Landmarks / Props / LobbyBuilder   world building
 src/client/
   KartController  your kart, camera, input
   KartVisuals     lean, wheels, character animations
@@ -159,7 +162,7 @@ src/client/
 ## Tests
 
 ```sh
-lune run tests/run      # 80 tests, including an 8-CPU race on every track
+lune run tests/run      # 82 tests, including an 8-CPU race on every track
 lune run tests/syntax   # every file compiles
 lune run tests/smoke    # builds every track, kart, item and the lobby in Lune's Roblox DOM
 ```

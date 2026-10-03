@@ -1,16 +1,7 @@
 --!strict
--- Layout of the indoor lobby: a tall voting chamber in the middle, with
--- side doors to optional rooms. It sits far from the race tracks (which are
--- built around the world origin). Coordinates are world studs; -z is the
--- "front" of the chamber (the giant voting screen), +z is the back (spawn).
---
---                     [ giant voting screen + status board ]
---   [departure door]   pads: 1   2   3   RANDOM   [departure door]
---   west wall doors:          ( central circular floor )       east wall doors:
---     garage            ramp                       ramp          practice hall
---     viewing lounge                                             party bays
---     trophy room        [ stairs down from the entrance ]
---   [ walkway ]       [ entrance platform with spawn (raised) ]       [ walkway ]
+-- Compact indoor voting hall with garage, trophies and party bays.
+-- World-space coordinates; the legacy practice definition is kept only for
+-- old data/module compatibility and is not built or reachable from the lobby.
 
 local Track = require("./Track")
 local v = Track.v
@@ -30,61 +21,38 @@ end
 
 LobbyLayout.Origin = at(0, 0)
 
--- The chamber ------------------------------------------------------------
-LobbyLayout.HalfWidth = 120 -- interior x from -120 to 120
-LobbyLayout.HalfDepth = 150 -- interior z from -150 (screen) to 150 (back)
-LobbyLayout.Height = 110 -- tall ceiling, so cameras have room
-LobbyLayout.DeckHeight = 20 -- entrance platform and walkways
-
-LobbyLayout.Screen = { center = at(0, -150, 50), width = 130, height = 56, recess = 6 }
-LobbyLayout.StatusBoard = at(0, -149, 94)
-LobbyLayout.DepartureDoors = { at(-92, -150), at(92, -150) }
-LobbyLayout.CentralFloor = { center = at(0, -30), radius = 56 }
-
--- Vote pads in an arc in front of the screen. Pad 4 is Random.
-LobbyLayout.VotePads = { at(-63, -100), at(-21, -106), at(21, -106), at(63, -100) }
-LobbyLayout.VotePadSize = 22
+-- Compact indoor chamber; no practice or viewing rooms.
+LobbyLayout.HalfWidth = 68
+LobbyLayout.HalfDepth = 78
+LobbyLayout.Height = 44
+LobbyLayout.DeckHeight = 8
+LobbyLayout.Screen = { center = at(0, -77, 24), width = 76, height = 26, recess = 2 }
+LobbyLayout.StatusBoard = at(0, -76, 39)
+LobbyLayout.DepartureDoors = { at(-54, -78), at(54, -78) }
+LobbyLayout.CentralFloor = { center = at(0, -10), radius = 25 }
+LobbyLayout.VotePads = { at(-39, -48), at(-13, -52), at(13, -52), at(39, -48) }
+LobbyLayout.VotePadSize = 16
 LobbyLayout.RandomPad = 4
--- Colours shared by the pads, the wall screen and the vote cards (RGB).
-LobbyLayout.PadColors = { { 0, 225, 255 }, { 255, 90, 170 }, { 255, 200, 60 }, { 170, 120, 255 } }
-
--- Raised entrance platform across the back, with spawn in the middle.
-LobbyLayout.Platform = box(-120, 100, 120, 150)
-LobbyLayout.Spawn = at(0, 128, LobbyLayout.DeckHeight)
-LobbyLayout.Stairs = { from = at(0, 100, LobbyLayout.DeckHeight), to = at(0, 60), width = 50, steps = 10 }
--- Gentle accessible ramps either side of the stairs (about 11 degrees).
+LobbyLayout.PadColors = { { 105, 165, 190 }, { 195, 125, 150 }, { 205, 175, 105 }, { 155, 140, 195 } }
+LobbyLayout.Platform = box(-68, 48, 68, 78)
+LobbyLayout.Spawn = at(0, 65, 8)
+LobbyLayout.Stairs = { from = at(0, 48, 8), to = at(0, 28), width = 28, steps = 4 }
 LobbyLayout.Ramps = {
-	{ from = at(-69, 100, LobbyLayout.DeckHeight), to = at(-69, 0), width = 18 },
-	{ from = at(69, 100, LobbyLayout.DeckHeight), to = at(69, 0), width = 18 },
+ { from = at(-44, 48, 8), to = at(-44, 0), width = 12 },
+ { from = at(44, 48, 8), to = at(44, 0), width = 12 },
 }
--- Walkways along both side walls at deck height.
-LobbyLayout.Walkways = { box(-120, -140, -104, 100), box(104, -140, 120, 100) }
-
--- Doors in the side walls (floor level, under the walkways), and the rooms behind.
+LobbyLayout.Walkways = { box(-68, -66, -58, 48), box(58, -66, 68, 48) }
 export type Room = { id: string, name: string, icon: string, door: Spot, side: number, box: Box }
 LobbyLayout.Rooms = {
-	{ id = "garage", name = "Garage", icon = "🔧", door = at(-120, -70), side = -1, box = box(-230, -112, -120, -28) },
-	{ id = "lounge", name = "Viewing Lounge", icon = "📺", door = at(-120, 5), side = -1, box = box(-230, -22, -120, 34) },
-	{ id = "trophy", name = "Trophy Room", icon = "🏆", door = at(-120, 70), side = -1, box = box(-230, 40, -120, 98) },
-	{ id = "practice", name = "Practice Circuit", icon = "🏁", door = at(120, -70), side = 1, box = box(120, -240, 520, -10) },
-	{ id = "party", name = "Party Bays", icon = "🎉", door = at(120, 40), side = 1, box = box(120, 10, 230, 90) },
+ { id = "garage", name = "Garage", icon = "🔧", door = at(-68, -24), side = -1, box = box(-110, -66, -68, 6) },
+ { id = "trophy", name = "Trophy Room", icon = "🏆", door = at(68, -28), side = 1, box = box(68, -66, 110, 0) },
+ { id = "party", name = "Party Bays", icon = "🎉", door = at(68, 28), side = 1, box = box(68, 8, 110, 66) },
 } :: { Room }
-LobbyLayout.DoorWidth = 22
-LobbyLayout.DoorHeight = 15
+LobbyLayout.DoorWidth = 16
+LobbyLayout.DoorHeight = 13
+LobbyLayout.KartDisplays = { at(-23, -70), at(0, -70), at(23, -70), at(-58, 20) }
 
--- Kart display alcoves: four under the screen, four in the side walls.
-LobbyLayout.KartDisplays = {
-	at(-45, -143),
-	at(-15, -143),
-	at(15, -143),
-	at(45, -143),
-	at(-114, -115),
-	at(-114, -32),
-	at(114, -115),
-	at(114, -5),
-}
-
--- Indoor practice circuit (inside the practice hall). Open, no walls.
+-- Indoor practice circuit (inside the removed legacy practice layout). Open, no walls.
 LobbyLayout.PracticeArea = box(150, -230, 510, -18)
 LobbyLayout.DriftCircle = { center = at(330, -120), radius = 40 }
 LobbyLayout.PracticeTrack = {
@@ -114,15 +82,11 @@ LobbyLayout.PracticeTrack = {
 
 -- Hidden golden tokens around the lobby rooms.
 LobbyLayout.Collectibles = {
-	at(-112, -136, LobbyLayout.DeckHeight + 2), -- far end of the west walkway
-	at(112, -136, LobbyLayout.DeckHeight + 2), -- far end of the east walkway
-	at(-220, -104, 2), -- back corner of the garage
-	at(226, 86, 2), -- behind the couch in the last party bay
-	at(-222, 92, 2), -- behind the trophy shelves
-	at(500, -225, 2), -- corner of the practice hall
+ at(-61, -62, 10), at(61, -62, 10), at(-104, -58, 2),
+ at(104, 58, 2), at(104, -58, 2), at(-56, 67, 10),
 }
 
--- Practice sign at the practice hall entrance; it starts a practice kart.
+-- Practice sign at the removed legacy practice layout entrance; it starts a practice kart.
 LobbyLayout.PracticeStart = at(170, -70)
 
 function LobbyLayout.roomById(id: string): Room?

@@ -604,20 +604,6 @@ function RoundService.start()
 	handles.garagePrompt.Triggered:Connect(function(player)
 		Net.OpenGarage:FireClient(player)
 	end)
-	handles.spectatePrompt.Triggered:Connect(function(player)
-		if RaceService.isRunning() and not RaceService.isRacing(player) then
-			Net.Spectate:FireClient(player)
-		else
-			Net.Notify:FireClient(player, "No race to watch right now.")
-		end
-	end)
-	handles.practicePrompt.Triggered:Connect(function(player)
-		if RaceService.isRacing(player) then
-			return
-		end
-		local kartId, look = kartOf(player)
-		PracticeService.start(player, kartId, look)
-	end)
 
 	task.spawn(function()
 		local lastSecond = -1

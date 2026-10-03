@@ -111,6 +111,15 @@ check("TrackBuilder builds every track", function()
 			end
 		end
 		assert(roads == #track.points, `{def.id}: {roads} road parts for {#track.points} points`)
+		if def.id == "emberfort" then
+			assert(folder:FindFirstChild("Citadel"), "fortress scenery")
+			local towers, canals = 0, 0
+			for _, part in folder.Citadel:GetDescendants() do
+				if part.Name == "GateTower" then towers += 1 end
+				if part.Name == "LavaCanal" then canals += 1 end
+			end
+			assert(towers == 8 and canals == 80, "fortress gates and lava channels")
+		end
 		local total = #folder:GetDescendants()
 		local scenery = folder:FindFirstChild("Scenery")
 		assert(scenery and #scenery:GetChildren() > 300, `{def.id}: not enough scenery`)
@@ -216,7 +225,7 @@ check("LobbyBuilder builds Kart HQ", function()
 	local handles = LobbyBuilder.build()
 	local lobby = game:GetService("Workspace"):FindFirstChild("Lobby")
 	assert(lobby, "no lobby")
-	assert(game:GetService("Workspace"):FindFirstChild("PracticeTrack"), "no practice loop")
+	assert(not game:GetService("Workspace"):FindFirstChild("PracticeTrack"), "practice removed")
 	assert(#handles.collectibles == 6, "tokens")
 	handles.setPodium({ { name = "A", kartId = "classic", look = { body = "classic", main = 1, accent = 2 } }, { name = "B" } })
 	handles.setKartDisplay(1, "Tester", "zippy", { body = "racer", main = 3, accent = 4 })
@@ -224,8 +233,8 @@ check("LobbyBuilder builds Kart HQ", function()
 	assert(lobby.Chamber:FindFirstChild("VoteScreen"), "vote screen")
 	assert(lobby.Chamber:FindFirstChild("StatusBoard"), "status board")
 	for i = 1, 4 do assert(lobby.Chamber:FindFirstChild(`PadSign{i}`), "pad sign") end
-	assert(lobby.Rooms.lounge:FindFirstChild("LoungeScreen"), "lounge screen")
-	for _, key in { "garagePrompt", "spectatePrompt", "practicePrompt" } do
+	assert(not lobby.Rooms:FindFirstChild("lounge") and not lobby.Rooms:FindFirstChild("practice"), "removed rooms")
+	for _, key in { "garagePrompt" } do
 		assert(handles[key]:IsA("ProximityPrompt"), key)
 	end
 	for _, lit in { true, false } do
@@ -322,7 +331,7 @@ check("LobbyScreens: phases, headshots, countdown and local doors", function()
 	local s = { phase = "lobby", players = { { ready = true } }, options = {}, deadline = 125 }
 	module.setState(s) -- before world discovery must not lose the snapshot
 	module.step(0.1)
-	assert(#gui:GetChildren() == 7, "seven local screens")
+	assert(#gui:GetChildren() == 6, "six chamber screens")
 	for _, screen in gui:GetChildren() do
 		assert(screen:IsA("SurfaceGui") and screen.Adornee:IsA("BasePart"), "local adornee")
 		assert(screen.ResetOnSpawn == false, "screens survive respawn")
@@ -356,7 +365,7 @@ check("LobbyScreens: phases, headshots, countdown and local doors", function()
 	s.spectate = { trackName = "Kitchen Chaos", rows = { { name = "Leader", finished = true }, { name = "CPU", isCpu = true } } }
 	module.setState(s)
 	assert(string.find(texts("vote"), "1. Leader", 1, true), "wall standings")
-	assert(string.find(texts("lounge"), "1. Leader", 1, true), "lounge standings")
+	assert(not gui:FindFirstChild("LobbyScreen_lounge"), "no viewing screen")
 	s.phase, s.spectate = "results", nil
 	s.lastResults = { { name = "First" }, { name = "Second" }, { name = "Third" }, { name = "Fourth" } }
 	module.setState(s)
@@ -387,7 +396,7 @@ check("LobbyScreens: phases, headshots, countdown and local doors", function()
 		assert((panel.CFrame.Position - closed.Position).Magnitude < 0.02, "door returns to stored position")
 		checked += 1
 	end
-	assert(checked >= 7, "room and departure doors exercised")
+	assert(checked == 5, "room and departure doors exercised")
 	gui:Destroy()
 end)
 

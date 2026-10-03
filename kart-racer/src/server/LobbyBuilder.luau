@@ -1,16 +1,6 @@
--- Builds the Kart HQ lobby from LobbyLayout: a tall indoor voting chamber.
---   * raised entrance platform with spawn, wide stairs and two gentle ramps
---   * central circular floor with celebration pedestals
---   * four vote pads (three tracks + Random) under a giant recessed screen
---   * status board above the screen, departure doors either side of it
---   * walkways along both side walls, rounded columns with lit panels
---   * labelled sliding doors to the garage, viewing lounge, trophy room,
---     practice circuit and party bays
---
--- The wall screen, status board, pad signs and lounge screen are blank parts
--- here; each client draws them from the round state (client/LobbyScreens), so
--- they stay in sync with the vote cards. Sliding doors are opened on clients.
--- Returns handles RoundService uses for karts, prompts and celebrations.
+-- Compact indoor Kart HQ: soft lighting, four voting pads, garage,
+-- trophy room and party bays. No practice hall or viewing lounge.
+-- Clients draw the wall screens and animate proximity doors.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
@@ -18,11 +8,9 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage.Shared
 local Karts = require(Shared.Karts)
 local LobbyLayout = require(Shared.LobbyLayout)
-local Track = require(Shared.Track)
 local KartRig = require(ReplicatedStorage.Common.KartRig)
 local Shapes = require(ReplicatedStorage.Common.Shapes)
 
-local TrackBuilder = require(script.Parent.TrackBuilder)
 
 local LobbyBuilder = {}
 
@@ -31,14 +19,14 @@ local LobbyBuilder = {}
 LobbyBuilder.AmbientSoundId = ""
 
 local C = {
-	wall = Color3.fromRGB(22, 30, 58),
-	wallLight = Color3.fromRGB(34, 46, 86),
+	wall = Color3.fromRGB(68, 75, 86),
+	wallLight = Color3.fromRGB(90, 99, 112),
 	panel = Color3.fromRGB(28, 38, 72),
-	floor = Color3.fromRGB(26, 34, 62),
+	floor = Color3.fromRGB(58, 63, 72),
 	floorLine = Color3.fromRGB(44, 64, 110),
 	navy = Color3.fromRGB(16, 22, 44),
-	cyan = Color3.fromRGB(0, 225, 255),
-	cyanSoft = Color3.fromRGB(110, 230, 255),
+	cyan = Color3.fromRGB(110, 165, 180),
+	cyanSoft = Color3.fromRGB(155, 185, 195),
 	white = Color3.fromRGB(240, 246, 255),
 	lamp = Color3.fromRGB(190, 215, 245),
 	steel = Color3.fromRGB(170, 185, 210),
@@ -49,7 +37,7 @@ local C = {
 	screen = Color3.fromRGB(8, 12, 26),
 	glass = Color3.fromRGB(150, 220, 255),
 }
-local NEON = Enum.Material.Neon
+local NEON = Enum.Material.SmoothPlastic
 local GLASS = Enum.Material.Glass
 
 local O = LobbyLayout.Origin
@@ -315,561 +303,148 @@ end
 -- Build
 ---------------------------------------------------------------------------
 export type Handles = {
-	setPodium: (rows: { any }) -> (),
-	setKartDisplay: (slot: number, name: string?, kartId: string?, look: any?) -> (),
-	setDeparture: (lit: boolean) -> (),
-	celebrate: (place: number, character: Model) -> (),
-	garagePrompt: ProximityPrompt,
-	spectatePrompt: ProximityPrompt,
-	practicePrompt: ProximityPrompt,
-	collectibles: { BasePart },
+ setPodium: (rows: { any }) -> (), setKartDisplay: (slot: number, name: string?, kartId: string?, look: any?) -> (),
+ setDeparture: (lit: boolean) -> (), celebrate: (place: number, character: Model) -> (),
+ garagePrompt: ProximityPrompt, collectibles: { BasePart },
 }
 
 function LobbyBuilder.build(): Handles
-	local old = Workspace:FindFirstChild("Lobby")
-	if old then
-		old:Destroy()
-	end
-	local lobby = Instance.new("Folder")
-	lobby.Name = "Lobby"
-	local shell = Instance.new("Folder")
-	shell.Name = "Chamber"
-	shell.Parent = lobby
-	local rooms = Instance.new("Folder")
-	rooms.Name = "Rooms"
-	rooms.Parent = lobby
-
-	-----------------------------------------------------------------------
-	-- Floor, walls, ceiling
-	-----------------------------------------------------------------------
-	Shapes.box(shell, Vector3.new(HW * 2 + WALL * 2, 1, HD * 2 + WALL * 2), CFrame.new(O.x, -0.5, O.z), { color = C.floor, collide = true, name = "Floor" })
-	-- Tile grid on the main floor (stops at the entrance platform).
-	local platform = LobbyLayout.Platform
-	for x = -HW + 24, HW - 24, 24 do
-		local z0, z1 = -HD, platform.min.z - O.z
-		Shapes.box(shell, Vector3.new(0.4, 0.06, z1 - z0), CFrame.new(O.x + x, 0.03, O.z + (z0 + z1) / 2), { color = C.floorLine })
-	end
-	for z = -HD + 25, platform.min.z - O.z - 1, 25 do
-		Shapes.box(shell, Vector3.new(HW * 2, 0.06, 0.4), CFrame.new(O.x, 0.03, O.z + z), { color = C.floorLine })
-	end
-
-	-- Side walls with door openings (under the walkways).
-	local doorW, doorH = LobbyLayout.DoorWidth, LobbyLayout.DoorHeight
-	for _, side in { -1, 1 } do
-		local openings = {}
-		for _, room in LobbyLayout.Rooms do
-			if room.side == side then
-				table.insert(openings, { at = room.door.z - (O.z - HD - WALL), width = doorW, bottom = 0, top = doorH })
-			end
-		end
-		local x = side * (HW + WALL / 2)
-		wall(shell, W(x, 0, -HD - WALL), W(x, 0, HD + WALL), HEIGHT, WALL, openings)
-	end
-	-- Back wall behind the entrance platform.
-	wall(shell, W(-HW, 0, HD + WALL / 2), W(HW, 0, HD + WALL / 2), HEIGHT, WALL, {})
-	-- Front wall: the recessed screen and the two departure doors.
-	local screen = LobbyLayout.Screen
-	local screenBottom = screen.center.y - screen.height / 2
-	local frontOpenings: { Opening } = {
-		{ at = HW, width = screen.width + 4, bottom = screenBottom - 2, top = screenBottom + screen.height + 2 },
-	}
-	local departW, departH = 22, 18
-	for _, d in LobbyLayout.DepartureDoors do
-		table.insert(frontOpenings, { at = d.x - (O.x - HW), width = departW, bottom = 0, top = departH })
-	end
-	wall(shell, W(-HW, 0, -HD - WALL / 2), W(HW, 0, -HD - WALL / 2), HEIGHT, WALL, frontOpenings)
-
-	-- Ceiling with recessed light coffers.
-	Shapes.box(shell, Vector3.new(HW * 2 + WALL * 2, 4, HD * 2 + WALL * 2), CFrame.new(O.x, HEIGHT + 2, O.z), { color = C.wall, collide = true, name = "Ceiling" })
-	local cellX, cellZ = 60, 60
-	for x = -HW, HW, cellX do
-		Shapes.box(shell, Vector3.new(3, 3, HD * 2), CFrame.new(O.x + x, HEIGHT - 1.5, O.z), { color = C.wallLight })
-	end
-	for z = -HD, HD, cellZ do
-		Shapes.box(shell, Vector3.new(HW * 2, 3, 3), CFrame.new(O.x, HEIGHT - 1.5, O.z + z), { color = C.wallLight })
-	end
-	for x = -HW + cellX / 2, HW, cellX do
-		for z = -HD + cellZ / 2, HD, cellZ do
-			Shapes.box(shell, Vector3.new(cellX - 16, 0.4, cellZ - 16), CFrame.new(O.x + x, HEIGHT - 0.2, O.z + z), { color = C.lamp, material = NEON })
-		end
-	end
-	-- The coffers can't light a 110-stud room alone, so soft lamps hang lower.
-	for _, x in { -70, 0, 70 } do
-		for _, z in { -105, -30, 50 } do
-			local holder = Shapes.box(shell, Vector3.new(1, 1, 1), CFrame.new(O.x + x, 52, O.z + z), { color = C.white, transparency = 1 })
-			light(holder, "PointLight", 60, 1.15, Color3.fromRGB(235, 242, 255))
-		end
-	end
-
-	-- Cyan cornice under the ceiling and skirting at the floor.
-	for _, side in { -1, 1 } do
-		Shapes.box(shell, Vector3.new(0.4, 0.8, HD * 2), CFrame.new(O.x + side * (HW - 0.2), HEIGHT - 6, O.z), { color = C.cyan, material = NEON })
-		Shapes.box(shell, Vector3.new(HW * 2, 0.8, 0.4), CFrame.new(O.x, HEIGHT - 6, O.z + side * (HD - 0.2)), { color = C.cyan, material = NEON })
-		Shapes.box(shell, Vector3.new(HW * 2, 0.5, 0.3), CFrame.new(O.x, 1, O.z + side * (HD - 0.15)), { color = C.cyan, material = NEON })
-	end
-
-	-- Beveled panels on the side walls above the walkways.
-	for _, side in { -1, 1 } do
-		local face = Vector3.new(-side, 0, 0)
-		for z = -HD + 20, HD - 20, 26 do
-			for _, y in { DECK + 22, DECK + 50 } do
-				wallPanel(shell, facing(W(side * (HW - 0.3), y, z), face), 22, 22)
-			end
-		end
-	end
-
-	-----------------------------------------------------------------------
-	-- Giant recessed voting screen, status board, departure doors
-	-----------------------------------------------------------------------
-	local sc = screen.center
-	local recessBack = sc.z - screen.recess
-	local ow, oh = screen.width + 4, screen.height + 4
-	Shapes.box(shell, Vector3.new(ow + 4, oh + 4, 4), CFrame.new(sc.x, sc.y, recessBack - 2), { color = C.navy, collide = true })
-	for _, sx in { -1, 1 } do
-		Shapes.box(shell, Vector3.new(1, oh, screen.recess), CFrame.new(sc.x + sx * (ow / 2 - 0.5), sc.y, sc.z - screen.recess / 2), { color = C.wallLight })
-	end
-	for _, sy in { -1, 1 } do
-		Shapes.box(shell, Vector3.new(ow, 1, screen.recess), CFrame.new(sc.x, sc.y + sy * (oh / 2 - 0.5), sc.z - screen.recess / 2), { color = C.wallLight })
-	end
-	local voteScreen = Shapes.box(shell, Vector3.new(screen.width, screen.height, 0.6), facing(Vector3.new(sc.x, sc.y, recessBack + 0.5), Vector3.zAxis), { color = C.screen, name = "VoteScreen" })
-	local glow = Instance.new("SurfaceLight")
-	glow.Face = Enum.NormalId.Front
-	glow.Range = 40
-	glow.Brightness = 0.8
-	glow.Angle = 120
-	glow.Color = C.cyanSoft
-	glow.Parent = voteScreen
-	-- Beveled frame with a glowing inner edge.
-	local frameCf = facing(Vector3.new(sc.x, sc.y, sc.z + 0.6), Vector3.zAxis)
-	for _, sx in { -1, 1 } do
-		Shapes.box(shell, Vector3.new(4, oh + 8, 1.6), frameCf * CFrame.new(sx * (ow / 2 + 2), 0, 0), { color = C.wallLight })
-		Shapes.box(shell, Vector3.new(0.5, oh, 0.4), frameCf * CFrame.new(sx * (ow / 2 + 0.2), 0, -0.6), { color = C.cyan, material = NEON })
-	end
-	for _, sy in { -1, 1 } do
-		Shapes.box(shell, Vector3.new(ow + 8, 4, 1.6), frameCf * CFrame.new(0, sy * (oh / 2 + 2), 0), { color = C.wallLight })
-		Shapes.box(shell, Vector3.new(ow, 0.5, 0.4), frameCf * CFrame.new(0, sy * (oh / 2 + 0.2), -0.6), { color = C.cyan, material = NEON })
-	end
-
-	local board = LobbyLayout.StatusBoard
-	local boardCf = facing(Vector3.new(board.x, board.y, board.z + 0.8), Vector3.zAxis)
-	Shapes.roundedBox(shell, Vector3.new(68, 15, 1.4), 2, boardCf * CFrame.new(0, 0, 0.4), { color = C.wallLight })
-	Shapes.box(shell, Vector3.new(66, 13, 0.3), boardCf * CFrame.new(0, 0, -0.4), { color = C.cyan, material = NEON })
-	Shapes.box(shell, Vector3.new(64, 11, 0.6), boardCf * CFrame.new(0, 0, -0.6), { color = C.screen, name = "StatusBoard" })
-
-	local departure = Instance.new("Folder")
-	departure.Name = "Departure"
-	departure.Parent = lobby
-	for i, d in LobbyLayout.DepartureDoors do
-		local wallCf = facing(Vector3.new(d.x, 0, d.z - WALL / 2), Vector3.zAxis)
-		local door = slidingDoor(departure, `DepartureDoor{i}`, wallCf, departW, departH, C.cyan)
-		door:SetAttribute("Departure", true)
-		door:SetAttribute("Lit", false)
-		-- A short glowing tunnel behind the door (seen when it opens).
-		local tunnelCf = facing(Vector3.new(d.x, 0, d.z - WALL - 8), Vector3.zAxis)
-		Shapes.box(departure, Vector3.new(departW + 2, 1, 16), tunnelCf * CFrame.new(0, -0.5, 0), { color = C.navy, collide = true })
-		Shapes.box(departure, Vector3.new(departW + 2, 1, 16), tunnelCf * CFrame.new(0, departH + 0.5, 0), { color = C.wall, collide = true })
-		for _, sx in { -1, 1 } do
-			Shapes.box(departure, Vector3.new(1, departH, 16), tunnelCf * CFrame.new(sx * (departW / 2 + 0.5), departH / 2, 0), { color = C.wall, collide = true })
-			for k = 0, 3 do
-				Shapes.box(departure, Vector3.new(0.3, departH - 4, 0.5), tunnelCf * CFrame.new(sx * departW / 2, departH / 2, -6 + k * 4), { color = C.cyan, material = NEON, name = "Glow" })
-			end
-		end
-		local back = Shapes.box(departure, Vector3.new(departW + 2, departH, 1), tunnelCf * CFrame.new(0, departH / 2, 8.5), { color = C.navy, collide = true })
-		text(back, "» TO THE TRACK »", C.cyan, 10)
-		local tunnelLight = Shapes.box(departure, Vector3.new(1, 1, 1), tunnelCf * CFrame.new(0, departH - 3, 0), { color = C.white, transparency = 1 })
-		light(tunnelLight, "PointLight", 18, 1, C.cyanSoft)
-		local sign = Shapes.box(departure, Vector3.new(departW, 4, 0.6), facing(Vector3.new(d.x, departH + 4, d.z + 0.4), Vector3.zAxis), { color = C.navy, name = "DepartureSign" })
-		text(sign, "DEPARTURES", C.cyan, 16)
-	end
-
-	-- Big columns flanking the screen.
-	for _, sx in { -1, 1 } do
-		column(shell, W(sx * 74, 0, -HD + 4), HEIGHT, Vector3.zAxis)
-	end
-
-	-- Kart display alcoves: under the screen and in the side walls.
-	local displays = Instance.new("Folder")
-	displays.Name = "KartDisplays"
-	displays.Parent = lobby
-	local displayYaw = {}
-	for i, spot in LobbyLayout.KartDisplays do
-		local face: Vector3
-		if math.abs(spot.x - O.x) > HW - 10 then
-			face = Vector3.new(if spot.x < O.x then 1 else -1, 0, 0)
-		else
-			face = Vector3.zAxis
-		end
-		displayYaw[i] = math.atan2(-face.X, -face.Z)
-		local base = Vector3.new(spot.x, 0, spot.z)
-		rimDisc(shell, 12, 1, CFrame.new(base), C.panel, C.cyan, 0.6)
-		local wallGap = if face.Z ~= 0 then spot.z - (O.z - HD) else HW - math.abs(spot.x - O.x)
-		local backCf = facing(base - face * (wallGap - 0.4) + Vector3.new(0, 6.5, 0), face)
-		wallPanel(shell, backCf, 14, 12)
-		Shapes.box(shell, Vector3.new(15, 0.8, 7), facing(base - face * 2.5 + Vector3.new(0, 13, 0), face), { color = C.wallLight })
-		local lamp = Shapes.box(shell, Vector3.new(12, 0.2, 5), facing(base - face * 2.5 + Vector3.new(0, 12.55, 0), face), { color = C.lamp, material = NEON })
-		light(lamp, "PointLight", 14, 1.2, Color3.fromRGB(220, 240, 255))
-	end
-
-	-----------------------------------------------------------------------
-	-- Entrance platform, stairs, ramps, walkways, railings
-	-----------------------------------------------------------------------
-	local px0, px1, pz0, pz1 = platform.min.x, platform.max.x, platform.min.z, platform.max.z
-	Shapes.box(shell, Vector3.new(px1 - px0, DECK, pz1 - pz0), CFrame.new((px0 + px1) / 2, DECK / 2, (pz0 + pz1) / 2), { color = C.wall, collide = true, name = "Platform" })
-	Shapes.box(shell, Vector3.new(px1 - px0, 0.1, pz1 - pz0 - 2), CFrame.new((px0 + px1) / 2, DECK + 0.05, (pz0 + pz1) / 2 + 1), { color = C.floor, collide = true })
-	Shapes.box(shell, Vector3.new(px1 - px0, 0.5, 0.3), CFrame.new((px0 + px1) / 2, DECK - 0.6, pz0 - 0.1), { color = C.cyan, material = NEON })
-	-- Panels on the platform's front face, between the stairs and ramps.
-	for _, x in { -45, 45, -96, 96 } do
-		wallPanel(shell, facing(W(x, DECK / 2 - 1, pz0 - O.z - 0.3), -Vector3.zAxis), 12, 14)
-	end
-
-	local spawnSpot = LobbyLayout.Spawn
-	rimDisc(shell, 18, DECK + 0.25, CFrame.new(spawnSpot.x, 0, spawnSpot.z), C.wallLight, C.cyan, 0.8)
-	local spawn = Instance.new("SpawnLocation")
-	spawn.Anchored = true
-	spawn.Size = Vector3.new(12, 0.5, 12)
-	spawn.CFrame = at(spawnSpot, 0.6) -- facing -z: towards the screen
-	spawn.Transparency = 1
-	spawn.CanCollide = false
-	spawn.Neutral = true
-	spawn.Duration = 0
-	spawn.Parent = lobby
-	-- The HQ logo on the back wall, behind spawn.
-	local logo = Shapes.roundedBox(shell, Vector3.new(60, 18, 1.4), 3, facing(W(0, DECK + 26, HD - 0.8), -Vector3.zAxis), { color = C.wallLight })
-	local logoFace = Shapes.box(shell, Vector3.new(56, 14, 0.4), facing(W(0, DECK + 26, HD - 1.6), -Vector3.zAxis), { color = C.navy })
-	local _ = logo
-	text(logoFace, "🏁 KART HQ 🏁", C.cyan, 10)
-
-	-- Stairs: wide steps down to the main floor, with glowing nosings.
-	local stairs = LobbyLayout.Stairs
-	local steps = stairs.steps
-	local run = (stairs.from.z - stairs.to.z) / steps
-	local rise = DECK / steps
-	for k = 1, steps - 1 do
-		local top = DECK - rise * k
-		local zFar = stairs.from.z - run * (k - 1)
-		local zNear = stairs.from.z - run * k
-		Shapes.box(shell, Vector3.new(stairs.width, top, zFar - zNear), CFrame.new(stairs.from.x, top / 2, (zFar + zNear) / 2), { color = if k % 2 == 0 then C.wall else C.panel, collide = true })
-		Shapes.box(shell, Vector3.new(stairs.width - 1, 0.12, 0.4), CFrame.new(stairs.from.x, top + 0.04, zNear + 0.3), { color = C.cyanSoft, material = NEON })
-	end
-	for _, sx in { -1, 1 } do
-		local x = stairs.from.x + sx * (stairs.width / 2 + 0.5)
-		railing(shell, Vector3.new(x, DECK, stairs.from.z), Vector3.new(x, 0, stairs.to.z + run))
-	end
-
-	-- Accessible ramps either side of the stairs (wedges: high end at +z).
-	for _, ramp in LobbyLayout.Ramps do
-		local length = ramp.from.z - ramp.to.z
-		local wedge = Instance.new("WedgePart")
-		wedge.Name = "Ramp"
-		wedge.Anchored = true
-		wedge.Size = Vector3.new(ramp.width, DECK, length)
-		wedge.CFrame = CFrame.new(ramp.from.x, DECK / 2, (ramp.from.z + ramp.to.z) / 2)
-		wedge.Color = C.panel
-		wedge.Material = Enum.Material.SmoothPlastic
-		wedge.TopSurface = Enum.SurfaceType.Smooth
-		wedge.Parent = shell
-		local slope = math.atan2(DECK, length)
-		for _, sx in { -1, 1 } do
-			local x = ramp.from.x + sx * (ramp.width / 2 + 0.5)
-			railing(shell, Vector3.new(x, DECK, ramp.from.z), Vector3.new(x, 0, ramp.to.z))
-			Shapes.box(shell, Vector3.new(0.5, 0.15, length / math.cos(slope)), CFrame.new(ramp.from.x + sx * (ramp.width / 2 - 1), DECK / 2 + 0.1, (ramp.from.z + ramp.to.z) / 2) * CFrame.Angles(-slope, 0, 0), { color = C.cyanSoft, material = NEON })
-		end
-	end
-
-	-- Walkways along both side walls, joined to the platform.
-	for _, walk in LobbyLayout.Walkways do
-		local x0, x1, z0, z1 = walk.min.x, walk.max.x, walk.min.z, walk.max.z
-		Shapes.box(shell, Vector3.new(x1 - x0, 2, z1 - z0), CFrame.new((x0 + x1) / 2, DECK - 1, (z0 + z1) / 2), { color = C.wall, collide = true, name = "Walkway" })
-		Shapes.box(shell, Vector3.new(x1 - x0, 0.1, z1 - z0), CFrame.new((x0 + x1) / 2, DECK + 0.05, (z0 + z1) / 2), { color = C.floor, collide = true })
-		local side = if x0 < O.x then -1 else 1
-		local innerX = if side < 0 then x1 else x0
-		Shapes.box(shell, Vector3.new(0.3, 0.5, z1 - z0), CFrame.new(innerX - side * 0.15, DECK - 1.2, (z0 + z1) / 2), { color = C.cyan, material = NEON })
-		-- Railing along the inner edge, curving round at the far end.
-		local r = 8
-		local points = { Vector3.new(innerX, DECK, z1) }
-		local corner = Vector3.new(innerX + side * r, DECK, z0 + r)
-		for _, p in arc(corner, r, if side < 0 then 0 else math.pi, if side < 0 then -math.pi / 2 else math.pi * 1.5, 6) do
-			table.insert(points, p)
-		end
-		table.insert(points, Vector3.new(if side < 0 then x0 else x1, DECK, z0))
-		railPath(shell, points)
-	end
-
-	-- Platform edge railing, with gaps for the stairs, ramps and walkways.
-	local edgeZ = pz0
-	local gaps = { { stairs.from.x - stairs.width / 2 - 1, stairs.from.x + stairs.width / 2 + 1 } }
-	for _, ramp in LobbyLayout.Ramps do
-		table.insert(gaps, { ramp.from.x - ramp.width / 2 - 1, ramp.from.x + ramp.width / 2 + 1 })
-	end
-	table.sort(gaps, function(a, b)
-		return a[1] < b[1]
-	end)
-	local walkInner = LobbyLayout.Walkways[1].max.x
-	local cursor = walkInner
-	for _, g in gaps do
-		railing(shell, Vector3.new(cursor, DECK, edgeZ), Vector3.new(g[1], DECK, edgeZ))
-		cursor = g[2]
-	end
-	railing(shell, Vector3.new(cursor, DECK, edgeZ), Vector3.new(LobbyLayout.Walkways[2].min.x, DECK, edgeZ))
-
-	-- Columns along the walkway edges (they hold the walkways up).
-	for _, side in { -1, 1 } do
-		for _, z in { -128, -100, -40, 22, 90 } do
-			local base = W(side * 99, 0, z)
-			column(shell, base, HEIGHT, Vector3.new(-side, 0, 0))
-			Shapes.box(shell, Vector3.new(6, 2, 4), CFrame.new(base + Vector3.new(side * 4, DECK - 1, 0)), { color = C.wallLight, collide = true })
-		end
-	end
-
-	-- Racing banners hanging between the columns.
-	local accents = { C.cyan, C.pink, C.gold }
-	for i, z in { -70, -10, 56 } do
-		for _, side in { -1, 1 } do
-			banner(shell, W(side * 82, HEIGHT - 4, z), Vector3.new(0, 0, 1), accents[i])
-		end
-	end
-
-	-----------------------------------------------------------------------
-	-- Central floor, celebration pedestals, vote pads
-	-----------------------------------------------------------------------
-	local cf0 = LobbyLayout.CentralFloor
-	local centerCf = CFrame.new(cf0.center.x, 0, cf0.center.z)
-	local d = cf0.radius * 2
-	rimDisc(shell, d, 0.1, centerCf, C.navy, C.cyan, 1.2)
-	rimDisc(shell, d - 16, 0.2, centerCf, C.wallLight, C.floorLine, 1)
-	rimDisc(shell, 52, 0.3, centerCf, C.navy, C.cyan, 1)
-	for i = 0, 11 do
-		local a = i / 12 * math.pi * 2
-		local mid = (cf0.radius - 8 + 26) / 2
-		Shapes.box(shell, Vector3.new(0.6, 0.08, cf0.radius - 8 - 26 - 2), centerCf * CFrame.Angles(0, a, 0) * CFrame.new(0, 0.22, mid), { color = C.cyanSoft, material = NEON })
-	end
-	-- Checker-flag inlay in the middle.
-	for i = 0, 15 do
-		local col, row = i % 4, math.floor(i / 4)
-		Shapes.box(shell, Vector3.new(3, 0.1, 3), centerCf * CFrame.new(-4.5 + col * 3, 0.33, -4.5 + row * 3), { color = if (col + row) % 2 == 0 then C.white else C.navy })
-	end
-
-	local stepHeights = { 6, 4, 3 }
-	local stepX = { 0, -12, 12 }
-	local pedestalCf = centerCf * CFrame.new(0, 0, 12)
-	local stepColors = { C.gold, C.silver, C.bronze }
-	for place = 1, 3 do
-		local h = stepHeights[place]
-		local base = pedestalCf * CFrame.new(stepX[place], 0, 0)
-		Shapes.pillar(shell, 10.6, 0.5, base * CFrame.new(0, h - 0.4, 0), { color = C.cyan, material = NEON })
-		Shapes.pillar(shell, 10, h, base * CFrame.new(0, h / 2, 0), { color = stepColors[place], collide = true })
-	end
-
-	for i, pad in LobbyLayout.VotePads do
-		local color = rgb(LobbyLayout.PadColors[i])
-		local padCf = at(pad)
-		rimDisc(shell, LobbyLayout.VotePadSize, 0.45, padCf, C.navy, color, 1.2)
-		Shapes.disc(shell, LobbyLayout.VotePadSize - 8, 0.1, padCf * CFrame.new(0, 0.5, 0), { color = color, material = NEON, name = `VotePad{i}` }).Transparency = 0.5
-		-- A sign behind each pad; clients draw the track name and votes on it.
-		local signCf = facing(Vector3.new(pad.x, 9, pad.z - 14), Vector3.zAxis)
-		Shapes.pillar(shell, 1.2, 9, CFrame.new(pad.x, 4.5, pad.z - 14.6), { color = C.steel })
-		Shapes.roundedBox(shell, Vector3.new(18, 7, 0.8), 1.2, signCf * CFrame.new(0, 0, 0.5), { color = color })
-		Shapes.box(shell, Vector3.new(16.6, 5.6, 0.3), signCf, { color = C.screen, name = `PadSign{i}` })
-	end
-
-	-----------------------------------------------------------------------
-	-- Side rooms and their doors
-	-----------------------------------------------------------------------
-	local roomFolders = {}
-	for _, room in LobbyLayout.Rooms do
-		local isHall = room.id == "practice"
-		local folder = roomShell(rooms, room, if isHall then 50 else 26, if isHall then 3 else 1)
-		roomFolders[room.id] = folder
-		local into = Vector3.new(-room.side, 0, 0) -- from the door into the chamber
-		local doorCf = facing(Vector3.new(room.door.x + room.side * WALL / 2, 0, room.door.z), into)
-		slidingDoor(folder, `Door_{room.id}`, doorCf, doorW, doorH, C.cyan)
-		-- Name sign hanging under the walkway edge, facing the chamber.
-		local walkEdge = O.x + room.side * (HW - 16)
-		local sign = Shapes.box(folder, Vector3.new(20, 3.6, 0.5), facing(Vector3.new(walkEdge + into.X * 0.4, DECK - 4, room.door.z), into), { color = C.navy, name = "Sign" })
-		text(sign, `{room.icon} {string.upper(room.name)}`, C.cyan, 16)
-		Shapes.box(folder, Vector3.new(20.6, 0.3, 0.6), facing(Vector3.new(walkEdge + into.X * 0.2, DECK - 6, room.door.z), into), { color = C.cyan, material = NEON })
-		-- Floor arrow from the central floor to the door.
-		local arrowCf = facing(Vector3.new(room.door.x - room.side * 14, 0.06, room.door.z), -into)
-		for k = 0, 2 do
-			Shapes.box(folder, Vector3.new(4, 0.08, 1), arrowCf * CFrame.new(0, 0, -k * 3) * CFrame.Angles(0, math.rad(35), 0) * CFrame.new(-1.6, 0, 0), { color = C.cyanSoft, material = NEON })
-			Shapes.box(folder, Vector3.new(4, 0.08, 1), arrowCf * CFrame.new(0, 0, -k * 3) * CFrame.Angles(0, math.rad(-35), 0) * CFrame.new(1.6, 0, 0), { color = C.cyanSoft, material = NEON })
-		end
-	end
-
-	-- Garage: kart lifts, tool wall, tyre stacks and the customise bench.
-	local garage = assert(LobbyLayout.roomById("garage"))
-	local gFolder = roomFolders.garage
-	local gb = garage.box
-	for _, z in { gb.min.z + 22, gb.max.z - 22 } do
-		local liftCf = CFrame.new(gb.min.x + 34, 0, z)
-		Shapes.box(gFolder, Vector3.new(16, 1, 10), liftCf * CFrame.new(0, 3, 0), { color = C.steel, collide = true })
-		for _, sx in { -1, 1 } do
-			Shapes.box(gFolder, Vector3.new(1.4, 12, 1.4), liftCf * CFrame.new(sx * 9, 6, 0), { color = C.gold })
-		end
-		Shapes.box(gFolder, Vector3.new(16.4, 0.3, 0.4), liftCf * CFrame.new(0, 3.6, -5.1), { color = C.cyan, material = NEON })
-	end
-	local toolWall = Shapes.box(gFolder, Vector3.new(0.4, 12, 40), CFrame.new(gb.min.x + 0.3, 9, (gb.min.z + gb.max.z) / 2), { color = C.wallLight })
-	local _ = toolWall
-	local toolColors = { C.pink, C.gold, C.cyan, C.silver }
-	for i = 0, 11 do
-		local tz = gb.min.z + 30 + (i % 6) * 5
-		local ty = 6 + math.floor(i / 6) * 5
-		Shapes.box(gFolder, Vector3.new(0.6, 3.5, 0.8), CFrame.new(gb.min.x + 0.8, ty, tz) * CFrame.Angles(math.rad((i % 3 - 1) * 20), 0, 0), { color = toolColors[i % 4 + 1] })
-	end
-	for _, spot in { { gb.max.x - 8, gb.min.z + 6 }, { gb.max.x - 8, gb.max.z - 6 }, { gb.min.x + 8, gb.max.z - 6 } } do
-		for k = 0, 2 do
-			Shapes.pillar(gFolder, 5, 1.6, CFrame.new(spot[1], 0.8 + k * 1.7, spot[2]), { color = Color3.fromRGB(30, 30, 36), collide = true })
-			Shapes.pillar(gFolder, 2.6, 1.7, CFrame.new(spot[1], 0.8 + k * 1.7, spot[2]), { color = C.steel })
-		end
-	end
-	local benchCf = CFrame.new(garage.door.x - 16, 0, garage.door.z + 14)
-	Shapes.roundedBox(gFolder, Vector3.new(12, 3.6, 5), 1, benchCf * CFrame.new(0, 1.8, 0), { color = C.wallLight, collide = true })
-	Shapes.box(gFolder, Vector3.new(12.2, 0.3, 5.2), benchCf * CFrame.new(0, 3.7, 0), { color = C.cyan, material = NEON })
-	local garageSpot = Shapes.box(gFolder, Vector3.new(3, 3, 3), benchCf * CFrame.new(0, 5, 0), { color = C.white, transparency = 1, name = "GaragePrompt" })
-	local garagePrompt = prompt(garageSpot, "Customize kart", "Garage")
-	local gSign = Shapes.box(gFolder, Vector3.new(30, 6, 0.4), facing(Vector3.new(gb.min.x + 0.7, 19, (gb.min.z + gb.max.z) / 2), Vector3.xAxis), { color = C.navy })
-	text(gSign, "🔧 GARAGE", C.gold, 14)
-
-	-- Viewing lounge: big screen and sofas.
-	local lounge = assert(LobbyLayout.roomById("lounge"))
-	local lFolder = roomFolders.lounge
-	local lb = lounge.box
-	local lz = (lb.min.z + lb.max.z) / 2
-	Shapes.box(lFolder, Vector3.new(1.4, 25, 46), CFrame.new(lb.min.x + 1, 13, lz), { color = C.wallLight })
-	Shapes.box(lFolder, Vector3.new(0.3, 23, 44), CFrame.new(lb.min.x + 1.8, 13, lz), { color = C.cyan, material = NEON })
-	Shapes.box(lFolder, Vector3.new(42, 21, 0.6), facing(Vector3.new(lb.min.x + 2.1, 13, lz), Vector3.xAxis), { color = C.screen, name = "LoungeScreen" })
-	for i, x in { lb.min.x + 36, lb.min.x + 60 } do
-		for _, sz in { -1, 1 } do
-			local sofaCf = CFrame.new(x, 0, lz + sz * 11) * CFrame.Angles(0, math.rad(90), 0)
-			Shapes.roundedBox(lFolder, Vector3.new(18, 2.4, 6), 1.2, sofaCf * CFrame.new(0, 1.2, 0), { color = if i == 1 then C.pink else C.wallLight, collide = true })
-			Shapes.roundedBox(lFolder, Vector3.new(18, 4, 1.6), 0.8, sofaCf * CFrame.new(0, 3.2, 2.6), { color = if i == 1 then C.pink else C.wallLight, collide = true })
-			for k = -1, 1 do
-				Shapes.ellipsoid(lFolder, Vector3.new(5, 1.4, 4.2), sofaCf * CFrame.new(k * 5.8, 2.8, -0.2), { color = C.white })
-			end
-		end
-	end
-	local watchSpot = Shapes.box(lFolder, Vector3.new(3, 3, 3), CFrame.new(lb.min.x + 48, 3, lz), { color = C.white, transparency = 1, name = "WatchPrompt" })
-	local spectatePrompt = prompt(watchSpot, "Watch race", "Viewing lounge")
-
-	-- Trophy room: podium for the last race's top three, trophy shelves.
-	local trophy = assert(LobbyLayout.roomById("trophy"))
-	local tFolder = roomFolders.trophy
-	local tb = trophy.box
-	local tz = (tb.min.z + tb.max.z) / 2
-	local podiumCf = CFrame.new(tb.min.x + 30, 0, tz) * CFrame.Angles(0, math.rad(-90), 0) -- faces the door (+x)
-	local podiumX = { 0, -11, 11 }
-	local podiumH = { 7, 4.5, 2.5 }
-	for place = 1, 3 do
-		local h = podiumH[place]
-		Shapes.roundedBox(tFolder, Vector3.new(10, h, 10), 1.5, podiumCf * CFrame.new(podiumX[place], h / 2, 0), { color = stepColors[place], collide = true })
-		Shapes.box(tFolder, Vector3.new(10.2, 0.3, 0.3), podiumCf * CFrame.new(podiumX[place], h - 0.3, -5.05), { color = C.cyan, material = NEON })
-	end
-	local podiumKarts = Instance.new("Folder")
-	podiumKarts.Name = "PodiumKarts"
-	podiumKarts.Parent = tFolder
-	local podiumSign = Shapes.box(tFolder, Vector3.new(32, 8, 0.4), facing(Vector3.new(tb.min.x + 0.7, 19, tz), Vector3.xAxis), { color = C.navy })
-	local podiumText = text(podiumSign, "🏆 LAST RACE\nNo races yet", C.gold, 12)
-	for _, sz in { -1, 1 } do
-		local shelfZ = if sz < 0 then tb.min.z + 2 else tb.max.z - 2
-		for _, y in { 6, 12 } do
-			Shapes.box(tFolder, Vector3.new(60, 0.8, 3), CFrame.new(tb.min.x + 50, y, shelfZ), { color = C.wallLight, collide = true })
-			Shapes.box(tFolder, Vector3.new(60, 0.2, 0.2), CFrame.new(tb.min.x + 50, y - 0.5, shelfZ - sz * 1.5), { color = C.cyan, material = NEON })
-			for k = 0, 4 do
-				local cup = CFrame.new(tb.min.x + 26 + k * 12, y + 0.4, shelfZ)
-				local color = ({ C.gold, C.silver, C.bronze })[(k + y) % 3 + 1]
-				Shapes.pillar(tFolder, 1.6, 0.8, cup * CFrame.new(0, 0.4, 0), { color = C.navy })
-				Shapes.pillar(tFolder, 0.5, 1.2, cup * CFrame.new(0, 1.4, 0), { color = color })
-				Shapes.ellipsoid(tFolder, Vector3.new(2, 2, 2), cup * CFrame.new(0, 2.8, 0), { color = color, reflectance = 0.2 })
-				Shapes.tube(tFolder, 0.9, 2.8, cup * CFrame.new(0, 3, 0), { color = color })
-			end
-		end
-	end
-
-	-- Party bays: three hangout booths with couches and coloured light.
-	local party = assert(LobbyLayout.roomById("party"))
-	local pFolder = roomFolders.party
-	local pb = party.box
-	local bayColors = { C.pink, C.cyan, C.gold }
-	local bayDepth = (pb.max.z - pb.min.z) / 3
-	for i = 1, 3 do
-		local bz = pb.min.z + bayDepth * (i - 0.5)
-		local bayCf = CFrame.new(pb.max.x - 20, 0, bz)
-		if i < 3 then
-			Shapes.box(pFolder, Vector3.new(26, 10, 1), CFrame.new(pb.max.x - 13, 5, pb.min.z + bayDepth * i), { color = C.wallLight, collide = true })
-		end
-		Shapes.roundedBox(pFolder, Vector3.new(5, 2.4, bayDepth - 6), 1.2, bayCf * CFrame.new(10, 1.2, 0), { color = bayColors[i], collide = true })
-		Shapes.roundedBox(pFolder, Vector3.new(1.6, 4, bayDepth - 6), 0.8, bayCf * CFrame.new(12.4, 3.2, 0), { color = bayColors[i], collide = true })
-		Shapes.pillar(pFolder, 7, 0.6, bayCf * CFrame.new(2, 3, 0), { color = C.white, collide = true })
-		Shapes.pillar(pFolder, 1.2, 3, bayCf * CFrame.new(2, 1.5, 0), { color = C.steel })
-		Shapes.box(pFolder, Vector3.new(0.3, 0.6, bayDepth - 4), CFrame.new(pb.max.x - 0.4, 9, bz), { color = bayColors[i], material = NEON })
-		local baySign = Shapes.box(pFolder, Vector3.new(10, 3, 0.4), facing(Vector3.new(pb.max.x - 0.8, 13, bz), -Vector3.xAxis), { color = C.navy })
-		text(baySign, `BAY {i}`, bayColors[i], 14)
-	end
-	local partySign = Shapes.box(pFolder, Vector3.new(28, 5, 0.4), facing(Vector3.new(pb.min.x + 30, 20, pb.min.z + 0.8), Vector3.zAxis), { color = C.navy })
-	text(partySign, "🎉 PARTY BAYS · hang out with your crew", C.pink, 12)
-
-	-- Practice circuit hall: track, drift circle, boost tunnel.
-	local area = LobbyLayout.PracticeArea
-	local hFolder = roomFolders.practice
-	Shapes.box(hFolder, Vector3.new(area.max.x - area.min.x, 0.2, area.max.z - area.min.z), CFrame.new((area.min.x + area.max.x) / 2, 0.05, (area.min.z + area.max.z) / 2), { color = C.navy, collide = true })
-	local _, practice = TrackBuilder.build(LobbyLayout.PracticeTrack.id, { folderName = "PracticeTrack", ground = false, scenery = false })
-	local drift = LobbyLayout.DriftCircle
-	rimDisc(hFolder, drift.radius * 2, 0.3, at(drift.center), C.wallLight, C.cyan, 1.5)
-	rimDisc(hFolder, 10, 0.4, at(drift.center), C.navy, C.pink, 1)
-	local driftSign = Shapes.box(hFolder, Vector3.new(16, 5, 0.5), facing(Vector3.new(drift.center.x, 7, drift.center.z), Vector3.zAxis), { color = C.navy })
-	text(driftSign, "DRIFT CIRCLE · hold drift and go round!", C.cyan, 12)
-	local padDistances = {}
-	for _, pad in Track.pads(practice) do
-		table.insert(padDistances, pad.distance)
-	end
-	if #padDistances > 0 then
-		local from, to = math.min(table.unpack(padDistances)) - 20, math.max(table.unpack(padDistances)) + 20
-		for dist = from, to, 8 do
-			local p, tan = Track.at(practice, dist)
-			-- Arches are built across the local x/y plane, so facing along the road spans it.
-			local archCf = CFrame.lookAt(Vector3.new(p.x, p.y, p.z), Vector3.new(p.x + tan.x, p.y, p.z + tan.z))
-			local ring = math.floor(dist / 8) % 2
-			Shapes.arch(hFolder, LobbyLayout.PracticeTrack.width + 6, 2, 3, archCf, { color = if ring == 0 then C.cyan else C.pink, material = NEON }, 12)
-		end
-	end
-	local ps = LobbyLayout.PracticeStart
-	local practiceSpot = Shapes.box(hFolder, Vector3.new(3, 3, 3), at(ps, 3), { color = C.white, transparency = 1, name = "PracticePrompt" })
-	local practicePrompt = prompt(practiceSpot, "Drive practice kart", "Practice circuit")
-	local pKiosk = Shapes.roundedBox(hFolder, Vector3.new(3, 5, 6), 1, at(ps, 2.5) * CFrame.new(4, 0, 0), { color = C.wallLight, collide = true })
-	local _ = pKiosk
-	local pSign = Shapes.box(hFolder, Vector3.new(14, 4, 0.4), facing(Vector3.new(ps.x + 5.8, 8, ps.z), -Vector3.xAxis), { color = C.navy })
-	text(pSign, "🏁 PRACTICE · press E to drive", C.cyan, 14)
-
-	-----------------------------------------------------------------------
-	-- Hidden golden tokens, ambience
-	-----------------------------------------------------------------------
-	local tokens = {}
-	local tokenFolder = Instance.new("Folder")
-	tokenFolder.Name = "Tokens"
-	tokenFolder.Parent = lobby
-	for i, spot in LobbyLayout.Collectibles do
-		local token = Shapes.tube(tokenFolder, 4, 0.8, at(spot, 1.5), { color = C.gold, material = NEON, name = `Token{i}` })
-		token:SetAttribute("Spin", 2)
-		token:SetAttribute("TokenId", i)
-		table.insert(tokens, token)
-	end
-
-	if LobbyBuilder.AmbientSoundId ~= "" then
-		local hum = Shapes.box(lobby, Vector3.new(1, 1, 1), at(O, 30), { color = C.white, transparency = 1, name = "Ambience" })
-		local sound = Instance.new("Sound")
-		sound.SoundId = LobbyBuilder.AmbientSoundId
-		sound.Looped = true
-		sound.Volume = 0.25
-		sound.RollOffMaxDistance = 400
-		sound.Parent = hum
-		sound:Play()
-	end
-
-	lobby.Parent = Workspace
-
-	-----------------------------------------------------------------------
-	-- Handles
-	-----------------------------------------------------------------------
+ local old = Workspace:FindFirstChild("Lobby")
+ if old then old:Destroy() end
+ local practice = Workspace:FindFirstChild("PracticeTrack")
+ if practice then practice:Destroy() end
+ local lobby = Instance.new("Folder")
+ lobby.Name = "Lobby"
+ local shell = Instance.new("Folder")
+ shell.Name = "Chamber"
+ shell.Parent = lobby
+ Shapes.box(shell, Vector3.new(HW * 2 + 8, 2, HD * 2 + 8), CFrame.new(W(0, -1, 0)), { color = C.floor, material = Enum.Material.Slate, collide = true, name = "Floor" })
+ Shapes.box(shell, Vector3.new(HW * 2 + 8, 2, HD * 2 + 8), CFrame.new(W(0, HEIGHT + 1, 0)), { color = C.wall, collide = true })
+ for _, side in { -1, 1 } do
+  local openings = {}
+  for _, room in LobbyLayout.Rooms do
+   if room.side == side then table.insert(openings, { at = room.door.z - (O.z - HD), width = LobbyLayout.DoorWidth + 2, bottom = 0, top = LobbyLayout.DoorHeight + 1 }) end
+  end
+  wall(shell, W(side * HW, 0, -HD), W(side * HW, 0, HD), HEIGHT, WALL, openings)
+ end
+ wall(shell, W(-HW, 0, HD), W(HW, 0, HD), HEIGHT, WALL, {})
+ wall(shell, W(-HW, 0, -HD), W(HW, 0, -HD), HEIGHT, WALL, {
+  { at = HW - 54, width = 18, bottom = 0, top = 15 }, { at = HW + 54, width = 18, bottom = 0, top = 15 },
+ })
+ -- Recessed white fixtures, matte trims, and restrained local illumination.
+ for _, x in { -38, 0, 38 } do
+  for _, z in { -40, 35 } do
+   Shapes.roundedBox(shell, Vector3.new(18, 0.5, 5), 0.7, CFrame.new(W(x, HEIGHT - 0.3, z)), { color = C.lamp })
+   local lamp = Shapes.box(shell, Vector3.new(1, 1, 1), CFrame.new(W(x, HEIGHT - 3, z)), { color = C.white, transparency = 1 })
+   light(lamp, "PointLight", 65, 0.7, Color3.fromRGB(255, 242, 222))
+  end
+ end
+ for _, side in { -1, 1 } do
+  for _, z in { -60, -5, 42 } do
+   Shapes.capsule(shell, 4, HEIGHT, CFrame.new(W(side * (HW - 2), HEIGHT / 2, z)), { color = C.wallLight })
+   wallPanel(shell, facing(W(side * (HW - 0.5), 26, z + 14), Vector3.new(-side, 0, 0)), 18, 16)
+  end
+ end
+ local sc = LobbyLayout.Screen
+ local screenCf = facing(Vector3.new(sc.center.x, sc.center.y, sc.center.z + 2.6), Vector3.zAxis)
+ Shapes.roundedBox(shell, Vector3.new(sc.width + 4, sc.height + 4, 1), 1.3, screenCf * CFrame.new(0, 0, 0.8), { color = C.steel })
+ Shapes.box(shell, Vector3.new(sc.width, sc.height, 0.4), screenCf, { color = C.screen, name = "VoteScreen" })
+ Shapes.box(shell, Vector3.new(66, 6, 0.4), facing(Vector3.new(0, 39, O.z - 75), Vector3.zAxis), { color = C.screen, name = "StatusBoard" })
+ local departure = Instance.new("Folder")
+ departure.Name = "Departure"
+ departure.Parent = lobby
+ for i, spot in LobbyLayout.DepartureDoors do
+  local door = slidingDoor(departure, `DepartureDoor{i}`, facing(Vector3.new(spot.x, 0, spot.z), Vector3.zAxis), 16, 14, C.cyan)
+  door:SetAttribute("Departure", true)
+  door:SetAttribute("Lit", false)
+ end
+ -- Raised spawn deck, broad stairs and accessible side ramps.
+ Shapes.box(shell, Vector3.new(HW * 2, DECK, 30), CFrame.new(W(0, DECK / 2, 63)), { color = C.floor, collide = true })
+ for i = 1, 4 do
+  Shapes.box(shell, Vector3.new(28, i * 2, 5), CFrame.new(W(0, i, 25.5 + i * 5)), { color = C.wallLight, collide = true })
+ end
+ for _, ramp in LobbyLayout.Ramps do
+  for i = 1, 24 do
+   local h = i * DECK / 24
+   Shapes.box(shell, Vector3.new(12, h, 2.1), CFrame.new(ramp.from.x, h / 2, O.z + i * 2 - 1), { color = C.floor, collide = true })
+  end
+ end
+ for _, side in { -1, 1 } do
+  Shapes.box(shell, Vector3.new(10, 1, 114), CFrame.new(W(side * 63, DECK - 0.5, -9)), { color = C.floor, collide = true })
+  railing(shell, W(side * 57, DECK, -66), W(side * 57, DECK, 48))
+ end
+ local spawn = Instance.new("SpawnLocation")
+ spawn.Name = "LobbySpawn"
+ spawn.Size = Vector3.new(12, 1, 10)
+ spawn.CFrame = at(LobbyLayout.Spawn, 0.5)
+ spawn.Anchored = true
+ spawn.Neutral = true
+ spawn.Transparency = 1
+ spawn.Duration = 0
+ spawn.Parent = shell
+ local logo = Shapes.box(shell, Vector3.new(40, 7, 0.4), facing(W(0, 22, HD - 2.5), -Vector3.zAxis), { color = C.navy })
+ text(logo, "KART HQ · RACE CLUB", C.white, 14)
+ local pedestalCf = CFrame.new(W(0, 0, 7))
+ local stepX, stepHeights = { 0, -10, 10 }, { 2.4, 1.6, 0.8 }
+ for i = 1, 3 do
+  rimDisc(shell, 8, stepHeights[i], pedestalCf * CFrame.new(stepX[i], 0, 0), C.wallLight, C.gold, 0.3)
+ end
+ for i, spot in LobbyLayout.VotePads do
+  rimDisc(shell, 16, 0.25, at(spot), C.wallLight, rgb(LobbyLayout.PadColors[i]), 0.5)
+  local sign = Shapes.box(shell, Vector3.new(18, 5, 0.3), facing(Vector3.new(spot.x, 5.5, spot.z - 9), Vector3.zAxis), { color = C.screen, name = `PadSign{i}` })
+ end
+ local displays = Instance.new("Folder")
+ displays.Name = "KartDisplays"
+ displays.Parent = lobby
+ local displayYaw = { math.pi, math.pi, math.pi, math.pi / 2 }
+ for _, spot in LobbyLayout.KartDisplays do rimDisc(shell, 12, 0.5, at(spot), C.navy, C.steel, 0.4) end
+ local rooms = Instance.new("Folder")
+ rooms.Name = "Rooms"
+ rooms.Parent = lobby
+ local roomFolders = {}
+ for _, room in LobbyLayout.Rooms do
+  local folder = roomShell(rooms, room, 24, 1)
+  roomFolders[room.id] = folder
+  local cf = facing(Vector3.new(room.door.x, 0, room.door.z), Vector3.new(-room.side, 0, 0))
+  slidingDoor(folder, `Door_{room.id}`, cf, LobbyLayout.DoorWidth, LobbyLayout.DoorHeight, C.cyan)
+  local sign = Shapes.box(folder, Vector3.new(18, 4, 0.4), cf * CFrame.new(0, 17, -2.5), { color = C.navy })
+  text(sign, string.upper(room.name), C.white, 14)
+ end
+ local garage = LobbyLayout.roomById("garage")
+ local g = roomFolders.garage
+ local benchCf = CFrame.new(garage.box.min.x + 22, 0, garage.door.z)
+ Shapes.roundedBox(g, Vector3.new(12, 4, 5), 0.6, benchCf * CFrame.new(0, 2, 0), { color = C.wallLight, collide = true })
+ local garageSpot = Shapes.box(g, Vector3.one, benchCf * CFrame.new(0, 6, 0), { color = C.white, transparency = 1 })
+ local garagePrompt = prompt(garageSpot, "Customize kart", "Garage")
+ for i = 1, 5 do
+  Shapes.pillar(g, 4, 1.5, CFrame.new(garage.box.min.x + 8, i * 1.5, garage.box.min.z + 9), { color = Color3.fromRGB(28, 28, 32), material = Enum.Material.SmoothPlastic })
+ end
+ local trophy = LobbyLayout.roomById("trophy")
+ local podiumCf = CFrame.new(trophy.box.min.x + 22, 0, trophy.door.z) * CFrame.Angles(0, -math.pi / 2, 0)
+ local podiumX, podiumH = { 0, -11, 11 }, { 3, 2, 1 }
+ local podiumKarts = Instance.new("Folder")
+ podiumKarts.Name = "PodiumKarts"
+ podiumKarts.Parent = roomFolders.trophy
+ for i = 1, 3 do rimDisc(roomFolders.trophy, 10, podiumH[i], podiumCf * CFrame.new(podiumX[i], 0, 0), C.wallLight, C.gold, 0.4) end
+ local podiumSign = Shapes.box(roomFolders.trophy, Vector3.new(32, 5, 0.4), podiumCf * CFrame.new(0, 15, 9), { color = C.navy })
+ local podiumText = text(podiumSign, "LAST RACE · NO RACES YET", C.white, 14)
+ local party = LobbyLayout.roomById("party")
+ for i = 1, 3 do
+  local cf = CFrame.new(party.box.min.x + 20, 0, party.box.min.z + i * 14)
+  Shapes.roundedBox(roomFolders.party, Vector3.new(16, 2, 5), 0.7, cf * CFrame.new(0, 1, 0), { color = C.wallLight, collide = true })
+  Shapes.roundedBox(roomFolders.party, Vector3.new(16, 3, 1), 0.4, cf * CFrame.new(0, 3, 2), { color = C.wallLight, collide = true })
+ end
+ local tokens = {}
+ local tokenFolder = Instance.new("Folder")
+ tokenFolder.Name = "Tokens"
+ tokenFolder.Parent = lobby
+ for i, spot in LobbyLayout.Collectibles do
+  local token = Shapes.tube(tokenFolder, 2.5, 0.6, at(spot, 1.5), { color = C.gold, material = Enum.Material.Metal, name = `Token{i}` })
+  token:SetAttribute("Spin", 2)
+  token:SetAttribute("TokenId", i)
+  table.insert(tokens, token)
+ end
+ lobby.Parent = Workspace
 	local function setKartDisplay(slot: number, name: string?, kartId: string?, look: any?)
 		local existing = displays:FindFirstChild(`Slot{slot}`)
 		if existing then
@@ -962,8 +537,6 @@ function LobbyBuilder.build(): Handles
 		setDeparture = setDeparture,
 		celebrate = celebrate,
 		garagePrompt = garagePrompt,
-		spectatePrompt = spectatePrompt,
-		practicePrompt = practicePrompt,
 		collectibles = tokens,
 	}
 end

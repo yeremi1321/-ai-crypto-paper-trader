@@ -131,13 +131,13 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		local segLen = length + extra
 		local segDistance = track.cum[i] + length / 2
 
-		local road = part(folder, "Road", Vector3.new(def.width, 1, segLen), cf * CFrame.new(0, -0.5, 0), roadColor, Enum.Material.SmoothPlastic)
+		local road = part(folder, "Road", Vector3.new(def.width, 1, segLen), cf * CFrame.new(0, -0.5, 0), roadColor, if def.theme == "fortress" then Enum.Material.Slate else Enum.Material.SmoothPlastic)
 		road:SetAttribute("Surface", "road")
 		for _, side in (if walled then { -1, 1 } else {}) :: { number } do
 			local shoulder = part(folder, "Shoulder", Vector3.new(sw, 1, segLen), cf * CFrame.new(side * (half + sw / 2), -0.52, 0), shoulderColor, Enum.Material.SmoothPlastic)
 			shoulder:SetAttribute("Surface", "offroad")
 			if not wallOpen(side, segDistance, segLen) then
-				part(folder, "Wall", Vector3.new(1, 4, segLen), cf * CFrame.new(side * (half + sw + 0.5), 1.5, 0), wallColor, if def.theme == "neon" then Enum.Material.Neon else Enum.Material.SmoothPlastic)
+				part(folder, "Wall", Vector3.new(1, 4, segLen), cf * CFrame.new(side * (half + sw + 0.5), 1.5, 0), wallColor, if def.theme == "neon" then Enum.Material.Neon elseif def.theme == "fortress" then Enum.Material.Cobblestone else Enum.Material.SmoothPlastic)
 			end
 		end
 
@@ -336,6 +336,10 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		for _, prop in Scenery.place(track) do
 			Props.build(prop, theme, scenery)
 		end
+	end
+
+	if def.theme == "fortress" then
+		require(script.Parent.FortressBuilder).build(track, folder)
 	end
 
 	folder.Parent = Workspace

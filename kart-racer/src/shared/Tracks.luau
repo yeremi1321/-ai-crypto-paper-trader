@@ -132,9 +132,17 @@ Tracks.Themes = {
 		ambient = { 128, 136, 165 },
 		brightness = 2,
 		atmosphere = { density = 0.12, haze = 0, glare = 0, color = { 200, 215, 240 }, decay = { 120, 140, 190 } },
-		bloom = 0.7,
+		bloom = 0.04,
 		tint = { 245, 250, 255 },
-		saturation = 0.18,
+		saturation = 0.02,
+	},
+	fortress = {
+		road = { 78, 72, 69 }, shoulder = { 52, 46, 45 }, ground = { 32, 29, 33 },
+		wall = { 95, 87, 80 }, accent = { 225, 135, 65 },
+		curb = { { 148, 82, 48 }, { 200, 180, 148 } }, line = { 228, 207, 170 },
+		clock = 0.5, ambient = { 100, 91, 100 }, brightness = 1.8,
+		atmosphere = { density = 0.24, haze = 0.7, glare = 0, color = { 135, 112, 119 }, decay = { 65, 53, 72 } },
+		bloom = 0.18, tint = { 255, 238, 219 }, saturation = 0.05,
 	},
 	neon = {
 		road = { 30, 30, 42 },
@@ -156,6 +164,19 @@ Tracks.Themes = {
 }
 
 Tracks.List = {
+	{
+		id = "emberfort", name = "Emberstone Citadel", theme = "fortress",
+		difficulty = "Medium", feature = "Lava canals, fortress gates and an elevated stone bridge", icon = "🔥",
+		width = 56, scale = 1.2, laps = 3,
+		controls = {
+			v(0, 12, 0), v(0, 12, -230), v(70, 12, -370), v(230, 18, -450),
+			v(400, 28, -370), v(470, 36, -210), v(420, 36, -50), v(510, 28, 110),
+			v(430, 18, 280), v(270, 12, 340), v(110, 12, 270), v(0, 12, 150),
+		},
+		boostPads = { { t = 0.15, offset = 0 }, { t = 0.56, offset = 0 }, { t = 0.83, offset = 0.3 } },
+		itemRows = { 0.1, 0.42, 0.74 }, ramps = { { t = 0.65, offset = 0, width = 18 } },
+	},
+
 	{
 		id = "sunny",
 		name = "Sunny Loop",
@@ -385,7 +406,7 @@ Tracks.List = {
 } :: { Track.TrackDef }
 
 -- Tracks that can come up in map voting.
-Tracks.VotePool = { "toyroom", "kitchen", "backyard", "sunny", "canyon", "neon" }
+Tracks.VotePool = { "emberfort", "toyroom", "kitchen", "backyard", "sunny", "canyon", "neon" }
 
 -- A Grand Prix is every track in order (kept for a future cup mode).
 Tracks.Cup = { name = "Starter Cup", tracks = { "sunny", "canyon", "neon" } }

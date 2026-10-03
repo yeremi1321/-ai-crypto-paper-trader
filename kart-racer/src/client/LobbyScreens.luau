@@ -125,9 +125,6 @@ local function render()
 			else
 				featuredTrack(display, featured or Tracks.VotePool[1], false)
 			end
-		elseif key == "lounge" then
-			standings(display, if s.spectate then `LIVE · {s.spectate.trackName}` else "RACE VIEWING LOUNGE",
-				s.spectate and s.spectate.rows or {}, 8)
 		elseif key == "status" then
 			display.title = label(display.root, "KART HQ", 0.02, 0.06, 0.96, 0.45, gold)
 			display.detail = label(display.root, "", 0.02, 0.56, 0.96, 0.36)
@@ -164,10 +161,8 @@ end
 local function discover()
 	local found = Workspace:FindFirstChild("Lobby")
 	local chamber = found and found:FindFirstChild("Chamber")
-	local rooms = found and found:FindFirstChild("Rooms")
-	local lounge = rooms and rooms:FindFirstChild("lounge")
 	-- Wait for complete replication without blocking the Round event handler.
-	if not chamber or not chamber:FindFirstChild("PadSign4") or not lounge or not lounge:FindFirstChild("LoungeScreen") then return end
+	if not chamber or not chamber:FindFirstChild("PadSign4")  then return end
 	if found == lobby then return end
 	for _, display in surfaces do
 		clear(display)
@@ -178,7 +173,7 @@ local function discover()
 	surface("vote", chamber:FindFirstChild("VoteScreen"))
 	surface("status", chamber:FindFirstChild("StatusBoard"))
 	for i = 1, 4 do surface(`pad{i}`, chamber:FindFirstChild(`PadSign{i}`)) end
-	surface("lounge", lounge:FindFirstChild("LoungeScreen"))
+
 	for _, model in found:GetDescendants() do
 		if model:IsA("Model") and model:GetAttribute("SlidingDoor") then
 			local parts, glows = {}, {}
@@ -275,7 +270,7 @@ function LobbyScreens.step(dt: number)
 		local travel = (door.model:GetAttribute("Width") / 2 - 0.8) * door.amount
 		for _, item in door.parts do item.part.CFrame = item.closed * CFrame.new(item.side * travel, 0, 0) end
 		for _, glow in door.glows do
-			glow.part.Color = if departure and lit then gold:Lerp(Color3.fromRGB(255, 245, 180), (math.sin(t * 5) + 1) * 0.25) else glow.color
+			glow.part.Color = if departure and lit then gold:Lerp(Color3.fromRGB(230, 205, 160), (math.sin(t * 2) + 1) * 0.12) else glow.color
 		end
 	end
 end

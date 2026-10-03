@@ -435,6 +435,51 @@ KartBodies.List = {
 	},
 } :: { Body }
 
+-- Original low racing bodies: open cockpits, broad slicks and twin exhausts.
+local racingBodies = {
+ { id = "embergt", name = "Ember GT", nose = "Ellipsoid", wing = 2.1 },
+ { id = "arrowsprint", name = "Arrow Sprint", nose = "Wedge", wing = 2.8 },
+ { id = "rallycomet", name = "Rally Comet", nose = "Ellipsoid", wing = 1.8 },
+}
+for index, design in racingBodies do
+ local parts: { BodyPart } = {
+  { size = { 5.4, 0.45, 7.8 }, offset = { 0, 0, 0 }, role = "dark", shape = "Ellipsoid" },
+  { size = { 3.4, 1, 4.2 }, offset = { 0, 0.45, -2 }, role = "main", shape = design.nose },
+  { size = { 5.5, 0.25, 0.8 }, offset = { 0, 0.05, -4.2 }, role = "accent", shape = "Ellipsoid" },
+  { size = { 2, 0.15, 3 }, offset = { 0, 1, -2 }, role = "accent", shape = "Ellipsoid" },
+  { size = { 4.8, 0.25, 1.1 }, offset = { 0, design.wing, 3.4 }, role = "accent", shape = "Ellipsoid" },
+ }
+ for _, side in { -1, 1 } do
+  table.insert(parts, { size = { 1.1, 1.2, 4.8 }, offset = { side * 2.1, 0.65, 0.2 }, role = "main", shape = "Ellipsoid" })
+  table.insert(parts, { size = { 0.25, design.wing, 0.5 }, offset = { side * 1.8, design.wing / 2, 3.4 }, role = "dark" })
+  table.insert(parts, { size = { 2.4, 1.1, 1.1 }, offset = { side * 1.4, 1.2, 2.9 }, role = "chrome", shape = "Cylinder", rotation = { 0, 90, 0 } })
+  table.insert(parts, { size = { 0.12, 0.75, 0.75 }, offset = { side * 1.4, 1.2, 4.12 }, role = "dark", shape = "Cylinder", rotation = { 0, 90, 0 } })
+  table.insert(parts, { size = { 0.8, 0.45, 0.15 }, offset = { side * 1.7, 0.6, -3.8 }, role = "chrome", shape = "Ellipsoid" })
+ end
+ for k = -2, 2 do table.insert(parts, { size = { 0.1, 0.45, 0.18 }, offset = { k * 0.24, 0.52, -4.05 }, role = "chrome" }) end
+ if design.id == "rallycomet" then
+  for _, side in { -1, 1 } do
+   table.insert(parts, { size = { 0.25, 2.8, 0.25 }, offset = { side * 1.4, 1.8, 1.8 }, role = "chrome" })
+  end
+  table.insert(parts, { size = { 3, 0.25, 0.25 }, offset = { 0, 3.2, 1.8 }, role = "chrome" })
+ end
+ table.insert(KartBodies.List, index, {
+  id = design.id, name = design.name, icon = "🏎️", price = 0,
+  wheelRadius = 0.95, wheelWidth = 1.4,
+  wheels = { { -2.8, -2.6 }, { 2.8, -2.6 }, { -2.8, 2.6 }, { 2.8, 2.6 } },
+  seat = { 0, 0.55, 0.6 }, exhaust = { 0, 1.1, 4.1 }, parts = parts,
+ })
+end
+-- Give the familiar starter body the same visible exhaust detail.
+local starter = nil
+for _, body in KartBodies.List do if body.id == "classic" then starter = body end end
+if starter then
+ for _, side in { -1, 1 } do
+  table.insert(starter.parts, { size = { 2.4, 1, 1 }, offset = { side * 1.35, 1.1, 2.8 }, role = "chrome", shape = "Cylinder", rotation = { 0, 90, 0 } })
+  table.insert(starter.parts, { size = { 0.12, 0.7, 0.7 }, offset = { side * 1.35, 1.1, 4.02 }, role = "dark", shape = "Cylinder", rotation = { 0, 90, 0 } })
+ end
+end
+
 export type Look = { body: string, main: number, accent: number }
 
 function KartBodies.get(id: string?): Body

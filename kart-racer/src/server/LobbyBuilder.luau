@@ -364,10 +364,14 @@ function LobbyBuilder.build(): Handles
   Shapes.box(shell, Vector3.new(28, i * 2, 5), CFrame.new(W(0, i, 25.5 + i * 5)), { color = C.wallLight, collide = true })
  end
  for _, ramp in LobbyLayout.Ramps do
-  for i = 1, 24 do
-   local h = i * DECK / 24
-   Shapes.box(shell, Vector3.new(12, h, 2.1), CFrame.new(ramp.from.x, h / 2, O.z + i * 2 - 1), { color = C.floor, collide = true })
-  end
+  local wedge = Instance.new("WedgePart")
+  wedge.Name = "AccessibleRamp"
+  wedge.Anchored = true
+  wedge.Size = Vector3.new(12, DECK, 48)
+  wedge.CFrame = CFrame.new(ramp.from.x, DECK / 2, O.z + 24)
+  wedge.Color = C.floor
+  wedge.Material = Enum.Material.Slate
+  wedge.Parent = shell
  end
  for _, side in { -1, 1 } do
   Shapes.box(shell, Vector3.new(10, 1, 114), CFrame.new(W(side * 63, DECK - 0.5, -9)), { color = C.floor, collide = true })
@@ -409,6 +413,19 @@ function LobbyBuilder.build(): Handles
   slidingDoor(folder, `Door_{room.id}`, cf, LobbyLayout.DoorWidth, LobbyLayout.DoorHeight, C.cyan)
   local sign = Shapes.box(folder, Vector3.new(18, 4, 0.4), cf * CFrame.new(0, 17, -2.5), { color = C.navy })
   text(sign, string.upper(room.name), C.white, 14)
+ end
+ -- Subtle floor inlays, wall pilasters and ceiling beams give the hall structure.
+ for _, x in { -26, 26 } do
+  Shapes.box(shell, Vector3.new(0.3, 0.04, 90), CFrame.new(W(x, 0.04, -5)), { color = C.steel, name = "FloorInlay" })
+ end
+ for z = -55, 55, 22 do
+  Shapes.roundedBox(shell, Vector3.new(HW * 2 - 5, 2, 3), 0.7, CFrame.new(W(0, HEIGHT - 2, z)), { color = C.wallLight })
+ end
+ for _, side in { -1, 1 } do
+  for _, z in { -58, 15 } do
+   Shapes.roundedBox(shell, Vector3.new(4, 3, 4), 0.5, CFrame.new(W(side * 52, 1.5, z)), { color = C.wallLight, collide = true })
+   Shapes.ellipsoid(shell, Vector3.new(5, 7, 5), CFrame.new(W(side * 52, 6, z)), { color = Color3.fromRGB(77, 112, 84) })
+  end
  end
  local garage = LobbyLayout.roomById("garage")
  local g = roomFolders.garage

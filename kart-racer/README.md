@@ -186,3 +186,13 @@ uploads. These will look much better as custom meshes or sounds:
   track previews generated from track data; uploaded artwork is optional.
 
 Keep everything original: no Nintendo names, characters, items or tracks.
+
+## Road surface repair
+
+RoadRibbon builds shared-edge triangles from the track centerline; old
+rectangular Road parts retain metadata but are invisible and noncolliding.
+The native wedge ribbon owns road collision. Segment roll is disabled so
+geometry and checkpoint heights agree. Lobby ramps are continuous wedges
+instead of stair-like stacks. Studio must verify seam traversal, hills,
+raycasts, camera clearance, and appearance; Lune does not render or simulate
+Roblox physics.

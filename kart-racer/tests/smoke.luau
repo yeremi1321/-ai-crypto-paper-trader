@@ -120,6 +120,11 @@ check("TrackBuilder builds every track", function()
 			end
 			assert(towers == 8 and canals == 80, "fortress gates and lava channels")
 		end
+		local surface = folder:FindFirstChild("RoadSurface")
+		assert(surface and #surface:GetChildren() == #track.points * 4, "continuous road ribbon")
+		for _, wedge in surface:GetChildren() do
+			assert(wedge.CanCollide and wedge:GetAttribute("Surface") == "road", "ribbon collision")
+		end
 		local total = #folder:GetDescendants()
 		local scenery = folder:FindFirstChild("Scenery")
 		assert(scenery and #scenery:GetChildren() > 300, `{def.id}: not enough scenery`)

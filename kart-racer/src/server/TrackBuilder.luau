@@ -126,13 +126,18 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		-- Lengthen segments on the outside of bends so the edges have no gaps.
 		local turn = math.abs(signedTurn[i])
 		local extra = 1 + (half + sw + 1) * turn
-		local roll = if walled then bank(i) else 0
+		local roll = 0 -- ribbon and checkpoint road height share the same surface
 		local cf = CFrame.lookAt((a + b) / 2, b) * CFrame.Angles(0, 0, roll)
 		local segLen = length + extra
 		local segDistance = track.cum[i] + length / 2
 
 		local road = part(folder, "Road", Vector3.new(def.width, 1, segLen), cf * CFrame.new(0, -0.5, 0), roadColor, if def.theme == "fortress" then Enum.Material.Slate else Enum.Material.SmoothPlastic)
 		road:SetAttribute("Surface", "road")
+		-- Retain segment metadata but use the continuous ribbon for collision.
+		road.Transparency = 1
+		road.CanCollide = false
+		road.CanQuery = false
+		road.CanTouch = false
 		for _, side in (if walled then { -1, 1 } else {}) :: { number } do
 			local shoulder = part(folder, "Shoulder", Vector3.new(sw, 1, segLen), cf * CFrame.new(side * (half + sw / 2), -0.52, 0), shoulderColor, Enum.Material.SmoothPlastic)
 			shoulder:SetAttribute("Surface", "offroad")
@@ -159,6 +164,12 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		minX, maxX = math.min(minX, a.X), math.max(maxX, a.X)
 		minZ, maxZ = math.min(minZ, a.Z), math.max(maxZ, a.Z)
 	end
+
+	local ribbon = Instance.new("Folder")
+	ribbon.Name = "RoadSurface"
+	ribbon.Parent = folder
+	require(script.Parent.RoadRibbon).build(track, ribbon, roadColor,
+		if def.theme == "fortress" then Enum.Material.Slate else Enum.Material.Asphalt)
 
 	-- Pillars under raised road, skipped where they would land on the road below.
 	for i = 1, n, 6 do

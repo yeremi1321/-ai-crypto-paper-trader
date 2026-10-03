@@ -59,6 +59,20 @@ function FortressBuilder.build(track, parent)
   -- Clear road below; hanging crest is high above drivers and camera.
   Shapes.ellipsoid(folder, Vector3.new(9, 11, 2), cf * CFrame.new(0, 48, -6), { color = trim, material = Enum.Material.Metal, name = "CitadelCrest" })
  end
+ -- Continuous outer curtain wall connects the gates into a fortress instead
+ -- of leaving towers as isolated props. The inner lane stays open to lava.
+ for i = 0, 63 do
+  local a = Track.spot(track, i / 64 * track.length, -(half + 70))
+  local b = Track.spot(track, ((i + 1) % 64) / 64 * track.length, -(half + 70))
+  local av, bv = Vector3.new(a.x, a.y, a.z), Vector3.new(b.x, b.y, b.z)
+  local cf = CFrame.lookAt((av + bv) / 2, bv)
+  local length = (bv - av).Magnitude
+  box(folder, Vector3.new(5, 24, length + 0.5), cf * CFrame.new(0, 12, 0), stone, "CurtainWall")
+  box(folder, Vector3.new(6, 1.5, length + 0.5), cf * CFrame.new(0, 24, 0), trim, "WallCap", Enum.Material.Slate)
+  for k = -1, 1 do
+   box(folder, Vector3.new(5, 3, 4), cf * CFrame.new(0, 26, k * length / 3), stone, "WallCrenel")
+  end
+ end
  -- Distant basalt spires give depth without filling the road with obstacles.
  for i = 0, 23 do
   local p, tan = Track.at(track, i / 24 * track.length)

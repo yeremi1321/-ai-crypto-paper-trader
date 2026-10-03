@@ -4031,6 +4031,20 @@ function FortressBuilder.build(track, parent)
   -- Clear road below; hanging crest is high above drivers and camera.
   Shapes.ellipsoid(folder, Vector3.new(9, 11, 2), cf * CFrame.new(0, 48, -6), { color = trim, material = Enum.Material.Metal, name = "CitadelCrest" })
  end
+ -- Continuous outer curtain wall connects the gates into a fortress instead
+ -- of leaving towers as isolated props. The inner lane stays open to lava.
+ for i = 0, 63 do
+  local a = Track.spot(track, i / 64 * track.length, -(half + 70))
+  local b = Track.spot(track, ((i + 1) % 64) / 64 * track.length, -(half + 70))
+  local av, bv = Vector3.new(a.x, a.y, a.z), Vector3.new(b.x, b.y, b.z)
+  local cf = CFrame.lookAt((av + bv) / 2, bv)
+  local length = (bv - av).Magnitude
+  box(folder, Vector3.new(5, 24, length + 0.5), cf * CFrame.new(0, 12, 0), stone, "CurtainWall")
+  box(folder, Vector3.new(6, 1.5, length + 0.5), cf * CFrame.new(0, 24, 0), trim, "WallCap", Enum.Material.Slate)
+  for k = -1, 1 do
+   box(folder, Vector3.new(5, 3, 4), cf * CFrame.new(0, 26, k * length / 3), stone, "WallCrenel")
+  end
+ end
  -- Distant basalt spires give depth without filling the road with obstacles.
  for i = 0, 23 do
   local p, tan = Track.at(track, i / 24 * track.length)
@@ -5336,10 +5350,14 @@ function LobbyBuilder.build(): Handles
   Shapes.box(shell, Vector3.new(28, i * 2, 5), CFrame.new(W(0, i, 25.5 + i * 5)), { color = C.wallLight, collide = true })
  end
  for _, ramp in LobbyLayout.Ramps do
-  for i = 1, 24 do
-   local h = i * DECK / 24
-   Shapes.box(shell, Vector3.new(12, h, 2.1), CFrame.new(ramp.from.x, h / 2, O.z + i * 2 - 1), { color = C.floor, collide = true })
-  end
+  local wedge = Instance.new("WedgePart")
+  wedge.Name = "AccessibleRamp"
+  wedge.Anchored = true
+  wedge.Size = Vector3.new(12, DECK, 48)
+  wedge.CFrame = CFrame.new(ramp.from.x, DECK / 2, O.z + 24)
+  wedge.Color = C.floor
+  wedge.Material = Enum.Material.Slate
+  wedge.Parent = shell
  end
  for _, side in { -1, 1 } do
   Shapes.box(shell, Vector3.new(10, 1, 114), CFrame.new(W(side * 63, DECK - 0.5, -9)), { color = C.floor, collide = true })
@@ -5381,6 +5399,19 @@ function LobbyBuilder.build(): Handles
   slidingDoor(folder, `Door_{room.id}`, cf, LobbyLayout.DoorWidth, LobbyLayout.DoorHeight, C.cyan)
   local sign = Shapes.box(folder, Vector3.new(18, 4, 0.4), cf * CFrame.new(0, 17, -2.5), { color = C.navy })
   text(sign, string.upper(room.name), C.white, 14)
+ end
+ -- Subtle floor inlays, wall pilasters and ceiling beams give the hall structure.
+ for _, x in { -26, 26 } do
+  Shapes.box(shell, Vector3.new(0.3, 0.04, 90), CFrame.new(W(x, 0.04, -5)), { color = C.steel, name = "FloorInlay" })
+ end
+ for z = -55, 55, 22 do
+  Shapes.roundedBox(shell, Vector3.new(HW * 2 - 5, 2, 3), 0.7, CFrame.new(W(0, HEIGHT - 2, z)), { color = C.wallLight })
+ end
+ for _, side in { -1, 1 } do
+  for _, z in { -58, 15 } do
+   Shapes.roundedBox(shell, Vector3.new(4, 3, 4), 0.5, CFrame.new(W(side * 52, 1.5, z)), { color = C.wallLight, collide = true })
+   Shapes.ellipsoid(shell, Vector3.new(5, 7, 5), CFrame.new(W(side * 52, 6, z)), { color = Color3.fromRGB(77, 112, 84) })
+  end
  end
  local garage = LobbyLayout.roomById("garage")
  local g = roomFolders.garage
@@ -6771,6 +6802,66 @@ return RaceService
       </Item>
       <Item class="ModuleScript" referent="34">
         <Properties>
+          <string name="Name">RoadRibbon</string>
+          <string name="Source"><![CDATA[-- Shared road edges form a continuous ribbon rather than overlapping slabs.
+-- Two wedges per triangle provide native, upload-free geometry and collision.
+local RoadRibbon = {}
+local function triangle(parent, a, b, c, color, material)
+ local ab, ac, bc = b - a, c - a, c - b
+ local lengths = { ab:Dot(ab), ac:Dot(ac), bc:Dot(bc) }
+ if lengths[1] > lengths[2] and lengths[1] > lengths[3] then
+  a, c = c, a
+ elseif lengths[2] > lengths[3] then
+  a, b = b, a
+ end
+ ab, ac, bc = b - a, c - a, c - b
+ local cross = ac:Cross(ab)
+ if cross.Magnitude < 0.001 then return end
+ local right = cross.Unit
+ local back = bc.Unit
+ local up = back:Cross(right).Unit
+ local height = math.abs(ab:Dot(up))
+ for _, spec in {
+  { center = (a + b) / 2, right = right, back = back, length = math.abs(ab:Dot(back)) },
+  { center = (a + c) / 2, right = -right, back = -back, length = math.abs(ac:Dot(back)) },
+ } do
+  if spec.length < 0.001 then continue end
+  local wedge = Instance.new("WedgePart")
+  wedge.Name = "RoadRibbon"
+  wedge.Anchored = true
+  wedge.Size = Vector3.new(0.16, height, spec.length)
+  wedge.CFrame = CFrame.fromMatrix(spec.center, spec.right, up, spec.back)
+  wedge.Color = color
+  wedge.Material = material
+  wedge.TopSurface = Enum.SurfaceType.Smooth
+  wedge.BottomSurface = Enum.SurfaceType.Smooth
+  wedge:SetAttribute("Surface", "road")
+  wedge.Parent = parent
+ end
+end
+function RoadRibbon.build(track, parent, color, material)
+ local points = track.points
+ local left, right = {}, {}
+ local half = track.def.width / 2
+ for i, p in points do
+  local prev, nextPoint = points[(i - 2) % #points + 1], points[i % #points + 1]
+  local tangent = Vector3.new(nextPoint.x - prev.x, 0, nextPoint.z - prev.z).Unit
+  local side = Vector3.new(-tangent.Z, 0, tangent.X)
+  local center = Vector3.new(p.x, p.y - 0.12, p.z)
+  left[i], right[i] = center - side * half, center + side * half
+ end
+ for i = 1, #points do
+  local j = i % #points + 1
+  triangle(parent, left[i], right[i], left[j], color, material)
+  triangle(parent, right[i], right[j], left[j], color, material)
+ end
+end
+return RoadRibbon
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="35">
+        <Properties>
           <string name="Name">RoundService</string>
           <string name="Source"><![CDATA[-- The round loop:
 --   lobby → (someone readies up) → ready countdown → map voting (20s)
@@ -7404,7 +7495,7 @@ return RoundService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="35">
+      <Item class="ModuleScript" referent="36">
         <Properties>
           <string name="Name">TrackBuilder</string>
           <string name="Source"><![CDATA[-- Builds a track's parts from its centerline: road, curbs and lane lines,
@@ -7535,13 +7626,18 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		-- Lengthen segments on the outside of bends so the edges have no gaps.
 		local turn = math.abs(signedTurn[i])
 		local extra = 1 + (half + sw + 1) * turn
-		local roll = if walled then bank(i) else 0
+		local roll = 0 -- ribbon and checkpoint road height share the same surface
 		local cf = CFrame.lookAt((a + b) / 2, b) * CFrame.Angles(0, 0, roll)
 		local segLen = length + extra
 		local segDistance = track.cum[i] + length / 2
 
 		local road = part(folder, "Road", Vector3.new(def.width, 1, segLen), cf * CFrame.new(0, -0.5, 0), roadColor, if def.theme == "fortress" then Enum.Material.Slate else Enum.Material.SmoothPlastic)
 		road:SetAttribute("Surface", "road")
+		-- Retain segment metadata but use the continuous ribbon for collision.
+		road.Transparency = 1
+		road.CanCollide = false
+		road.CanQuery = false
+		road.CanTouch = false
 		for _, side in (if walled then { -1, 1 } else {}) :: { number } do
 			local shoulder = part(folder, "Shoulder", Vector3.new(sw, 1, segLen), cf * CFrame.new(side * (half + sw / 2), -0.52, 0), shoulderColor, Enum.Material.SmoothPlastic)
 			shoulder:SetAttribute("Surface", "offroad")
@@ -7568,6 +7664,12 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		minX, maxX = math.min(minX, a.X), math.max(maxX, a.X)
 		minZ, maxZ = math.min(minZ, a.Z), math.max(maxZ, a.Z)
 	end
+
+	local ribbon = Instance.new("Folder")
+	ribbon.Name = "RoadSurface"
+	ribbon.Parent = folder
+	require(script.Parent.RoadRibbon).build(track, ribbon, roadColor,
+		if def.theme == "fortress" then Enum.Material.Slate else Enum.Material.Asphalt)
 
 	-- Pillars under raised road, skipped where they would land on the road below.
 	for i = 1, n, 6 do
@@ -7761,7 +7863,7 @@ return TrackBuilder
       </Item>
     </Item>
   </Item>
-  <Item class="StarterPlayer" referent="36">
+  <Item class="StarterPlayer" referent="37">
     <Properties>
       <string name="Name">StarterPlayer</string>
       <float name="CameraMaxZoomDistance">80</float>
@@ -7769,15 +7871,15 @@ return TrackBuilder
       <float name="HealthDisplayDistance">0</float>
       <float name="NameDisplayDistance">45</float>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="37">
+    <Item class="StarterPlayerScripts" referent="38">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="Folder" referent="38">
+      <Item class="Folder" referent="39">
         <Properties>
           <string name="Name">Client</string>
         </Properties>
-        <Item class="ModuleScript" referent="39">
+        <Item class="ModuleScript" referent="40">
           <Properties>
             <string name="Name">GarageUI</string>
             <string name="Source"><![CDATA[-- The garage: a live 3D preview of your kart plus tabs for kart type (stats),
@@ -8130,7 +8232,7 @@ return GarageUI
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="40">
+        <Item class="ModuleScript" referent="41">
           <Properties>
             <string name="Name">Hud</string>
             <string name="Source"><![CDATA[-- In-race screens: place, lap, item slot with roulette, standings, countdown,
@@ -8359,7 +8461,7 @@ return Hud
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="41">
+        <Item class="ModuleScript" referent="42">
           <Properties>
             <string name="Name">KartController</string>
             <string name="Source"><![CDATA[-- Drives your kart: reads input, runs KartPhysics on this client (you own the
@@ -8815,7 +8917,7 @@ return KartController
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="42">
+        <Item class="ModuleScript" referent="43">
           <Properties>
             <string name="Name">KartVisuals</string>
             <string name="Source"><![CDATA[-- Makes every nearby kart look alive, on this client only: the body leans into
@@ -8976,7 +9078,7 @@ return KartVisuals
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="43">
+        <Item class="ModuleScript" referent="44">
           <Properties>
             <string name="Name">LobbyScreens</string>
             <string name="Source"><![CDATA[-- Local wall displays and proximity doors for Kart HQ. SurfaceGuis belong
@@ -9260,7 +9362,7 @@ return LobbyScreens
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="44">
+        <Item class="ModuleScript" referent="45">
           <Properties>
             <string name="Name">LobbyUI</string>
             <string name="Source"><![CDATA[-- Lobby screens: the status bar (phase + countdown, always visible), coins,
@@ -9717,7 +9819,7 @@ return LobbyUI
 ]]></string>
           </Properties>
         </Item>
-        <Item class="LocalScript" referent="45">
+        <Item class="LocalScript" referent="46">
           <Properties>
             <string name="Name">Main</string>
             <string name="Source"><![CDATA[-- Client entry point: wires remotes to the lobby screens, garage, race HUD,
@@ -9999,7 +10101,7 @@ end)
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="46">
+        <Item class="ModuleScript" referent="47">
           <Properties>
             <string name="Name">Spectate</string>
             <string name="Source"><![CDATA[-- Spectator camera: follows a racer's kart from behind. Used by lobby players
@@ -10101,7 +10203,7 @@ return Spectate
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="47">
+        <Item class="ModuleScript" referent="48">
           <Properties>
             <string name="Name">TrackAnimator</string>
             <string name="Source"><![CDATA[-- Animates the current track on this client: crossers (toy robot, toy train,
@@ -10216,7 +10318,7 @@ return TrackAnimator
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="48">
+        <Item class="ModuleScript" referent="49">
           <Properties>
             <string name="Name">TrackPreview</string>
             <string name="Source"><![CDATA[-- Animated mini-map of a track, drawn from the same track data the race
@@ -10360,7 +10462,7 @@ return TrackPreview
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="49">
+        <Item class="ModuleScript" referent="50">
           <Properties>
             <string name="Name">UI</string>
             <string name="Source"><![CDATA[-- Shared look for every screen: rounded panels, chunky buttons sized for
@@ -10621,7 +10723,7 @@ return UI
       </Item>
     </Item>
   </Item>
-  <Item class="Workspace" referent="50">
+  <Item class="Workspace" referent="51">
     <Properties>
       <string name="Name">Workspace</string>
       <float name="Gravity">150</float>

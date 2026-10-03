@@ -126,3 +126,13 @@ All six stages of the first playable build are written:
 Lives in `kart-racer/` on branch `claude/open-world-racing-design-4glnag` of
 the `-ai-crypto-paper-trader` repo. The rest of that repo is an unrelated
 crypto bot and the separate `open-world-racer/` game, so don't touch them.
+
+## Road surface repair
+
+RoadRibbon builds shared-edge triangles from the track centerline; old
+rectangular Road parts retain metadata but are invisible and noncolliding.
+The native wedge ribbon owns road collision. Segment roll is disabled so
+geometry and checkpoint heights agree. Lobby ramps are continuous wedges
+instead of stair-like stacks. Studio must verify seam traversal, hills,
+raycasts, camera clearance, and appearance; Lune does not render or simulate
+Roblox physics.

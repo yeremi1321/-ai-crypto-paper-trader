@@ -1,9 +1,11 @@
 -- The round loop:
 --   lobby → (someone readies up) → ready countdown → map voting (20s)
---   → race → results → back to the lobby
+--   → winner announced (departure doors light up) → race → results → lobby
 --
--- Players explore the Kart Carnival freely. Only players who ready up race
--- and vote; everyone else can keep practising or watch. Late joiners spawn in
+-- Players explore Kart HQ freely. Only players who ready up race and vote
+-- (the READY button, or stepping onto a vote pad); everyone else can keep
+-- practising or watch. A Random vote counts for one of the offered tracks,
+-- picked at random once, and every screen shows which one. Late joiners spawn in
 -- the lobby and can ready up for the next race. Empty grid slots are filled
 -- with CPU drivers, so one player can race alone.
 
@@ -37,12 +39,14 @@ local TICK = 0.25
 
 type Choice = { ready: boolean }
 
-local phase: "lobby" | "voting" | "racing" | "results" = "lobby"
+local phase: "lobby" | "voting" | "announce" | "racing" | "results" = "lobby"
 local deadline: number? = nil
 local choices: { [Player]: Choice } = {}
 local options: { string } = {}
 local votes: { [number]: string } = {} -- UserId -> track id
 local voters: { [Player]: boolean } = {}
+local randomVoters: { [number]: boolean } = {} -- UserIds whose vote came from Random
+local onPad: { [Player]: number } = {} -- the vote pad each player stood on last tick
 local lastTrack: string? = nil
 local lastResults: { any } = {}
 local winner: string? = nil
@@ -111,11 +115,16 @@ local function roundState()
 	for _, id in options do
 		table.insert(opts, optionInfo(id))
 	end
+	local randomIds = {}
+	for userId in randomVoters do
+		table.insert(randomIds, userId)
+	end
 	return {
 		phase = phase,
 		deadline = deadline,
 		players = players,
 		options = opts,
+		randomVoters = randomIds,
 		winner = winner,
 		spectate = RaceService.spectatorInfo(),
 		lastResults = lastResults,
@@ -135,51 +144,9 @@ local function countReady(): (number, number)
 	return total, ready
 end
 
-local function secondsLeft(): number
-	return if deadline then math.max(0, math.ceil(deadline - now())) else 0
-end
-
-local function updateSigns()
-	local _, ready = countReady()
-	if phase == "lobby" then
-		if deadline then
-			handles.setStatus("GET READY!", `{ready} racer{if ready == 1 then "" else "s"} ready\nVoting opens in {secondsLeft()}s`)
-		else
-			handles.setStatus("KART CARNIVAL", "Step under the READY arch\n(or press READY) to join the next race")
-		end
-	elseif phase == "voting" then
-		handles.setStatus("VOTE FOR A TRACK!", `Stand on a pad or use the menu\n{secondsLeft()}s left`)
-	elseif phase == "racing" then
-		local info = RaceService.spectatorInfo()
-		handles.setStatus("RACE IN PROGRESS", if info then `{info.trackName}\nReady up to join the next one` else "")
-	elseif phase == "results" then
-		handles.setStatus("RESULTS", `Back to the lobby in {secondsLeft()}s`)
-	end
-
-	for i = 1, #LobbyLayout.VotePads do
-		local id = options[i]
-		handles.setVoteOption(i, if id and (phase == "voting" or phase == "racing") then optionInfo(id) else nil)
-	end
-
-	local info = RaceService.spectatorInfo()
-	if info then
-		local lines = {}
-		for place, row in info.rows do
-			if place > 8 then
-				break
-			end
-			table.insert(lines, `{place}. {row.name}{if row.finished then " ✓" else ""}`)
-		end
-		handles.setSpectator(`LIVE: {info.trackName}`, table.concat(lines, "\n"))
-	else
-		handles.setSpectator("LIVE RACE", "No race running.\nReady up to start one!")
-	end
-end
-
 local function broadcast()
 	dirty = false
 	Net.Round:FireAllClients(roundState())
-	updateSigns()
 end
 
 local function refreshDisplays()
@@ -207,7 +174,9 @@ local function toLobby()
 	options = {}
 	votes = {}
 	voters = {}
+	randomVoters = {}
 	winner = nil
+	handles.setDeparture(false)
 	dirty = true
 end
 
@@ -216,6 +185,7 @@ local function startVoting()
 	deadline = now() + Voting.VoteSeconds
 	votes = {}
 	voters = {}
+	randomVoters = {}
 	options = Voting.pickOptions(Tracks.VotePool, Voting.OptionCount, math.random, lastTrack)
 	for player, c in choices do
 		if c.ready and player.Parent then
@@ -336,10 +306,20 @@ local function onRaceEnded(rows: { any }, trackId: string)
 	dirty = true
 end
 
-local function startRace()
+-- Voting is over: reveal the winner on every screen and light the
+-- departure doors for a few seconds before the race loads.
+local function finishVoting()
 	-- Highest vote wins; ties are broken at random.
-	local trackId = Voting.winner(options, votes, math.random)
-	winner = trackId
+	winner = Voting.winner(options, votes, math.random)
+	phase = "announce"
+	deadline = now() + Voting.AnnounceSeconds
+	handles.setDeparture(true)
+	dirty = true
+end
+
+local function startRace()
+	local trackId = winner :: string
+	handles.setDeparture(false)
 	local entrants = {}
 	for player in voters do
 		if player.Parent then
@@ -389,8 +369,66 @@ local function startRace()
 	end
 end
 
+local function setReady(player: Player, isReady: boolean)
+	if RaceService.isRacing(player) then
+		return
+	end
+	local c = choiceOf(player)
+	if c.ready == isReady then
+		return
+	end
+	c.ready = isReady
+	if phase == "voting" then
+		if isReady then
+			voters[player] = true
+		else
+			voters[player] = nil
+			votes[player.UserId] = nil
+			randomVoters[player.UserId] = nil
+		end
+	end
+	Net.Notify:FireClient(player, if isReady then "You're in the next race!" else "You left the next race.")
+	dirty = true
+end
+
+-- A vote for an offered track, or Voting.Random. Random rolls once and keeps
+-- its pick until you choose something else, so standing on the pad is stable.
+local function castVote(player: Player, choice: string)
+	if phase ~= "voting" or not voters[player] then
+		return
+	end
+	local userId = player.UserId
+	if choice == Voting.Random then
+		if randomVoters[userId] and votes[userId] then
+			return
+		end
+		local pick = Voting.randomPick(options, math.random)
+		votes[userId] = pick
+		randomVoters[userId] = true
+		Net.Notify:FireClient(player, `🎲 Random picked {Tracks.get(pick).name} for you`)
+		dirty = true
+	elseif table.find(options, choice) and (votes[userId] ~= choice or randomVoters[userId]) then
+		votes[userId] = choice
+		randomVoters[userId] = nil
+		dirty = true
+	end
+end
+
 local function step()
 	local t = now()
+
+	-- Stepping onto a vote pad joins the next race, so voting is one walk
+	-- down the stairs from spawn.
+	for _, player in Players:GetPlayers() do
+		local root = rootOf(player)
+		local pad = if root then LobbyLayout.padAt(root.Position.X, root.Position.Z) else nil
+		local was = onPad[player]
+		onPad[player] = pad
+		if pad and pad ~= was and (phase == "lobby" or phase == "voting") and not choiceOf(player).ready then
+			setReady(player, true)
+		end
+	end
+
 	local _, ready = countReady()
 
 	if phase == "lobby" then
@@ -416,21 +454,23 @@ local function step()
 			end
 		end
 	elseif phase == "voting" then
-		-- Standing on a vote pad counts as a vote.
+		-- Standing on a vote pad counts as a vote (pad 4 is Random).
 		for player in voters do
-			local root = rootOf(player)
-			if root then
-				local pad = LobbyLayout.padAt(root.Position.X, root.Position.Z)
-				if pad and options[pad] and votes[player.UserId] ~= options[pad] then
-					votes[player.UserId] = options[pad]
-					dirty = true
-				end
+			local pad = onPad[player]
+			if pad == LobbyLayout.RandomPad then
+				castVote(player, Voting.Random)
+			elseif pad and options[pad] then
+				castVote(player, options[pad])
 			end
 		end
 		local anyVoter = next(voters) ~= nil
 		if not anyVoter then
 			toLobby()
 		elseif t >= (deadline :: number) then
+			finishVoting()
+		end
+	elseif phase == "announce" then
+		if t >= (deadline :: number) then
 			startRace()
 		end
 	elseif phase == "racing" then
@@ -469,27 +509,6 @@ end
 ---------------------------------------------------------------------------
 -- Remotes and setup
 ---------------------------------------------------------------------------
-local function setReady(player: Player, isReady: boolean)
-	if RaceService.isRacing(player) then
-		return
-	end
-	local c = choiceOf(player)
-	if c.ready == isReady then
-		return
-	end
-	c.ready = isReady
-	if phase == "voting" then
-		if isReady then
-			voters[player] = true
-		else
-			voters[player] = nil
-			votes[player.UserId] = nil
-		end
-	end
-	Net.Notify:FireClient(player, if isReady then "You're in the next race!" else "You left the next race.")
-	dirty = true
-end
-
 function RoundService.start()
 	handles = LobbyBuilder.build()
 	PracticeService.init()
@@ -510,6 +529,8 @@ function RoundService.start()
 		choices[player] = nil
 		voters[player] = nil
 		votes[player.UserId] = nil
+		randomVoters[player.UserId] = nil
+		onPad[player] = nil
 		dirty = true
 		task.defer(refreshDisplays)
 	end)
@@ -517,13 +538,9 @@ function RoundService.start()
 	Net.Ready.OnServerEvent:Connect(function(player, isReady)
 		setReady(player, isReady == true)
 	end)
-	handles.readyPrompt.Triggered:Connect(function(player)
-		setReady(player, not choiceOf(player).ready)
-	end)
-	Net.Vote.OnServerEvent:Connect(function(player, trackId)
-		if phase == "voting" and voters[player] and table.find(options, trackId) then
-			votes[player.UserId] = trackId
-			dirty = true
+	Net.Vote.OnServerEvent:Connect(function(player, choice)
+		if type(choice) == "string" then
+			castVote(player, choice)
 		end
 	end)
 	-- Garage: everything is checked here; the client only asks.
@@ -610,7 +627,7 @@ function RoundService.start()
 			if not ok then
 				warn("[RoundService]", err)
 			end
-			-- Rebroadcast on changes, and once a second so countdowns tick on signs.
+			-- Rebroadcast on changes, and once a second as a safety net.
 			local second = math.floor(now())
 			if dirty or second ~= lastSecond then
 				lastSecond = second

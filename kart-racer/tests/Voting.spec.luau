@@ -54,3 +54,21 @@ T.test("voters per option", function()
 	T.eq(#voters, 2)
 	T.eq(voters[1], 10)
 end)
+
+T.test("random votes go to one of the offered tracks, and every one can come up", function()
+	local options = { "a", "b", "c" }
+	local seen = {}
+	for _, r in { 0, 0.34, 0.67, 0.999999, 1 } do
+		local pick = Voting.randomPick(options, seq({ r }))
+		T.ok(table.find(options, pick) ~= nil, `picked {pick}`)
+		seen[pick] = true
+	end
+	T.ok(seen.a and seen.b and seen.c)
+	T.ok(not table.find(options, Voting.Random), "Random is not a track")
+end)
+
+T.test("a random vote counts like a normal vote for its track", function()
+	local votes = { [1] = "a", [2] = Voting.randomPick({ "a", "b", "c" }, seq({ 0.5 })), [3] = "b" }
+	T.eq(votes[2], "b")
+	T.eq(Voting.winner({ "a", "b", "c" }, votes, math.random), "b")
+end)

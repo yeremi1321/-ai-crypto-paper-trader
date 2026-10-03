@@ -27,6 +27,7 @@ local canSave = true
 local tab = "kart"
 
 local panel = UI.panel(UI.Screen, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 860, 0, 560), Visible = false })
+UI.fit(panel, Vector2.new(860, 560))
 UI.label(panel, { Position = UDim2.new(0, 20, 0, 10), Size = UDim2.new(0, 260, 0, 44), Text = "🔧 GARAGE", TextColor3 = UI.Colors.yellow, TextXAlignment = Enum.TextXAlignment.Left })
 local coinsLabel = UI.label(panel, { Position = UDim2.new(0, 280, 0, 14), Size = UDim2.new(0, 200, 0, 36), Text = "🪙 0", TextXAlignment = Enum.TextXAlignment.Left })
 local saveNote = UI.label(panel, { Position = UDim2.new(0, 480, 0, 18), Size = UDim2.new(0, 280, 0, 28), Text = "", TextColor3 = UI.Colors.red })

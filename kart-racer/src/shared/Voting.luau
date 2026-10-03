@@ -6,6 +6,11 @@ local Voting = {}
 
 Voting.OptionCount = 3
 Voting.VoteSeconds = 20
+Voting.AnnounceSeconds = 5 -- winner reveal before the race loads
+
+-- The fourth choice. It isn't a track: picking it casts your vote for one of
+-- the offered tracks, chosen at random, and the cards show which one.
+Voting.Random = "random"
 
 -- Picks `count` different tracks from `pool` (a list of ids), avoiding the
 -- track that was just raced when there are enough others. `random` returns 0..1.
@@ -59,6 +64,12 @@ function Voting.winner(options: { string }, votes: { [any]: string }, random: ()
 		end
 	end
 	return tied[math.floor(random() * #tied) + 1]
+end
+
+-- The track a Random vote goes to: any of the offered options.
+function Voting.randomPick(options: { string }, random: () -> number): string
+	assert(#options > 0, "no options to vote on")
+	return options[math.min(#options, math.floor(random() * #options) + 1)]
 end
 
 -- Who voted for what, for the voter icons on each option.

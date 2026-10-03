@@ -322,7 +322,7 @@ function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.
 		wedge:SetAttribute("Surface", "ramp")
 		wedge.Parent = folder
 		for k = -1, 1, 2 do
-			local stripe = part(folder, "RampStripe", Vector3.new(1.2, 0.2, 18.6), cf * CFrame.new(k * (ramp.width / 2 - 1.5), 2.6, 0) * CFrame.Angles(math.atan2(5, 18), 0, 0), Color3.new(1, 1, 1), Enum.Material.Neon)
+			local stripe = part(folder, "RampStripe", Vector3.new(1.2, 0.2, 18.6), cf * CFrame.new(k * (ramp.width / 2 - 1.5), 2.6, 0) * CFrame.Angles(-math.atan2(5, 18), 0, 0), Color3.new(1, 1, 1), Enum.Material.Neon)
 			stripe.CanCollide = false
 			stripe.CanQuery = false
 		end

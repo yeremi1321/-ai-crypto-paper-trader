@@ -153,6 +153,7 @@ end
 -- Results
 ---------------------------------------------------------------------------
 local results = UI.panel(UI.Screen, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 520, 0, 580), Visible = false })
+UI.fit(results, Vector2.new(520, 580))
 local resultsTitle = UI.label(results, { Position = UDim2.new(0, 20, 0, 12), Size = UDim2.new(1, -40, 0, 40), TextColor3 = UI.Colors.yellow, Text = "" })
 local resultsBody = UI.label(results, {
 	Position = UDim2.new(0, 24, 0, 62),

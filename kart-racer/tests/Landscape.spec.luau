@@ -60,15 +60,15 @@ T.test("land never rises onto the road, and no water sits on it except under bri
 			local frames = RoadGeometry.frames(track)
 			local half = def.width / 2
 			for i, f in frames do
-				for _, lateral in { -half - Track.ShoulderWidth, -half, 0, half, half + Track.ShoulderWidth } do
+				local verge = half + Track.ShoulderWidth + 3 -- RoadSurface.VergeExtra
+				for _, lateral in { -verge, -half, 0, half, verge } do
 					local e = RoadGeometry.edge(f, lateral)
 					local h = Landscape.groundAt(plan, e.x, e.z)
 					if h then
-						-- Under the road surface the ground stays below it; out on the
-						-- shoulder the terrain is the verge, roughly flush.
-						local onRoad = math.abs(lateral) <= half
-						local limit = if onRoad then f.y - 0.5 else f.y + 0.5
-						T.ok(h <= limit, `{def.id} point {i}: ground {h} is above the road {f.y}`)
+						-- Terrain stays well under the 4-stud road and verge slabs, so
+						-- its 4-stud voxels can't round up through them (grass poking
+						-- through the road was the bug this guards).
+						T.ok(h <= f.y - 2.5, `{def.id} point {i}: ground {h} is less than 2.5 under the road {f.y}`)
 					else
 						T.ok(not plan.bankAt[i], `{def.id} point {i}: water on a banked road`)
 					end

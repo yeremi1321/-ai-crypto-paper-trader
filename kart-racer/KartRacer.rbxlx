@@ -3755,7 +3755,8 @@ Tracks.Themes = {
 	sunny = {
 		realistic = true,
 		road = { 62, 63, 66 },
-		shoulder = { 96, 84, 62 },
+		shoulder = { 82, 124, 52 }, -- grass verge, matches the terrain
+		shoulderMaterial = "Grass",
 		ground = { 86, 128, 58 },
 		wall = { 205, 204, 198 },
 		accent = { 255, 196, 40 },
@@ -3774,7 +3775,7 @@ Tracks.Themes = {
 		terrain = {
 			ground = "Grass",
 			bank = "Grass",
-			drop = 0.7,
+			drop = 3.5, -- terrain stays 3.5 studs under the road, hidden inside its 4-stud slab
 			hills = { count = 16, min = 50, max = 140, material = "LeafyGrass" },
 			lakes = { count = 2, min = 55, max = 120, shore = "Sand", liquid = "Water" },
 			mountains = { count = 10, min = 170, max = 280, ring = 520, material = "Rock", cap = "Snow" },
@@ -3786,7 +3787,8 @@ Tracks.Themes = {
 	canyon = {
 		realistic = true,
 		road = { 74, 68, 64 },
-		shoulder = { 176, 140, 98 },
+		shoulder = { 206, 164, 112 }, -- sand verge
+		shoulderMaterial = "Sand",
 		ground = { 190, 146, 98 },
 		wall = { 200, 190, 174 },
 		accent = { 255, 140, 60 },
@@ -3805,7 +3807,7 @@ Tracks.Themes = {
 		terrain = {
 			ground = "Sand",
 			bank = "Sandstone",
-			drop = 0.7,
+			drop = 3.5, -- terrain stays 3.5 studs under the road, hidden inside its 4-stud slab
 			hills = { count = 10, min = 60, max = 150, material = "Sand" },
 			mesas = { count = 14, min = 50, max = 120, minHeight = 60, maxHeight = 150, material = "Sandstone", band = "Rock", ring = 420 },
 			lakes = { count = 1, min = 45, max = 70, shore = "Grass", liquid = "Water" },
@@ -3853,7 +3855,8 @@ Tracks.Themes = {
 	-- Backyard Bug Rally: dirt paths through giant grass on a sunny day.
 	backyard = {
 		road = { 150, 110, 75 }, -- packed dirt
-		shoulder = { 110, 170, 70 },
+		shoulder = { 92, 150, 58 },
+		shoulderMaterial = "Grass",
 		ground = { 100, 165, 65 },
 		wall = { 160, 120, 80 },
 		accent = { 255, 210, 60 },
@@ -3872,7 +3875,7 @@ Tracks.Themes = {
 		terrain = {
 			ground = "Grass",
 			bank = "Grass",
-			drop = 0.7,
+			drop = 3.5, -- terrain stays 3.5 studs under the road, hidden inside its 4-stud slab
 			hills = { count = 6, min = 40, max = 90, material = "LeafyGrass" },
 			lakes = { count = 1, min = 40, max = 60, shore = "Mud", liquid = "Water" },
 			colors = { Grass = { 92, 150, 58 }, LeafyGrass = { 80, 136, 50 }, Mud = { 96, 76, 54 } },
@@ -3920,7 +3923,8 @@ Tracks.Themes = {
 	alpine = {
 		realistic = true,
 		road = { 58, 59, 62 },
-		shoulder = { 90, 84, 70 },
+		shoulder = { 74, 112, 52 }, -- grass verge
+		shoulderMaterial = "Grass",
 		ground = { 70, 110, 60 },
 		wall = { 205, 205, 200 },
 		accent = { 70, 170, 255 },
@@ -3938,7 +3942,7 @@ Tracks.Themes = {
 		terrain = {
 			ground = "Grass",
 			bank = "Grass",
-			drop = 0.7,
+			drop = 3.5, -- terrain stays 3.5 studs under the road, hidden inside its 4-stud slab
 			hills = { count = 18, min = 50, max = 150, material = "LeafyGrass" },
 			lakes = { count = 1, min = 60, max = 100, shore = "Ground", liquid = "Water" },
 			mountains = { count = 11, min = 200, max = 320, ring = 480, material = "Rock", cap = "Snow" },
@@ -5939,7 +5943,7 @@ buildVista = function()
 	local lakeZ = O.z + HD + 240
 	local vista = {
 		spec = { ground = "Grass", bank = "Grass" },
-		groundTop = -2,
+		groundTop = -8, -- well under the lobby floors
 		minX = O.x - 1000,
 		maxX = O.x + 1000,
 		minZ = O.z - 260,
@@ -5950,17 +5954,17 @@ buildVista = function()
 		mountains = {},
 		caps = {},
 		mesas = {},
-		lakes = { { x = O.x, z = lakeZ, r = 150, surface = -3.4, shore = "Sand", liquid = "Water", bridged = false } },
+		lakes = { { x = O.x, z = lakeZ, r = 150, surface = -9.4, shore = "Sand", liquid = "Water", bridged = false } },
 	}
 	for i, h in { { -330, 170, 110 }, { 340, 210, 130 }, { -520, 420, 150 }, { 500, 470, 140 }, { -160, 560, 120 }, { 220, 600, 130 } } do
-		vista.hills[i] = { x = O.x + h[1], y = -2 - h[3] * 0.62, z = O.z + HD + h[2], r = h[3], material = "LeafyGrass" }
+		vista.hills[i] = { x = O.x + h[1], y = -8 - h[3] * 0.62, z = O.z + HD + h[2], r = h[3], material = "LeafyGrass" }
 	end
 	for _, m in { { -620, 900, 300 }, { -200, 1050, 360 }, { 260, 980, 330 }, { 680, 880, 290 }, { 20, 1250, 380 } } do
 		local x, z, r = O.x + m[1], O.z + HD + m[2], m[3]
-		table.insert(vista.mountains, { x = x, y = -2 - r * 0.35, z = z, r = r, material = "Rock" })
-		table.insert(vista.mountains, { x = x + r * 0.7, y = -2 - r * 0.25, z = z + r * 0.2, r = r * 0.55, material = "Rock" })
-		table.insert(vista.mountains, { x = x, y = -2 + r * 0.37, z = z, r = r * 0.45, material = "Rock" })
-		table.insert(vista.caps, { x = x, y = -2 + r * 0.63, z = z, r = r * 0.3, material = "Snow" })
+		table.insert(vista.mountains, { x = x, y = -8 - r * 0.35, z = z, r = r, material = "Rock" })
+		table.insert(vista.mountains, { x = x + r * 0.7, y = -8 - r * 0.25, z = z + r * 0.2, r = r * 0.55, material = "Rock" })
+		table.insert(vista.mountains, { x = x, y = -8 + r * 0.37, z = z, r = r * 0.45, material = "Rock" })
+		table.insert(vista.caps, { x = x, y = -8 + r * 0.63, z = z, r = r * 0.3, material = "Snow" })
 	end
 	TerrainBuilder.apply(vista, true)
 
@@ -5977,7 +5981,7 @@ buildVista = function()
 		local r = 180 + (i * 37 % 60)
 		local x, z = O.x + math.cos(a) * r, lakeZ + math.sin(a) * r
 		if z > O.z + HD + 30 then
-			Props.build({ kind = "pine", x = x, y = -2, z = z, size = 1.1 + (i % 5) * 0.12, yaw = a }, theme, trees)
+			Props.build({ kind = "pine", x = x, y = -8, z = z, size = 1.1 + (i % 5) * 0.12, yaw = a }, theme, trees)
 		end
 	end
 	trees.Parent = Workspace
@@ -7560,8 +7564,9 @@ return RaceService
 -- (shared/RoadGeometry), so every piece meets the next exactly:
 --   * road: a solid 2-stud slab built from triangles (two wedges each), so
 --     curves and hills have no gaps, steps or overlapping, flickering slabs
---   * shoulders: the same triangle strips either side, unless terrain
---     forms the verge there (Landscape plan, `plan.bankAt`)
+--   * verges: the same triangle strips either side, out past the barrier,
+--     grass (or the theme's material), gravel run-off on the outside of
+--     corners, and a concrete deck on bridges
 --   * curbs on corners, painted edge lines on straights, a dashed centre line
 --   * barriers: one piece per segment, end to end, with gaps for shortcuts
 --
@@ -7574,7 +7579,11 @@ local Track = require(ReplicatedStorage.Shared.Track)
 
 local RoadSurface = {}
 
-RoadSurface.Thickness = 2
+-- The road is a 4-stud slab and the verge strips are as thick. Terrain is
+-- planned at least 3 studs under the road (Landscape), so it stays hidden
+-- inside these slabs even where its 4-stud voxels round upward.
+RoadSurface.Thickness = 4
+RoadSurface.VergeExtra = 3 -- the verge runs this far past the barrier line
 local SHOULDER_DROP = 0.12 -- shoulders sit just under the road so edges read
 
 export type Style = { color: Color3, material: Enum.Material, collide: boolean, surface: string? }
@@ -7696,6 +7705,8 @@ function RoadSurface.build(track: any, frames: { any }, parent: Instance, opts: 
 	}
 	-- Bridge decks (raised road with nothing under it) are concrete in realistic themes.
 	local deck: Style = { color = Color3.fromRGB(150, 148, 142), material = Enum.Material.Concrete, collide = true, surface = "offroad" }
+	-- Gravel run-off on the outside of corners: lighter than grass, reads as "slow".
+	local gravel: Style = { color = Color3.fromRGB(150, 140, 120), material = Enum.Material.Pebble, collide = true, surface = "offroad" }
 	local paint = if neon then Enum.Material.Neon else Enum.Material.SmoothPlastic
 	local curbStyles: { Style } = {
 		{ color = rgb(theme.curb[1]), material = if realistic then Enum.Material.Concrete else paint, collide = false },
@@ -7712,16 +7723,25 @@ function RoadSurface.build(track: any, frames: { any }, parent: Instance, opts: 
 		triangle(surface, aL, aR, bL, th, road, "Road")
 		triangle(surface, aR, bR, bL, th, road, "Road")
 
-		-- Shoulders (where terrain isn't the verge).
+		-- Verges on both sides, out past the barrier, covering the terrain.
 		local plan = opts.plan
-		local terrainVerge = plan and plan.bankAt[i] and plan.bankAt[j]
-		if not terrainVerge and opts.walled then
-			local style = if realistic and plan then deck else shoulder
+		local onBridge = plan and not (plan.bankAt[i] and plan.bankAt[j])
+		if opts.walled then
+			local outer = half + sw + RoadSurface.VergeExtra
+			-- Turning right (turn > 0) puts the outside of the bend on the left.
+			local outside = if a.turn > 0 then -1 else 1
+			local corner = RoadGeometry.isCorner(a) and RoadGeometry.isCorner(b)
 			for _, side in { -1, 1 } do
+				local style = shoulder
+				if realistic and onBridge then
+					style = deck
+				elseif realistic and corner and side == outside then
+					style = gravel
+				end
 				local ai = v3(RoadGeometry.edge(a, side * half, -SHOULDER_DROP))
-				local ao = v3(RoadGeometry.edge(a, side * (half + sw), -SHOULDER_DROP))
+				local ao = v3(RoadGeometry.edge(a, side * outer, -SHOULDER_DROP))
 				local bi = v3(RoadGeometry.edge(b, side * half, -SHOULDER_DROP))
-				local bo = v3(RoadGeometry.edge(b, side * (half + sw), -SHOULDER_DROP))
+				local bo = v3(RoadGeometry.edge(b, side * outer, -SHOULDER_DROP))
 				triangle(verge, ai, ao, bi, th, style, "Shoulder")
 				triangle(verge, ao, bo, bi, th, style, "Shoulder")
 			end
@@ -7771,7 +7791,10 @@ function RoadSurface.build(track: any, frames: { any }, parent: Instance, opts: 
 						-- Concrete jersey barrier: wide foot, narrow top, a painted band.
 						chordBox(barriers, p0, p1, 2, 1.2, -0.2, 0.5, { color = wallColor, material = Enum.Material.Concrete, collide = true }, "Wall")
 						chordBox(barriers, p0, p1, 1.1, 2.4, 1, 0.5, { color = wallColor, material = Enum.Material.Concrete, collide = true }, "Wall")
-						chordBox(barriers, p0, p1, 1.16, 0.35, 2.6, 0.5, { color = if i % 2 == 0 then rgb(theme.curb[1]) else rgb(theme.curb[2]), material = Enum.Material.SmoothPlastic, collide = false }, "WallBand")
+						if i % 2 == 0 then
+							-- Red band on alternate pieces; the bare concrete between reads as white.
+							chordBox(barriers, p0, p1, 1.16, 0.35, 2.6, 0.5, { color = rgb(theme.curb[1]), material = Enum.Material.SmoothPlastic, collide = false }, "WallBand")
+						end
 					else
 						chordBox(barriers, p0, p1, 1, 4, -0.5, 0.5, { color = wallColor, material = wallMaterial, collide = true }, "Wall")
 					end
@@ -8513,6 +8536,13 @@ function TerrainBuilder.apply(plan: any, additive: boolean?)
 		end
 	end
 
+	if terrain then
+		-- Animated grass blades stand 1-2 studs tall and poke through road
+		-- and floors laid just above the ground, so they stay off.
+		pcall(function()
+			(terrain :: any).Decoration = false
+		end)
+	end
 	if terrain and not additive then
 		terrain:Clear()
 		for name, c in spec.colors or {} do

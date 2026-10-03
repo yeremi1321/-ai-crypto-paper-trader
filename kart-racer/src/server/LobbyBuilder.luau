@@ -351,7 +351,7 @@ buildVista = function()
 	local lakeZ = O.z + HD + 240
 	local vista = {
 		spec = { ground = "Grass", bank = "Grass" },
-		groundTop = -2,
+		groundTop = -8, -- well under the lobby floors
 		minX = O.x - 1000,
 		maxX = O.x + 1000,
 		minZ = O.z - 260,
@@ -362,17 +362,17 @@ buildVista = function()
 		mountains = {},
 		caps = {},
 		mesas = {},
-		lakes = { { x = O.x, z = lakeZ, r = 150, surface = -3.4, shore = "Sand", liquid = "Water", bridged = false } },
+		lakes = { { x = O.x, z = lakeZ, r = 150, surface = -9.4, shore = "Sand", liquid = "Water", bridged = false } },
 	}
 	for i, h in { { -330, 170, 110 }, { 340, 210, 130 }, { -520, 420, 150 }, { 500, 470, 140 }, { -160, 560, 120 }, { 220, 600, 130 } } do
-		vista.hills[i] = { x = O.x + h[1], y = -2 - h[3] * 0.62, z = O.z + HD + h[2], r = h[3], material = "LeafyGrass" }
+		vista.hills[i] = { x = O.x + h[1], y = -8 - h[3] * 0.62, z = O.z + HD + h[2], r = h[3], material = "LeafyGrass" }
 	end
 	for _, m in { { -620, 900, 300 }, { -200, 1050, 360 }, { 260, 980, 330 }, { 680, 880, 290 }, { 20, 1250, 380 } } do
 		local x, z, r = O.x + m[1], O.z + HD + m[2], m[3]
-		table.insert(vista.mountains, { x = x, y = -2 - r * 0.35, z = z, r = r, material = "Rock" })
-		table.insert(vista.mountains, { x = x + r * 0.7, y = -2 - r * 0.25, z = z + r * 0.2, r = r * 0.55, material = "Rock" })
-		table.insert(vista.mountains, { x = x, y = -2 + r * 0.37, z = z, r = r * 0.45, material = "Rock" })
-		table.insert(vista.caps, { x = x, y = -2 + r * 0.63, z = z, r = r * 0.3, material = "Snow" })
+		table.insert(vista.mountains, { x = x, y = -8 - r * 0.35, z = z, r = r, material = "Rock" })
+		table.insert(vista.mountains, { x = x + r * 0.7, y = -8 - r * 0.25, z = z + r * 0.2, r = r * 0.55, material = "Rock" })
+		table.insert(vista.mountains, { x = x, y = -8 + r * 0.37, z = z, r = r * 0.45, material = "Rock" })
+		table.insert(vista.caps, { x = x, y = -8 + r * 0.63, z = z, r = r * 0.3, material = "Snow" })
 	end
 	TerrainBuilder.apply(vista, true)
 
@@ -389,7 +389,7 @@ buildVista = function()
 		local r = 180 + (i * 37 % 60)
 		local x, z = O.x + math.cos(a) * r, lakeZ + math.sin(a) * r
 		if z > O.z + HD + 30 then
-			Props.build({ kind = "pine", x = x, y = -2, z = z, size = 1.1 + (i % 5) * 0.12, yaw = a }, theme, trees)
+			Props.build({ kind = "pine", x = x, y = -8, z = z, size = 1.1 + (i % 5) * 0.12, yaw = a }, theme, trees)
 		end
 	end
 	trees.Parent = Workspace

@@ -2,8 +2,9 @@
 -- (shared/RoadGeometry), so every piece meets the next exactly:
 --   * road: a solid 2-stud slab built from triangles (two wedges each), so
 --     curves and hills have no gaps, steps or overlapping, flickering slabs
---   * shoulders: the same triangle strips either side, unless terrain
---     forms the verge there (Landscape plan, `plan.bankAt`)
+--   * verges: the same triangle strips either side, out past the barrier,
+--     grass (or the theme's material), gravel run-off on the outside of
+--     corners, and a concrete deck on bridges
 --   * curbs on corners, painted edge lines on straights, a dashed centre line
 --   * barriers: one piece per segment, end to end, with gaps for shortcuts
 --
@@ -16,7 +17,11 @@ local Track = require(ReplicatedStorage.Shared.Track)
 
 local RoadSurface = {}
 
-RoadSurface.Thickness = 2
+-- The road is a 4-stud slab and the verge strips are as thick. Terrain is
+-- planned at least 3 studs under the road (Landscape), so it stays hidden
+-- inside these slabs even where its 4-stud voxels round upward.
+RoadSurface.Thickness = 4
+RoadSurface.VergeExtra = 3 -- the verge runs this far past the barrier line
 local SHOULDER_DROP = 0.12 -- shoulders sit just under the road so edges read
 
 export type Style = { color: Color3, material: Enum.Material, collide: boolean, surface: string? }
@@ -138,6 +143,8 @@ function RoadSurface.build(track: any, frames: { any }, parent: Instance, opts: 
 	}
 	-- Bridge decks (raised road with nothing under it) are concrete in realistic themes.
 	local deck: Style = { color = Color3.fromRGB(150, 148, 142), material = Enum.Material.Concrete, collide = true, surface = "offroad" }
+	-- Gravel run-off on the outside of corners: lighter than grass, reads as "slow".
+	local gravel: Style = { color = Color3.fromRGB(150, 140, 120), material = Enum.Material.Pebble, collide = true, surface = "offroad" }
 	local paint = if neon then Enum.Material.Neon else Enum.Material.SmoothPlastic
 	local curbStyles: { Style } = {
 		{ color = rgb(theme.curb[1]), material = if realistic then Enum.Material.Concrete else paint, collide = false },
@@ -154,16 +161,25 @@ function RoadSurface.build(track: any, frames: { any }, parent: Instance, opts: 
 		triangle(surface, aL, aR, bL, th, road, "Road")
 		triangle(surface, aR, bR, bL, th, road, "Road")
 
-		-- Shoulders (where terrain isn't the verge).
+		-- Verges on both sides, out past the barrier, covering the terrain.
 		local plan = opts.plan
-		local terrainVerge = plan and plan.bankAt[i] and plan.bankAt[j]
-		if not terrainVerge and opts.walled then
-			local style = if realistic and plan then deck else shoulder
+		local onBridge = plan and not (plan.bankAt[i] and plan.bankAt[j])
+		if opts.walled then
+			local outer = half + sw + RoadSurface.VergeExtra
+			-- Turning right (turn > 0) puts the outside of the bend on the left.
+			local outside = if a.turn > 0 then -1 else 1
+			local corner = RoadGeometry.isCorner(a) and RoadGeometry.isCorner(b)
 			for _, side in { -1, 1 } do
+				local style = shoulder
+				if realistic and onBridge then
+					style = deck
+				elseif realistic and corner and side == outside then
+					style = gravel
+				end
 				local ai = v3(RoadGeometry.edge(a, side * half, -SHOULDER_DROP))
-				local ao = v3(RoadGeometry.edge(a, side * (half + sw), -SHOULDER_DROP))
+				local ao = v3(RoadGeometry.edge(a, side * outer, -SHOULDER_DROP))
 				local bi = v3(RoadGeometry.edge(b, side * half, -SHOULDER_DROP))
-				local bo = v3(RoadGeometry.edge(b, side * (half + sw), -SHOULDER_DROP))
+				local bo = v3(RoadGeometry.edge(b, side * outer, -SHOULDER_DROP))
 				triangle(verge, ai, ao, bi, th, style, "Shoulder")
 				triangle(verge, ao, bo, bi, th, style, "Shoulder")
 			end
@@ -213,7 +229,10 @@ function RoadSurface.build(track: any, frames: { any }, parent: Instance, opts: 
 						-- Concrete jersey barrier: wide foot, narrow top, a painted band.
 						chordBox(barriers, p0, p1, 2, 1.2, -0.2, 0.5, { color = wallColor, material = Enum.Material.Concrete, collide = true }, "Wall")
 						chordBox(barriers, p0, p1, 1.1, 2.4, 1, 0.5, { color = wallColor, material = Enum.Material.Concrete, collide = true }, "Wall")
-						chordBox(barriers, p0, p1, 1.16, 0.35, 2.6, 0.5, { color = if i % 2 == 0 then rgb(theme.curb[1]) else rgb(theme.curb[2]), material = Enum.Material.SmoothPlastic, collide = false }, "WallBand")
+						if i % 2 == 0 then
+							-- Red band on alternate pieces; the bare concrete between reads as white.
+							chordBox(barriers, p0, p1, 1.16, 0.35, 2.6, 0.5, { color = rgb(theme.curb[1]), material = Enum.Material.SmoothPlastic, collide = false }, "WallBand")
+						end
 					else
 						chordBox(barriers, p0, p1, 1, 4, -0.5, 0.5, { color = wallColor, material = wallMaterial, collide = true }, "Wall")
 					end

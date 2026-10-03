@@ -18,7 +18,8 @@ Tracks.Themes = {
 	sunny = {
 		realistic = true,
 		road = { 62, 63, 66 },
-		shoulder = { 96, 84, 62 },
+		shoulder = { 82, 124, 52 }, -- grass verge, matches the terrain
+		shoulderMaterial = "Grass",
 		ground = { 86, 128, 58 },
 		wall = { 205, 204, 198 },
 		accent = { 255, 196, 40 },
@@ -37,7 +38,7 @@ Tracks.Themes = {
 		terrain = {
 			ground = "Grass",
 			bank = "Grass",
-			drop = 0.7,
+			drop = 3.5, -- terrain stays 3.5 studs under the road, hidden inside its 4-stud slab
 			hills = { count = 16, min = 50, max = 140, material = "LeafyGrass" },
 			lakes = { count = 2, min = 55, max = 120, shore = "Sand", liquid = "Water" },
 			mountains = { count = 10, min = 170, max = 280, ring = 520, material = "Rock", cap = "Snow" },
@@ -49,7 +50,8 @@ Tracks.Themes = {
 	canyon = {
 		realistic = true,
 		road = { 74, 68, 64 },
-		shoulder = { 176, 140, 98 },
+		shoulder = { 206, 164, 112 }, -- sand verge
+		shoulderMaterial = "Sand",
 		ground = { 190, 146, 98 },
 		wall = { 200, 190, 174 },
 		accent = { 255, 140, 60 },
@@ -68,7 +70,7 @@ Tracks.Themes = {
 		terrain = {
 			ground = "Sand",
 			bank = "Sandstone",
-			drop = 0.7,
+			drop = 3.5, -- terrain stays 3.5 studs under the road, hidden inside its 4-stud slab
 			hills = { count = 10, min = 60, max = 150, material = "Sand" },
 			mesas = { count = 14, min = 50, max = 120, minHeight = 60, maxHeight = 150, material = "Sandstone", band = "Rock", ring = 420 },
 			lakes = { count = 1, min = 45, max = 70, shore = "Grass", liquid = "Water" },
@@ -116,7 +118,8 @@ Tracks.Themes = {
 	-- Backyard Bug Rally: dirt paths through giant grass on a sunny day.
 	backyard = {
 		road = { 150, 110, 75 }, -- packed dirt
-		shoulder = { 110, 170, 70 },
+		shoulder = { 92, 150, 58 },
+		shoulderMaterial = "Grass",
 		ground = { 100, 165, 65 },
 		wall = { 160, 120, 80 },
 		accent = { 255, 210, 60 },
@@ -135,7 +138,7 @@ Tracks.Themes = {
 		terrain = {
 			ground = "Grass",
 			bank = "Grass",
-			drop = 0.7,
+			drop = 3.5, -- terrain stays 3.5 studs under the road, hidden inside its 4-stud slab
 			hills = { count = 6, min = 40, max = 90, material = "LeafyGrass" },
 			lakes = { count = 1, min = 40, max = 60, shore = "Mud", liquid = "Water" },
 			colors = { Grass = { 92, 150, 58 }, LeafyGrass = { 80, 136, 50 }, Mud = { 96, 76, 54 } },
@@ -183,7 +186,8 @@ Tracks.Themes = {
 	alpine = {
 		realistic = true,
 		road = { 58, 59, 62 },
-		shoulder = { 90, 84, 70 },
+		shoulder = { 74, 112, 52 }, -- grass verge
+		shoulderMaterial = "Grass",
 		ground = { 70, 110, 60 },
 		wall = { 205, 205, 200 },
 		accent = { 70, 170, 255 },
@@ -201,7 +205,7 @@ Tracks.Themes = {
 		terrain = {
 			ground = "Grass",
 			bank = "Grass",
-			drop = 0.7,
+			drop = 3.5, -- terrain stays 3.5 studs under the road, hidden inside its 4-stud slab
 			hills = { count = 18, min = 50, max = 150, material = "LeafyGrass" },
 			lakes = { count = 1, min = 60, max = 100, shore = "Ground", liquid = "Water" },
 			mountains = { count = 11, min = 200, max = 320, ring = 480, material = "Rock", cap = "Snow" },

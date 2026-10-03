@@ -82,6 +82,13 @@ function TerrainBuilder.apply(plan: any, additive: boolean?)
 		end
 	end
 
+	if terrain then
+		-- Animated grass blades stand 1-2 studs tall and poke through road
+		-- and floors laid just above the ground, so they stay off.
+		pcall(function()
+			(terrain :: any).Decoration = false
+		end)
+	end
 	if terrain and not additive then
 		terrain:Clear()
 		for name, c in spec.colors or {} do

@@ -7,6 +7,7 @@
 -- Making a track bigger: raise `scale` (stretches the whole layout) and
 -- `width` (road width in studs). Then run `lune run tests/run`.
 
+local LobbyLayout = require("./LobbyLayout")
 local Track = require("./Track")
 local v = Track.v
 
@@ -47,6 +48,23 @@ Tracks.Themes = {
 		tint = { 255, 235, 210 },
 		saturation = 0.2,
 	},
+	-- The Kart Carnival lobby: bright, clear afternoon.
+	carnival = {
+		road = { 64, 66, 82 },
+		shoulder = { 120, 200, 110 },
+		ground = { 120, 200, 110 },
+		wall = { 255, 255, 255 },
+		accent = { 255, 90, 120 },
+		curb = { { 255, 90, 120 }, { 255, 255, 255 } },
+		line = { 255, 255, 255 },
+		clock = 13,
+		ambient = { 140, 140, 160 },
+		brightness = 3,
+		atmosphere = { density = 0.25, haze = 0.8, glare = 0.3, color = { 210, 230, 255 }, decay = { 120, 160, 220 } },
+		bloom = 0.5,
+		tint = { 255, 250, 245 },
+		saturation = 0.25,
+	},
 	neon = {
 		road = { 30, 30, 42 },
 		shoulder = { 50, 30, 80 },
@@ -71,6 +89,9 @@ Tracks.List = {
 		id = "sunny",
 		name = "Sunny Loop",
 		theme = "sunny",
+		difficulty = "Easy",
+		feature = "Wide, fast corners and a big crowd",
+		icon = "🌳",
 		width = 56,
 		scale = 1.6,
 		laps = 3,
@@ -98,6 +119,9 @@ Tracks.List = {
 		id = "canyon",
 		name = "Canyon Climb",
 		theme = "canyon",
+		difficulty = "Medium",
+		feature = "Rolling hills under giant mesas",
+		icon = "🏜️",
 		width = 52,
 		scale = 1.6,
 		laps = 3,
@@ -125,6 +149,9 @@ Tracks.List = {
 		id = "neon",
 		name = "Neon Eight",
 		theme = "neon",
+		difficulty = "Medium",
+		feature = "Figure-eight with a bridge crossover",
+		icon = "🌃",
 		width = 50,
 		scale = 1.5,
 		laps = 3,
@@ -149,7 +176,10 @@ Tracks.List = {
 	},
 } :: { Track.TrackDef }
 
--- A Grand Prix is every track in order.
+-- Tracks that can come up in map voting.
+Tracks.VotePool = { "sunny", "canyon", "neon" }
+
+-- A Grand Prix is every track in order (kept for a future cup mode).
 Tracks.Cup = { name = "Starter Cup", tracks = { "sunny", "canyon", "neon" } }
 
 function Tracks.get(id: string): Track.TrackDef
@@ -157,6 +187,9 @@ function Tracks.get(id: string): Track.TrackDef
 		if t.id == id then
 			return t
 		end
+	end
+	if id == LobbyLayout.PracticeTrack.id then
+		return LobbyLayout.PracticeTrack
 	end
 	error(`unknown track {id}`)
 end

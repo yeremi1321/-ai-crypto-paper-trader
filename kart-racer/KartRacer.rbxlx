@@ -1,13 +1,100 @@
 <roblox version="4">
-  <Item class="ReplicatedStorage" referent="0">
+  <Item class="Lighting" referent="0">
+    <Properties>
+      <string name="Name">Lighting</string>
+      <float name="Brightness">3</float>
+      <float name="EnvironmentDiffuseScale">0.5</float>
+      <float name="EnvironmentSpecularScale">0.5</float>
+      <bool name="GlobalShadows">true</bool>
+      <token name="Technology">4</token>
+    </Properties>
+  </Item>
+  <Item class="ReplicatedStorage" referent="1">
     <Properties>
       <string name="Name">ReplicatedStorage</string>
     </Properties>
-    <Item class="Folder" referent="1">
+    <Item class="Folder" referent="2">
       <Properties>
         <string name="Name">Common</string>
       </Properties>
-      <Item class="ModuleScript" referent="2">
+      <Item class="ModuleScript" referent="3">
+        <Properties>
+          <string name="Name">Atmos</string>
+          <string name="Source"><![CDATA[-- Lighting for a track theme (sky haze, sun, bloom, colour grading). Runs on
+-- each client: racers see the track's theme while lobby players keep the
+-- carnival look, since Lighting changes made on a client stay on that client.
+
+local Lighting = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local function child(parent: Instance, name: string): Instance
+	return parent:FindFirstChild(name) or parent:WaitForChild(name)
+end
+local Tracks = require(child(child(ReplicatedStorage, "Shared"), "Tracks"))
+
+local Atmos = {}
+
+local function rgb(c: { number }): Color3
+	return Color3.fromRGB(c[1], c[2], c[3])
+end
+
+-- Sky, sun and colour grading for a theme. Replaces the previous track's.
+function Atmos.applyTheme(theme: any)
+	for _, name in { "KartAtmosphere", "KartBloom", "KartGrade", "KartSunRays" } do
+		local old = Lighting:FindFirstChild(name)
+		if old then
+			old:Destroy()
+		end
+	end
+	Lighting.ClockTime = theme.clock
+	Lighting.Brightness = theme.brightness
+	Lighting.Ambient = rgb(theme.ambient)
+	Lighting.OutdoorAmbient = rgb(theme.ambient)
+	Lighting.GlobalShadows = true
+	Lighting.EnvironmentDiffuseScale = 0.5
+	Lighting.EnvironmentSpecularScale = 0.5
+
+	local a = theme.atmosphere
+	local atmosphere = Instance.new("Atmosphere")
+	atmosphere.Name = "KartAtmosphere"
+	atmosphere.Density = a.density
+	atmosphere.Haze = a.haze
+	atmosphere.Glare = a.glare
+	atmosphere.Color = rgb(a.color)
+	atmosphere.Decay = rgb(a.decay)
+	atmosphere.Parent = Lighting
+
+	local bloom = Instance.new("BloomEffect")
+	bloom.Name = "KartBloom"
+	bloom.Intensity = theme.bloom
+	bloom.Size = 24
+	bloom.Threshold = 0.9
+	bloom.Parent = Lighting
+
+	local grade = Instance.new("ColorCorrectionEffect")
+	grade.Name = "KartGrade"
+	grade.TintColor = rgb(theme.tint)
+	grade.Saturation = theme.saturation
+	grade.Contrast = 0.08
+	grade.Parent = Lighting
+
+	local rays = Instance.new("SunRaysEffect")
+	rays.Name = "KartSunRays"
+	rays.Intensity = if theme.clock > 6 and theme.clock < 19 then 0.08 else 0
+	rays.Spread = 0.6
+	rays.Parent = Lighting
+end
+
+function Atmos.apply(themeId: string)
+	local theme = Tracks.Themes[themeId] or Tracks.Themes.carnival
+	Atmos.applyTheme(theme)
+end
+
+return Atmos
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="4">
         <Properties>
           <string name="Name">KartRig</string>
           <string name="Source"><![CDATA[-- Builds a kart and connects KartPhysics to Roblox physics. Shared by the
@@ -294,12 +381,152 @@ return KartRig
 ]]></string>
         </Properties>
       </Item>
+      <Item class="ModuleScript" referent="5">
+        <Properties>
+          <string name="Name">Shapes</string>
+          <string name="Source"><![CDATA[-- Rounded building blocks for a smooth cartoon look without imported meshes:
+-- ellipsoids (stretched spheres), discs, capsules and rounded boxes. Every
+-- shape is one or a few anchored parts with smooth plastic.
+--
+-- Ellipsoids use a SpecialMesh sphere, which stretches to the part's size.
+-- These are stand-ins: custom MeshParts made in Blender look better and can
+-- replace any of them later.
+
+local Shapes = {}
+
+export type Style = {
+	color: Color3,
+	material: Enum.Material?,
+	transparency: number?,
+	reflectance: number?,
+	collide: boolean?,
+	anchored: boolean?,
+	name: string?,
+}
+
+local function apply(p: BasePart, style: Style, parent: Instance?)
+	p.Name = style.name or p.Name
+	p.Anchored = if style.anchored == nil then true else style.anchored
+	p.CanCollide = style.collide == true
+	p.CanQuery = style.collide == true
+	p.CanTouch = false
+	p.Color = style.color
+	p.Material = style.material or Enum.Material.SmoothPlastic
+	p.Transparency = style.transparency or 0
+	p.Reflectance = style.reflectance or 0
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	if parent then
+		p.Parent = parent
+	end
+end
+
+function Shapes.box(parent: Instance?, size: Vector3, cf: CFrame, style: Style): Part
+	local p = Instance.new("Part")
+	p.Size = size
+	p.CFrame = cf
+	apply(p, style, parent)
+	return p
+end
+
+function Shapes.ball(parent: Instance?, diameter: number, cf: CFrame, style: Style): Part
+	local p = Instance.new("Part")
+	p.Shape = Enum.PartType.Ball
+	p.Size = Vector3.one * diameter
+	p.CFrame = cf
+	apply(p, style, parent)
+	return p
+end
+
+-- A stretched sphere filling `size`.
+function Shapes.ellipsoid(parent: Instance?, size: Vector3, cf: CFrame, style: Style): Part
+	local p = Instance.new("Part")
+	p.Size = size
+	p.CFrame = cf
+	local mesh = Instance.new("SpecialMesh")
+	mesh.MeshType = Enum.MeshType.Sphere
+	mesh.Parent = p
+	apply(p, style, parent)
+	return p
+end
+
+-- A cylinder standing upright (height along y).
+function Shapes.pillar(parent: Instance?, diameter: number, height: number, cf: CFrame, style: Style): Part
+	local p = Instance.new("Part")
+	p.Shape = Enum.PartType.Cylinder
+	p.Size = Vector3.new(height, diameter, diameter)
+	p.CFrame = cf * CFrame.Angles(0, 0, math.rad(90))
+	apply(p, style, parent)
+	return p
+end
+
+-- A flat round disc lying on the ground (thickness along y).
+function Shapes.disc(parent: Instance?, diameter: number, thickness: number, cf: CFrame, style: Style): Part
+	return Shapes.pillar(parent, diameter, thickness, cf, style)
+end
+
+-- A cylinder lying along local x (wheels, pipes, logs).
+function Shapes.tube(parent: Instance?, diameter: number, length: number, cf: CFrame, style: Style): Part
+	local p = Instance.new("Part")
+	p.Shape = Enum.PartType.Cylinder
+	p.Size = Vector3.new(length, diameter, diameter)
+	p.CFrame = cf
+	apply(p, style, parent)
+	return p
+end
+
+-- Upright capsule: a pillar with ball ends.
+function Shapes.capsule(parent: Instance?, diameter: number, height: number, cf: CFrame, style: Style): { Part }
+	local body = math.max(height - diameter, 0.05)
+	return {
+		Shapes.pillar(parent, diameter, body, cf, style),
+		Shapes.ball(parent, diameter, cf * CFrame.new(0, body / 2, 0), style),
+		Shapes.ball(parent, diameter, cf * CFrame.new(0, -body / 2, 0), style),
+	}
+end
+
+-- A box with rounded vertical edges (four corner cylinders and two inner
+-- boxes). Good for buildings, signs and counters.
+function Shapes.roundedBox(parent: Instance?, size: Vector3, radius: number, cf: CFrame, style: Style): { Part }
+	local r = math.min(radius, size.X / 2, size.Z / 2)
+	local parts = {
+		Shapes.box(parent, Vector3.new(size.X - r * 2, size.Y, size.Z), cf, style),
+		Shapes.box(parent, Vector3.new(size.X, size.Y, size.Z - r * 2), cf, style),
+	}
+	for _, sx in { -1, 1 } do
+		for _, sz in { -1, 1 } do
+			table.insert(parts, Shapes.pillar(parent, r * 2, size.Y, cf * CFrame.new(sx * (size.X / 2 - r), 0, sz * (size.Z / 2 - r)), style))
+		end
+	end
+	return parts
+end
+
+-- A semicircular arch made of short segments (tunnels, doors, gates).
+function Shapes.arch(parent: Instance?, span: number, thickness: number, depth: number, cf: CFrame, style: Style, segments: number?): { Part }
+	local n = segments or 12
+	local radius = span / 2
+	local parts = {}
+	for i = 0, n - 1 do
+		local a0 = math.pi * i / n
+		local a1 = math.pi * (i + 1) / n
+		local mid = (a0 + a1) / 2
+		local len = 2 * radius * math.sin((a1 - a0) / 2) + thickness * 0.3
+		local pos = CFrame.new(math.cos(mid) * radius, math.sin(mid) * radius, 0)
+		table.insert(parts, Shapes.box(parent, Vector3.new(len, thickness, depth), cf * pos * CFrame.Angles(0, 0, mid - math.pi / 2), style))
+	end
+	return parts
+end
+
+return Shapes
+]]></string>
+        </Properties>
+      </Item>
     </Item>
-    <Item class="Folder" referent="3">
+    <Item class="Folder" referent="6">
       <Properties>
         <string name="Name">Shared</string>
       </Properties>
-      <Item class="ModuleScript" referent="4">
+      <Item class="ModuleScript" referent="7">
         <Properties>
           <string name="Name">AIDriver</string>
           <string name="Source"><![CDATA[--!strict
@@ -365,7 +592,7 @@ return AIDriver
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="5">
+      <Item class="ModuleScript" referent="8">
         <Properties>
           <string name="Name">Items</string>
           <string name="Source"><![CDATA[--!strict
@@ -445,7 +672,7 @@ return Items
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="6">
+      <Item class="ModuleScript" referent="9">
         <Properties>
           <string name="Name">KartBodies</string>
           <string name="Source"><![CDATA[--!strict
@@ -664,7 +891,7 @@ return KartBodies
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="7">
+      <Item class="ModuleScript" referent="10">
         <Properties>
           <string name="Name">KartPhysics</string>
           <string name="Source"><![CDATA[--!strict
@@ -685,6 +912,7 @@ export type State = {
 	boost: number, -- seconds of boost left
 	spin: number, -- seconds left spinning out after a hit
 	invincible: number, -- seconds of Overdrive left
+	slow: number, -- seconds left stuck in something sticky (jelly, syrup)
 }
 
 export type Input = {
@@ -703,12 +931,13 @@ KartPhysics.ReverseFactor = 0.35
 KartPhysics.BoostPadTime = 1.0
 KartPhysics.ChargeLevels = { 0.9, 1.8, 2.9 } -- charge needed for each mini-turbo
 KartPhysics.TurboTimes = { 0.6, 1.1, 1.7 } -- boost seconds each level gives
+KartPhysics.SlowFactor = 0.5
 KartPhysics.SpinTime = 1.2
 KartPhysics.SpinSpeedKeep = 0.3
 KartPhysics.DriftSlide = 0.35 -- radians the body swings out while drifting (visual)
 
 function KartPhysics.newState(yaw: number): State
-	return { speed = 0, yaw = yaw, drift = 0, charge = 0, boost = 0, spin = 0, invincible = 0 }
+	return { speed = 0, yaw = yaw, drift = 0, charge = 0, boost = 0, spin = 0, invincible = 0, slow = 0 }
 end
 
 function KartPhysics.chargeLevel(charge: number): number
@@ -732,6 +961,9 @@ function KartPhysics.targetTop(stats: Karts.KartStats, s: State, surface: string
 		top *= KartPhysics.BoostFactor
 	elseif surface == "offroad" then
 		top *= KartPhysics.OffroadFactor
+	end
+	if s.slow > 0 then
+		top *= KartPhysics.SlowFactor
 	end
 	return top
 end
@@ -760,6 +992,15 @@ function KartPhysics.hit(s: State): boolean
 	return true
 end
 
+-- Sticky traps: half speed for a while, no spin.
+function KartPhysics.slow(s: State, seconds: number)
+	if s.invincible > 0 then
+		return
+	end
+	s.slow = math.max(s.slow, seconds)
+	s.boost = 0
+end
+
 function KartPhysics.giveBoost(s: State, seconds: number)
 	s.boost = math.max(s.boost, seconds)
 end
@@ -783,6 +1024,7 @@ function KartPhysics.step(stats: Karts.KartStats, s: State, input: Input, dt: nu
 	local released = 0
 	s.boost = math.max(0, s.boost - dt)
 	s.invincible = math.max(0, s.invincible - dt)
+	s.slow = math.max(0, s.slow - dt)
 
 	if input.surface == "boost" then
 		KartPhysics.giveBoost(s, KartPhysics.BoostPadTime)
@@ -857,7 +1099,7 @@ return KartPhysics
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="8">
+      <Item class="ModuleScript" referent="11">
         <Properties>
           <string name="Name">Karts</string>
           <string name="Source"><![CDATA[--!strict
@@ -933,7 +1175,113 @@ return Karts
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="9">
+      <Item class="ModuleScript" referent="12">
+        <Properties>
+          <string name="Name">LobbyLayout</string>
+          <string name="Source"><![CDATA[--!strict
+-- Where everything in the Kart Carnival lobby goes. The lobby sits far from
+-- the race tracks (which are built around the world origin), so the two never
+-- overlap. Coordinates are world studs; +z is "south", away from the voting area.
+--
+--            [voting pads + track displays]
+--   [podium]       [status board]          [garage + kart displays]
+--   [ready arch]     (spawn plaza)         [photo spot]
+--   [spectator screen]
+--            [practice loop: drift circle, jump ramp, boost tunnel]
+
+local Track = require("./Track")
+local v = Track.v
+
+export type Spot = { x: number, y: number, z: number }
+
+local LobbyLayout = {}
+
+local OX, OZ = 0, 5000
+local function at(dx: number, dz: number, y: number?): Spot
+	return { x = OX + dx, y = y or 0, z = OZ + dz }
+end
+
+LobbyLayout.Origin = at(0, 0)
+LobbyLayout.Spawn = at(0, 0)
+LobbyLayout.PlazaRadius = 46
+LobbyLayout.StatusBoard = at(0, -58)
+LobbyLayout.VotePads = { at(-52, -112), at(0, -112), at(52, -112) }
+LobbyLayout.VotePadSize = 26
+LobbyLayout.ReadyArch = at(-72, 0)
+LobbyLayout.Garage = at(140, 0)
+LobbyLayout.KartDisplays = (function()
+	local spots = {}
+	for i = 0, 7 do
+		table.insert(spots, at(92, -56 + i * 16))
+	end
+	return spots
+end)()
+LobbyLayout.Podium = at(-120, -70)
+LobbyLayout.SpectatorScreen = at(-130, 60)
+LobbyLayout.PhotoSpot = at(120, 110)
+LobbyLayout.FerrisWheel = at(-190, -150)
+
+-- Hidden collectibles (stage 5 turns these into coins).
+LobbyLayout.Collectibles = {
+	at(176, 30, 2), -- behind the garage
+	at(-190, -110, 2), -- under the Ferris wheel
+	at(120, 132, 2), -- behind the photo wall
+	at(-150, 74, 2), -- behind the spectator screen
+	at(0, 300, 3), -- inside the boost tunnel
+	at(-180, 380, 2), -- far corner of the practice area
+}
+
+-- Practice loop: an open area (no walls) south of the plaza.
+LobbyLayout.PracticeArea = { min = at(-240, 170), max = at(240, 470) }
+LobbyLayout.DriftCircle = { center = at(0, 320), radius = 46 }
+LobbyLayout.PracticeTrack = {
+	id = "practice",
+	name = "Practice Loop",
+	theme = "carnival",
+	width = 36,
+	laps = 1,
+	walls = false,
+	controls = {
+		v(OX + 0, 0, OZ + 200),
+		v(OX + 150, 0, OZ + 200),
+		v(OX + 205, 0, OZ + 260),
+		v(OX + 205, 0, OZ + 380),
+		v(OX + 150, 0, OZ + 440),
+		v(OX - 150, 0, OZ + 440),
+		v(OX - 205, 0, OZ + 380),
+		v(OX - 205, 0, OZ + 260),
+		v(OX - 150, 0, OZ + 200),
+	},
+	-- Boost "tunnel" pads on the opening straight; the jump ramp is on the far straight.
+	boostPads = { { t = 0.04, offset = 0 }, { t = 0.08, offset = 0 } },
+	itemRows = {},
+	ramps = { { t = 0.6, offset = 0, width = 18 } },
+	difficulty = "Easy",
+	feature = "Practice drifting, jumping and boosting",
+	icon = "🎡",
+} :: Track.TrackDef
+
+function LobbyLayout.inPlaza(x: number, z: number): boolean
+	local dx, dz = x - LobbyLayout.Spawn.x, z - LobbyLayout.Spawn.z
+	return dx * dx + dz * dz <= LobbyLayout.PlazaRadius * LobbyLayout.PlazaRadius
+end
+
+-- Which vote pad (1..3) a position is standing on, if any.
+function LobbyLayout.padAt(x: number, z: number): number?
+	local half = LobbyLayout.VotePadSize / 2
+	for i, pad in LobbyLayout.VotePads do
+		if math.abs(x - pad.x) <= half and math.abs(z - pad.z) <= half then
+			return i
+		end
+	end
+	return nil
+end
+
+return LobbyLayout
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="13">
         <Properties>
           <string name="Name">RaceRules</string>
           <string name="Source"><![CDATA[--!strict
@@ -1019,7 +1367,7 @@ return RaceRules
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="10">
+      <Item class="ModuleScript" referent="14">
         <Properties>
           <string name="Name">RemoteNames</string>
           <string name="Source"><![CDATA[--!strict
@@ -1027,24 +1375,30 @@ return RaceRules
 
 return {
 	-- server -> client
-	Lobby = "Lobby", -- (state) lobby screen: who's ready, countdown
+	Round = "Round", -- (state) lobby phase, countdowns, vote options, live race summary
 	RaceStart = "RaceStart", -- (info) track id, your kart, grid yaw, GO time
+	PracticeStart = "PracticeStart", -- (info) your practice kart on the lobby loop
 	RaceState = "RaceState", -- (info) standings, your lap/place, about 5x a second
-	KartEvent = "KartEvent", -- (kind, value) "hit" | "boost" | "overdrive" | "respawn"
+	KartEvent = "KartEvent", -- (kind, value) "spin" | "slow" | "launch" | "boost" | "overdrive" | "respawn" | "warning"
 	ItemState = "ItemState", -- (itemId?, uses, readyAt)
-	Results = "Results", -- (info) race results or final cup standings
+	Results = "Results", -- (info) placements and rewards
 	Notify = "Notify", -- (text)
+	OpenGarage = "OpenGarage", -- () the garage prompt was used
+	Spectate = "Spectate", -- () start watching the current race
 
 	-- client -> server
 	ChooseKart = "ChooseKart", -- (kartId)
 	ChooseLook = "ChooseLook", -- ({ body, main, accent }) body design and paint
 	Ready = "Ready", -- (isReady)
-	UseItem = "UseItem", -- ()
+	Vote = "Vote", -- (trackId) same as standing on a vote pad
+	UseItem = "UseItem", -- (aimBack) aimBack = throw/drop behind you
+	Respawn = "Respawn", -- () put my stuck kart back on the road
+	LeavePractice = "LeavePractice", -- ()
 }
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="11">
+      <Item class="ModuleScript" referent="15">
         <Properties>
           <string name="Name">Scenery</string>
           <string name="Source"><![CDATA[--!strict
@@ -1181,7 +1535,7 @@ return Scenery
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="12">
+      <Item class="ModuleScript" referent="16">
         <Properties>
           <string name="Name">Track</string>
           <string name="Source"><![CDATA[--!strict
@@ -1203,6 +1557,14 @@ export type TrackDef = {
 	-- Multiplies every control point (x, y and z), so the whole layout grows
 	-- without changing its shape or how steep the hills are. Default 1.
 	scale: number?,
+	-- Shown on the voting cards.
+	difficulty: string?, -- "Easy" | "Medium" | "Hard"
+	feature: string?, -- the track's main attraction, one short line
+	icon: string?, -- emoji for the card
+	-- false = open area with no walls or grass shoulders (the lobby practice loop).
+	walls: boolean?,
+	-- Jump ramps: t along the lap, offset across (-1..1), ramp width in studs.
+	ramps: { { t: number, offset: number, width: number } }?,
 }
 
 export type Built = {
@@ -1478,7 +1840,7 @@ return Track
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="13">
+      <Item class="ModuleScript" referent="17">
         <Properties>
           <string name="Name">Tracks</string>
           <string name="Source"><![CDATA[--!strict
@@ -1490,6 +1852,7 @@ return Track
 -- Making a track bigger: raise `scale` (stretches the whole layout) and
 -- `width` (road width in studs). Then run `lune run tests/run`.
 
+local LobbyLayout = require("./LobbyLayout")
 local Track = require("./Track")
 local v = Track.v
 
@@ -1530,6 +1893,23 @@ Tracks.Themes = {
 		tint = { 255, 235, 210 },
 		saturation = 0.2,
 	},
+	-- The Kart Carnival lobby: bright, clear afternoon.
+	carnival = {
+		road = { 64, 66, 82 },
+		shoulder = { 120, 200, 110 },
+		ground = { 120, 200, 110 },
+		wall = { 255, 255, 255 },
+		accent = { 255, 90, 120 },
+		curb = { { 255, 90, 120 }, { 255, 255, 255 } },
+		line = { 255, 255, 255 },
+		clock = 13,
+		ambient = { 140, 140, 160 },
+		brightness = 3,
+		atmosphere = { density = 0.25, haze = 0.8, glare = 0.3, color = { 210, 230, 255 }, decay = { 120, 160, 220 } },
+		bloom = 0.5,
+		tint = { 255, 250, 245 },
+		saturation = 0.25,
+	},
 	neon = {
 		road = { 30, 30, 42 },
 		shoulder = { 50, 30, 80 },
@@ -1554,6 +1934,9 @@ Tracks.List = {
 		id = "sunny",
 		name = "Sunny Loop",
 		theme = "sunny",
+		difficulty = "Easy",
+		feature = "Wide, fast corners and a big crowd",
+		icon = "🌳",
 		width = 56,
 		scale = 1.6,
 		laps = 3,
@@ -1581,6 +1964,9 @@ Tracks.List = {
 		id = "canyon",
 		name = "Canyon Climb",
 		theme = "canyon",
+		difficulty = "Medium",
+		feature = "Rolling hills under giant mesas",
+		icon = "🏜️",
 		width = 52,
 		scale = 1.6,
 		laps = 3,
@@ -1608,6 +1994,9 @@ Tracks.List = {
 		id = "neon",
 		name = "Neon Eight",
 		theme = "neon",
+		difficulty = "Medium",
+		feature = "Figure-eight with a bridge crossover",
+		icon = "🌃",
 		width = 50,
 		scale = 1.5,
 		laps = 3,
@@ -1632,7 +2021,10 @@ Tracks.List = {
 	},
 } :: { Track.TrackDef }
 
--- A Grand Prix is every track in order.
+-- Tracks that can come up in map voting.
+Tracks.VotePool = { "sunny", "canyon", "neon" }
+
+-- A Grand Prix is every track in order (kept for a future cup mode).
 Tracks.Cup = { name = "Starter Cup", tracks = { "sunny", "canyon", "neon" } }
 
 function Tracks.get(id: string): Track.TrackDef
@@ -1641,6 +2033,9 @@ function Tracks.get(id: string): Track.TrackDef
 			return t
 		end
 	end
+	if id == LobbyLayout.PracticeTrack.id then
+		return LobbyLayout.PracticeTrack
+	end
 	error(`unknown track {id}`)
 end
 
@@ -1648,17 +2043,98 @@ return Tracks
 ]]></string>
         </Properties>
       </Item>
+      <Item class="ModuleScript" referent="18">
+        <Properties>
+          <string name="Name">Voting</string>
+          <string name="Source"><![CDATA[--!strict
+-- Map voting: pick three track options each round, count votes, choose the
+-- winner. Pure logic so it can be tested; the server owns the actual votes.
+
+local Voting = {}
+
+Voting.OptionCount = 3
+Voting.VoteSeconds = 20
+
+-- Picks `count` different tracks from `pool` (a list of ids), avoiding the
+-- track that was just raced when there are enough others. `random` returns 0..1.
+function Voting.pickOptions(pool: { string }, count: number, random: () -> number, lastTrack: string?): { string }
+	local candidates = {}
+	for _, id in pool do
+		if id ~= lastTrack then
+			table.insert(candidates, id)
+		end
+	end
+	if #candidates < count and lastTrack and table.find(pool, lastTrack) then
+		table.insert(candidates, lastTrack)
+	end
+	-- Fisher-Yates shuffle, then take the first `count`.
+	for i = #candidates, 2, -1 do
+		local j = math.floor(random() * i) + 1
+		candidates[i], candidates[j] = candidates[j], candidates[i]
+	end
+	local out = {}
+	for i = 1, math.min(count, #candidates) do
+		out[i] = candidates[i]
+	end
+	return out
+end
+
+-- votes: voter id -> track id. Only votes for listed options count.
+function Voting.tally(options: { string }, votes: { [any]: string }): { [string]: number }
+	local counts = {}
+	for _, id in options do
+		counts[id] = 0
+	end
+	for _, choice in votes do
+		if counts[choice] ~= nil then
+			counts[choice] += 1
+		end
+	end
+	return counts
+end
+
+-- Highest vote count wins; ties (including nobody voting) are broken at random.
+function Voting.winner(options: { string }, votes: { [any]: string }, random: () -> number): string
+	assert(#options > 0, "no options to vote on")
+	local counts = Voting.tally(options, votes)
+	local best, tied = -1, {}
+	for _, id in options do
+		local n = counts[id]
+		if n > best then
+			best, tied = n, { id }
+		elseif n == best then
+			table.insert(tied, id)
+		end
+	end
+	return tied[math.floor(random() * #tied) + 1]
+end
+
+-- Who voted for what, for the voter icons on each option.
+function Voting.votersFor(votes: { [any]: string }, option: string): { any }
+	local out = {}
+	for voter, choice in votes do
+		if choice == option then
+			table.insert(out, voter)
+		end
+	end
+	return out
+end
+
+return Voting
+]]></string>
+        </Properties>
+      </Item>
     </Item>
   </Item>
-  <Item class="ServerScriptService" referent="14">
+  <Item class="ServerScriptService" referent="19">
     <Properties>
       <string name="Name">ServerScriptService</string>
     </Properties>
-    <Item class="Folder" referent="15">
+    <Item class="Folder" referent="20">
       <Properties>
         <string name="Name">Server</string>
       </Properties>
-      <Item class="ModuleScript" referent="16">
+      <Item class="ModuleScript" referent="21">
         <Properties>
           <string name="Name">ItemService</string>
           <string name="Source"><![CDATA[-- Item boxes, rolling items, and everything items do on the track: oil
@@ -1984,21 +2460,512 @@ return ItemService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Script" referent="17">
+      <Item class="ModuleScript" referent="22">
+        <Properties>
+          <string name="Name">LobbyBuilder</string>
+          <string name="Source"><![CDATA[-- Builds the Kart Carnival lobby from LobbyLayout: spawn plaza, status board,
+-- map voting pads with miniature track displays, ready arch, garage with kart
+-- display pedestals, podium, spectator screen, photo spot, Ferris wheel,
+-- practice loop (drift circle, jump ramp, boost tunnel) and hidden tokens.
+-- Returns handles RoundService uses to update signs and displays.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local Shared = ReplicatedStorage.Shared
+local Karts = require(Shared.Karts)
+local LobbyLayout = require(Shared.LobbyLayout)
+local Track = require(Shared.Track)
+local Tracks = require(Shared.Tracks)
+local KartRig = require(ReplicatedStorage.Common.KartRig)
+local Shapes = require(ReplicatedStorage.Common.Shapes)
+
+local TrackBuilder = require(script.Parent.TrackBuilder)
+
+local LobbyBuilder = {}
+
+local PALETTE = {
+	pink = Color3.fromRGB(255, 95, 140),
+	yellow = Color3.fromRGB(255, 205, 60),
+	sky = Color3.fromRGB(90, 190, 255),
+	mint = Color3.fromRGB(110, 220, 170),
+	purple = Color3.fromRGB(160, 110, 240),
+	white = Color3.fromRGB(250, 250, 252),
+	cream = Color3.fromRGB(255, 240, 215),
+	grass = Color3.fromRGB(120, 200, 110),
+	tile = Color3.fromRGB(235, 225, 210),
+	dark = Color3.fromRGB(40, 42, 56),
+	gold = Color3.fromRGB(255, 200, 40),
+}
+local PAD_COLORS = { PALETTE.pink, PALETTE.sky, PALETTE.mint }
+
+local function cf(spot: LobbyLayout.Spot, y: number?): CFrame
+	return CFrame.new(spot.x, (y or 0) + spot.y, spot.z)
+end
+
+local function facing(spot: LobbyLayout.Spot, target: LobbyLayout.Spot, y: number): CFrame
+	local from = Vector3.new(spot.x, y, spot.z)
+	return CFrame.lookAt(from, Vector3.new(target.x, y, target.z))
+end
+
+-- A sign with a SurfaceGui on its front. Returns the title and body labels.
+local function sign(parent: Instance, size: Vector3, at: CFrame, color: Color3, title: string): (TextLabel, TextLabel)
+	local parts = Shapes.roundedBox(parent, size, 1.2, at, { color = color, collide = true })
+	local face = Shapes.box(parent, Vector3.new(size.X - 2, size.Y - 2, 0.2), at * CFrame.new(0, 0, -size.Z / 2 - 0.1), { color = PALETTE.dark })
+	local _ = parts
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 24
+	gui.LightInfluence = 0
+	gui.Parent = face
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Size = UDim2.fromScale(1, 0.32)
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Font = Enum.Font.FredokaOne
+	titleLabel.TextScaled = true
+	titleLabel.TextColor3 = PALETTE.yellow
+	titleLabel.Text = title
+	titleLabel.Parent = gui
+	local body = Instance.new("TextLabel")
+	body.Position = UDim2.fromScale(0.04, 0.34)
+	body.Size = UDim2.fromScale(0.92, 0.62)
+	body.BackgroundTransparency = 1
+	body.Font = Enum.Font.FredokaOne
+	body.TextScaled = true
+	body.TextWrapped = true
+	body.TextColor3 = PALETTE.white
+	body.Text = ""
+	body.Parent = gui
+	return titleLabel, body
+end
+
+local function prompt(parent: BasePart, action: string, object: string, key: Enum.KeyCode?): ProximityPrompt
+	local p = Instance.new("ProximityPrompt")
+	p.ActionText = action
+	p.ObjectText = object
+	p.KeyboardKeyCode = key or Enum.KeyCode.E
+	p.MaxActivationDistance = 16
+	p.RequiresLineOfSight = false
+	p.HoldDuration = 0.15
+	p.Parent = parent
+	return p
+end
+
+---------------------------------------------------------------------------
+-- Decorations
+---------------------------------------------------------------------------
+local function balloonCluster(parent: Instance, at: CFrame)
+	local colors = { PALETTE.pink, PALETTE.yellow, PALETTE.sky, PALETTE.mint, PALETTE.purple }
+	for i = 1, 5 do
+		local a = i / 5 * math.pi * 2
+		local offset = Vector3.new(math.cos(a) * 2.2, 14 + (i % 2) * 2.5, math.sin(a) * 2.2)
+		Shapes.ellipsoid(parent, Vector3.new(3.4, 4.2, 3.4), at + offset, { color = colors[i], reflectance = 0.15 })
+		Shapes.box(parent, Vector3.new(0.08, offset.Y - 2, 0.08), at + Vector3.new(offset.X / 2, (offset.Y - 2) / 2, offset.Z / 2), { color = PALETTE.white })
+	end
+end
+
+local function tent(parent: Instance, at: CFrame, color: Color3, size: number)
+	local s = size
+	Shapes.pillar(parent, 16 * s, 8 * s, at * CFrame.new(0, 4 * s, 0), { color = PALETTE.cream, collide = true })
+	for i = 0, 3 do
+		local d = (16 - i * 3.6) * s
+		Shapes.pillar(parent, d, 2 * s, at * CFrame.new(0, (9 + i * 2) * s, 0), { color = if i % 2 == 0 then color else PALETTE.white })
+	end
+	Shapes.ball(parent, 1.6 * s, at * CFrame.new(0, 17.4 * s, 0), { color = PALETTE.yellow })
+	Shapes.box(parent, Vector3.new(0.2, 4 * s, 3 * s), at * CFrame.new(0, 20 * s, 1.5 * s), { color = color })
+end
+
+local function stringLights(parent: Instance, a: Vector3, b: Vector3)
+	local colors = { PALETTE.yellow, PALETTE.pink, PALETTE.sky, PALETTE.mint }
+	local n = math.floor((b - a).Magnitude / 4)
+	for i = 0, n do
+		local t = i / n
+		local sag = math.sin(t * math.pi) * 3
+		Shapes.ball(parent, 0.9, CFrame.new(a:Lerp(b, t) - Vector3.new(0, sag, 0)), { color = colors[i % #colors + 1], material = Enum.Material.Neon })
+	end
+end
+
+local function ferrisWheel(parent: Instance, spot: LobbyLayout.Spot)
+	local base = cf(spot) * CFrame.Angles(0, math.rad(30), 0)
+	for _, side in { -1, 1 } do
+		Shapes.box(parent, Vector3.new(2, 48, 2), base * CFrame.new(side * 14, 22, -6) * CFrame.Angles(0, 0, math.rad(side * -16)), { color = PALETTE.white, collide = true })
+		Shapes.box(parent, Vector3.new(2, 48, 2), base * CFrame.new(side * 14, 22, 6) * CFrame.Angles(0, 0, math.rad(side * -16)), { color = PALETTE.white, collide = true })
+	end
+	-- The wheel turns on each client (Main.client spins models with a "Spin" attribute).
+	local wheel = Instance.new("Model")
+	wheel.Name = "FerrisWheel"
+	local hubCf = base * CFrame.new(0, 44, 0)
+	local hub = Shapes.tube(wheel, 5, 14, hubCf * CFrame.Angles(0, math.rad(90), 0), { color = PALETTE.yellow })
+	wheel.PrimaryPart = hub
+	local radius = 34
+	local cabins = 10
+	for i = 0, 35 do
+		local a = i / 36 * math.pi * 2
+		Shapes.ball(wheel, 1.4, hubCf * CFrame.new(math.cos(a) * radius, math.sin(a) * radius, 0), { color = PALETTE.pink, material = Enum.Material.Neon })
+	end
+	for i = 0, cabins - 1 do
+		local a = i / cabins * math.pi * 2
+		local p = Vector3.new(math.cos(a) * radius, math.sin(a) * radius, 0)
+		Shapes.box(wheel, Vector3.new(0.8, radius, 0.8), hubCf * CFrame.new(p / 2) * CFrame.Angles(0, 0, a + math.pi / 2), { color = PALETTE.white })
+		local colors = { PALETTE.pink, PALETTE.sky, PALETTE.mint, PALETTE.purple, PALETTE.yellow }
+		Shapes.ellipsoid(wheel, Vector3.new(6, 5, 5), hubCf * CFrame.new(p - Vector3.new(0, 3, 0)), { color = colors[i % #colors + 1] })
+	end
+	wheel:SetAttribute("Spin", 0.12)
+	wheel.Parent = parent
+end
+
+-- Little themed model for each track on the voting pads.
+local function miniature(parent: Instance, trackId: string, at: CFrame)
+	local def = Tracks.get(trackId)
+	local theme = Tracks.Themes[def.theme]
+	local function c(t: { number }): Color3
+		return Color3.fromRGB(t[1], t[2], t[3])
+	end
+	local folder = Instance.new("Model")
+	folder.Name = `Mini_{trackId}`
+	Shapes.disc(folder, 14, 1, at * CFrame.new(0, 0.5, 0), { color = c(theme.ground) })
+	-- A loop of road on the base.
+	for i = 0, 15 do
+		local a = i / 16 * math.pi * 2
+		Shapes.box(folder, Vector3.new(2.6, 0.3, 2.4), at * CFrame.new(math.cos(a) * 4.5, 1.1, math.sin(a) * 4.5) * CFrame.Angles(0, -a, 0), { color = c(theme.road) })
+	end
+	if def.theme == "sunny" then
+		Shapes.pillar(folder, 0.8, 4, at * CFrame.new(0, 3, 0), { color = Color3.fromRGB(140, 95, 60) })
+		Shapes.ball(folder, 4, at * CFrame.new(0, 5.6, 0), { color = Color3.fromRGB(90, 180, 80) })
+	elseif def.theme == "canyon" then
+		for i, w in { 6, 4.6, 3.2 } do
+			Shapes.pillar(folder, w, 1.4, at * CFrame.new(0, 1.2 + i * 1.4, 0), { color = c(theme.wall):Lerp(Color3.new(1, 1, 1), i * 0.08) })
+		end
+	elseif def.theme == "neon" then
+		for i, h in { 6, 9, 4.5 } do
+			local x = (i - 2) * 2
+			Shapes.box(folder, Vector3.new(1.6, h, 1.6), at * CFrame.new(x, 1 + h / 2, 0), { color = Color3.fromRGB(30, 26, 50) })
+			Shapes.box(folder, Vector3.new(1.7, 0.3, 1.7), at * CFrame.new(x, 1 + h * 0.7, 0), { color = c(theme.accent), material = Enum.Material.Neon })
+		end
+	else
+		Shapes.ball(folder, 4, at * CFrame.new(0, 3.5, 0), { color = c(theme.accent) })
+	end
+	folder.Parent = parent
+end
+
+---------------------------------------------------------------------------
+-- Build
+---------------------------------------------------------------------------
+export type Handles = {
+	setStatus: (title: string, body: string) -> (),
+	setVoteOption: (index: number, info: any?) -> (),
+	setPodium: (rows: { any }) -> (),
+	setSpectator: (title: string, body: string) -> (),
+	setKartDisplay: (slot: number, name: string?, kartId: string?, look: any?) -> (),
+	readyPrompt: ProximityPrompt,
+	garagePrompt: ProximityPrompt,
+	spectatePrompt: ProximityPrompt,
+	practicePrompt: ProximityPrompt,
+	collectibles: { BasePart },
+}
+
+function LobbyBuilder.build(): Handles
+	local old = Workspace:FindFirstChild("Lobby")
+	if old then
+		old:Destroy()
+	end
+	local lobby = Instance.new("Folder")
+	lobby.Name = "Lobby"
+	local O = LobbyLayout.Origin
+	local spawnSpot = LobbyLayout.Spawn
+
+	-- Ground: soft grass everywhere, a tiled plaza, paths to each area.
+	Shapes.box(lobby, Vector3.new(900, 2, 1000), CFrame.new(O.x, -1, O.z + 120), { color = PALETTE.grass, collide = true, name = "Ground" })
+	Shapes.disc(lobby, LobbyLayout.PlazaRadius * 2, 0.4, cf(spawnSpot, 0.2), { color = PALETTE.tile, collide = true })
+	Shapes.disc(lobby, LobbyLayout.PlazaRadius * 2 - 6, 0.42, cf(spawnSpot, 0.21), { color = PALETTE.cream, collide = true })
+	for i = 0, 7 do
+		local a = i / 8 * math.pi * 2
+		Shapes.disc(lobby, 8, 0.45, cf(spawnSpot, 0.23) * CFrame.new(math.cos(a) * 34, 0, math.sin(a) * 34), { color = PAD_COLORS[i % 3 + 1] })
+	end
+	local spawn = Instance.new("SpawnLocation")
+	spawn.Anchored = true
+	spawn.Size = Vector3.new(14, 0.5, 14)
+	spawn.CFrame = cf(spawnSpot, 0.5)
+	spawn.Transparency = 1
+	spawn.CanCollide = false
+	spawn.Neutral = true
+	spawn.Duration = 0
+	spawn.Parent = lobby
+	local fountain = Shapes.pillar(lobby, 10, 3, cf(spawnSpot, 1.5) * CFrame.new(0, 0, 18), { color = PALETTE.white, collide = true })
+	local _ = fountain
+	Shapes.disc(lobby, 8.6, 0.4, cf(spawnSpot, 3.1) * CFrame.new(0, 0, 18), { color = PALETTE.sky, material = Enum.Material.Glass, transparency = 0.2 })
+	Shapes.ellipsoid(lobby, Vector3.new(5, 7, 5), cf(spawnSpot, 6) * CFrame.new(0, 0, 18), { color = PALETTE.yellow, reflectance = 0.2 })
+
+	local function path(a: LobbyLayout.Spot, b: LobbyLayout.Spot, width: number)
+		local pa, pb = Vector3.new(a.x, 0.15, a.z), Vector3.new(b.x, 0.15, b.z)
+		Shapes.box(lobby, Vector3.new(width, 0.3, (pb - pa).Magnitude), CFrame.lookAt((pa + pb) / 2, pb), { color = PALETTE.tile, collide = true })
+	end
+	path(spawnSpot, LobbyLayout.VotePads[2], 20)
+	path(spawnSpot, LobbyLayout.Garage, 16)
+	path(spawnSpot, LobbyLayout.ReadyArch, 16)
+	path(spawnSpot, LobbyLayout.SpectatorScreen, 14)
+	path(spawnSpot, LobbyLayout.Podium, 14)
+	path(spawnSpot, { x = spawnSpot.x, y = 0, z = spawnSpot.z + 170 }, 18)
+
+	-- Status board: what's happening and the countdown, readable from spawn.
+	local boardCf = facing(LobbyLayout.StatusBoard, spawnSpot, 22)
+	for _, side in { -1, 1 } do
+		Shapes.pillar(lobby, 3, 24, boardCf * CFrame.new(side * 26, -10, 1.5), { color = PALETTE.white, collide = true })
+	end
+	local statusTitle, statusBody = sign(lobby, Vector3.new(52, 20, 3), boardCf, PALETTE.pink, "KART CARNIVAL")
+
+	-- Voting pads with miniature track displays and info signs.
+	local voteTitles, voteBodies = {}, {}
+	for i, pad in LobbyLayout.VotePads do
+		Shapes.disc(lobby, LobbyLayout.VotePadSize, 0.6, cf(pad, 0.3), { color = PAD_COLORS[i], collide = true, name = `VotePad{i}` })
+		Shapes.disc(lobby, LobbyLayout.VotePadSize - 4, 0.62, cf(pad, 0.31), { color = PALETTE.white, collide = true })
+		Shapes.disc(lobby, LobbyLayout.VotePadSize - 8, 0.64, cf(pad, 0.32), { color = PAD_COLORS[i], collide = true })
+		local displayCf = cf(pad, 0) * CFrame.new(0, 0, -20)
+		Shapes.pillar(lobby, 16, 5, displayCf * CFrame.new(0, 2.5, 0), { color = PALETTE.cream, collide = true })
+		local title, body = sign(lobby, Vector3.new(22, 14, 2), facing({ x = pad.x, y = 0, z = pad.z - 30 }, spawnSpot, 16), PAD_COLORS[i], `OPTION {i}`)
+		voteTitles[i], voteBodies[i] = title, body
+	end
+	local miniFolder = Instance.new("Folder")
+	miniFolder.Name = "Miniatures"
+	miniFolder.Parent = lobby
+
+	-- Ready arch.
+	local arch = LobbyLayout.ReadyArch
+	local archCf = cf(arch, 0) * CFrame.Angles(0, math.rad(90), 0)
+	Shapes.arch(lobby, 22, 3, 4, archCf, { color = PALETTE.yellow, collide = true }, 14)
+	Shapes.disc(lobby, 20, 0.5, cf(arch, 0.25), { color = PALETTE.mint, collide = true })
+	local readySign = Shapes.box(lobby, Vector3.new(4, 4, 4), cf(arch, 2), { color = PALETTE.mint, transparency = 1, collide = false })
+	local readyPrompt = prompt(readySign, "Ready up", "Join the next race")
+	local readyTitle, readyBody = sign(lobby, Vector3.new(14, 6, 1.5), cf(arch, 14.5) * CFrame.Angles(0, math.rad(90), 0), PALETTE.mint, "READY UP")
+	readyBody.Text = "Walk in or press E"
+	local _ = readyTitle
+
+	-- Garage with kart display pedestals.
+	local garageSpot = LobbyLayout.Garage
+	-- Turned so the door (local front) faces the plaza to the west.
+	local garageCf = cf(garageSpot, 0) * CFrame.Angles(0, math.rad(90), 0)
+	Shapes.roundedBox(lobby, Vector3.new(60, 26, 40), 6, garageCf * CFrame.new(0, 13, 0), { color = PALETTE.sky, collide = true })
+	Shapes.ellipsoid(lobby, Vector3.new(62, 16, 42), garageCf * CFrame.new(0, 26, 0), { color = PALETTE.white })
+	Shapes.arch(lobby, 22, 2.4, 2, garageCf * CFrame.new(0, 0, -20.5), { color = PALETTE.yellow }, 12)
+	Shapes.box(lobby, Vector3.new(20, 11, 0.6), garageCf * CFrame.new(0, 5.5, -20.2), { color = PALETTE.dark })
+	local garageDoor = Shapes.box(lobby, Vector3.new(6, 6, 6), garageCf * CFrame.new(0, 3, -24), { color = PALETTE.dark, transparency = 1 })
+	local garagePrompt = prompt(garageDoor, "Customize kart", "Garage")
+	local gTitle = sign(lobby, Vector3.new(26, 7, 1.5), garageCf * CFrame.new(0, 31, -20), PALETTE.yellow, "GARAGE")
+	local _ = gTitle
+	local displays = Instance.new("Folder")
+	displays.Name = "KartDisplays"
+	displays.Parent = lobby
+	for _, spot in LobbyLayout.KartDisplays do
+		Shapes.disc(lobby, 12, 1.2, cf(spot, 0.6), { color = PALETTE.white, collide = true })
+		Shapes.disc(lobby, 10, 1.25, cf(spot, 0.62), { color = PALETTE.purple, collide = true })
+	end
+
+	-- Podium for the last race's top three.
+	local podium = LobbyLayout.Podium
+	local podiumCf = facing(podium, spawnSpot, 0)
+	local stepHeights = { 7, 4.5, 2.5 }
+	local stepX = { 0, -11, 11 }
+	local stepColors = { PALETTE.gold, Color3.fromRGB(200, 210, 225), Color3.fromRGB(230, 150, 80) }
+	for place = 1, 3 do
+		local h = stepHeights[place]
+		Shapes.roundedBox(lobby, Vector3.new(10, h, 10), 1.5, podiumCf * CFrame.new(stepX[place], h / 2, 0), { color = stepColors[place], collide = true })
+	end
+	local podiumKarts = Instance.new("Folder")
+	podiumKarts.Name = "PodiumKarts"
+	podiumKarts.Parent = lobby
+	local podiumTitle, podiumBody = sign(lobby, Vector3.new(30, 8, 1.5), podiumCf * CFrame.new(0, 20, 6), PALETTE.gold, "LAST RACE")
+	local _ = podiumTitle
+	podiumBody.Text = "No races yet"
+
+	-- Spectator screen.
+	local screenSpot = LobbyLayout.SpectatorScreen
+	local screenCf = facing(screenSpot, spawnSpot, 16)
+	for _, side in { -1, 1 } do
+		Shapes.pillar(lobby, 2.5, 18, screenCf * CFrame.new(side * 17, -7, 1), { color = PALETTE.dark, collide = true })
+	end
+	local spectatorTitle, spectatorBody = sign(lobby, Vector3.new(34, 18, 2), screenCf, PALETTE.purple, "LIVE RACE")
+	spectatorBody.Text = "No race running"
+	local spectateSpot = Shapes.box(lobby, Vector3.new(4, 4, 4), screenCf * CFrame.new(0, -13, -8), { color = PALETTE.dark, transparency = 1 })
+	local spectatePrompt = prompt(spectateSpot, "Watch race", "Spectator screen")
+
+	-- Photo spot: a backdrop with a marker to stand on.
+	local photo = LobbyLayout.PhotoSpot
+	local photoCf = facing(photo, spawnSpot, 0)
+	Shapes.arch(lobby, 30, 3, 3, photoCf * CFrame.new(0, 0, 8), { color = PALETTE.pink, collide = true }, 14)
+	Shapes.box(lobby, Vector3.new(30, 16, 1), photoCf * CFrame.new(0, 8, 9.5), { color = PALETTE.cream, collide = true })
+	local photoTitle, photoBody = sign(lobby, Vector3.new(22, 6, 1), photoCf * CFrame.new(0, 10, 8.5), PALETTE.pink, "KART CARNIVAL")
+	local _ = photoTitle
+	photoBody.Text = "Say cheese!"
+	Shapes.disc(lobby, 8, 0.4, photoCf * CFrame.new(0, 0.2, -4), { color = PALETTE.yellow, collide = true })
+	for i = 1, 14 do
+		local a = i * 2.39
+		local colors = { PALETTE.pink, PALETTE.yellow, PALETTE.sky, PALETTE.mint }
+		Shapes.ball(lobby, 1.2, photoCf * CFrame.new(math.cos(a) * 11, 6 + (i % 5) * 2, 9) , { color = colors[i % 4 + 1] })
+	end
+
+	-- Decorations.
+	ferrisWheel(lobby, LobbyLayout.FerrisWheel)
+	local tentColors = { PALETTE.pink, PALETTE.sky, PALETTE.purple, PALETTE.mint }
+	for i, offset in { { -150, 10 }, { -165, 130 }, { 175, -100 }, { 60, -170 }, { -60, -175 } } do
+		tent(lobby, CFrame.new(O.x + offset[1], 0, O.z + offset[2]), tentColors[i % 4 + 1], 1 + (i % 2) * 0.3)
+	end
+	for _, offset in { { 36, 30 }, { -36, 30 }, { 36, -30 }, { -36, -30 } } do
+		balloonCluster(lobby, CFrame.new(O.x + offset[1], 0, O.z + offset[2]))
+		Shapes.pillar(lobby, 1, 16, CFrame.new(O.x + offset[1], 8, O.z + offset[2]), { color = PALETTE.white, collide = true })
+	end
+	stringLights(lobby, Vector3.new(O.x + 36, 16, O.z + 30), Vector3.new(O.x - 36, 16, O.z + 30))
+	stringLights(lobby, Vector3.new(O.x + 36, 16, O.z - 30), Vector3.new(O.x - 36, 16, O.z - 30))
+	stringLights(lobby, Vector3.new(O.x + 36, 16, O.z - 30), Vector3.new(O.x + 36, 16, O.z + 30))
+	stringLights(lobby, Vector3.new(O.x - 36, 16, O.z - 30), Vector3.new(O.x - 36, 16, O.z + 30))
+
+	-- Practice loop: open track with boost tunnel, jump ramp and drift circle.
+	local area = LobbyLayout.PracticeArea
+	Shapes.box(lobby, Vector3.new(area.max.x - area.min.x, 0.3, area.max.z - area.min.z), CFrame.new((area.min.x + area.max.x) / 2, 0.1, (area.min.z + area.max.z) / 2), { color = Color3.fromRGB(150, 210, 140), collide = true })
+	local _, practice = TrackBuilder.build(LobbyLayout.PracticeTrack.id, { folderName = "PracticeTrack", ground = false, scenery = false })
+	local drift = LobbyLayout.DriftCircle
+	Shapes.disc(lobby, drift.radius * 2, 0.35, cf(drift.center, 0.12), { color = PALETTE.white, collide = true })
+	Shapes.disc(lobby, drift.radius * 2 - 4, 0.37, cf(drift.center, 0.13), { color = Color3.fromRGB(70, 72, 90), collide = true })
+	Shapes.disc(lobby, 10, 0.4, cf(drift.center, 0.14), { color = PALETTE.pink, collide = true })
+	local dTitle, dBody = sign(lobby, Vector3.new(16, 6, 1), cf(drift.center, 6) * CFrame.new(0, 0, -drift.radius - 4), PALETTE.purple, "DRIFT CIRCLE")
+	local _ = dTitle
+	dBody.Text = "Hold drift and go round!"
+	-- Boost tunnel arches over the boost pads.
+	local padDistances = {}
+	for _, pad in Track.pads(practice) do
+		table.insert(padDistances, pad.distance)
+	end
+	if #padDistances > 0 then
+		local from, to = math.min(table.unpack(padDistances)) - 20, math.max(table.unpack(padDistances)) + 20
+		for d = from, to, 8 do
+			local p, tan = Track.at(practice, d)
+			-- Arches are built across the local x/y plane, so facing along the road spans it.
+			local at = CFrame.lookAt(Vector3.new(p.x, p.y, p.z), Vector3.new(p.x + tan.x, p.y, p.z + tan.z))
+			local ring = math.floor(d / 8) % 2
+			Shapes.arch(lobby, LobbyLayout.PracticeTrack.width + 6, 2, 3, at, { color = if ring == 0 then PALETTE.pink else PALETTE.yellow, collide = false }, 12)
+		end
+	end
+	local practiceStart = Track.spot(practice, practice.length - 30, 0)
+	local practiceSign = Shapes.box(lobby, Vector3.new(4, 4, 4), CFrame.new(practiceStart.x, 2, practiceStart.z - 30), { color = PALETTE.dark, transparency = 1 })
+	local practicePrompt = prompt(practiceSign, "Drive practice kart", "Practice loop")
+	local pTitle, pBody = sign(lobby, Vector3.new(18, 7, 1.5), CFrame.lookAt(Vector3.new(practiceStart.x, 9, practiceStart.z - 32), Vector3.new(spawnSpot.x, 9, spawnSpot.z)), PALETTE.sky, "PRACTICE")
+	local _ = pTitle
+	pBody.Text = "Press E to drive"
+
+	-- Hidden collectibles: spinning golden tokens.
+	local tokens = {}
+	local tokenFolder = Instance.new("Folder")
+	tokenFolder.Name = "Tokens"
+	tokenFolder.Parent = lobby
+	for i, spot in LobbyLayout.Collectibles do
+		local token = Shapes.tube(tokenFolder, 4, 0.8, cf(spot, 1.5) * CFrame.Angles(0, 0, 0), { color = PALETTE.gold, material = Enum.Material.Neon, name = `Token{i}` })
+		token:SetAttribute("Spin", 2)
+		token:SetAttribute("TokenId", i)
+		table.insert(tokens, token)
+	end
+
+	lobby.Parent = Workspace
+
+	-- Handles -------------------------------------------------------------
+	local function setKartDisplay(slot: number, name: string?, kartId: string?, look: any?)
+		local existing = displays:FindFirstChild(`Slot{slot}`)
+		if existing then
+			existing:Destroy()
+		end
+		local spot = LobbyLayout.KartDisplays[slot]
+		if not spot or not name then
+			return
+		end
+		local at = CFrame.new(spot.x, 1.3, spot.z) * CFrame.Angles(0, math.rad(90), 0) -- face the plaza
+		local kart = KartRig.build(kartId or Karts.Default, name, at, displays, look)
+		kart.Name = `Slot{slot}`
+		kart.PrimaryPart.Anchored = true
+		local tag = kart:FindFirstChild("NameTag")
+		local label = tag and tag:FindFirstChildOfClass("TextLabel")
+		if label then
+			label.Text = name
+		end
+	end
+
+	local function setPodium(rows: { any })
+		podiumKarts:ClearAllChildren()
+		local lines = {}
+		for place = 1, math.min(3, #rows) do
+			local row = rows[place]
+			local h = stepHeights[place]
+			local at = podiumCf * CFrame.new(stepX[place], h + 0.1, 0)
+			local kart = KartRig.build(row.kartId or Karts.Default, row.name, at, podiumKarts, row.look)
+			kart.PrimaryPart.Anchored = true
+			table.insert(lines, `{place}. {row.name}`)
+		end
+		podiumBody.Text = if #lines > 0 then table.concat(lines, "   ") else "No races yet"
+	end
+
+	local function setVoteOption(index: number, info: any?)
+		local title, body = voteTitles[index], voteBodies[index]
+		local mini = miniFolder:FindFirstChild(`Pad{index}`)
+		if mini then
+			mini:Destroy()
+		end
+		if not info then
+			title.Text = `OPTION {index}`
+			body.Text = "Voting opens when someone is ready"
+			return
+		end
+		title.Text = `{info.icon or ""} {info.name}`
+		body.Text = `{info.difficulty}\n{info.feature}\n{info.votes} vote{if info.votes == 1 then "" else "s"}`
+		local holder = Instance.new("Folder")
+		holder.Name = `Pad{index}`
+		holder.Parent = miniFolder
+		local pad = LobbyLayout.VotePads[index]
+		miniature(holder, info.id, cf(pad, 5) * CFrame.new(0, 0, -20))
+	end
+
+	for i = 1, #LobbyLayout.VotePads do
+		setVoteOption(i, nil)
+	end
+
+	return {
+		setStatus = function(title: string, body: string)
+			statusTitle.Text = title
+			statusBody.Text = body
+		end,
+		setVoteOption = setVoteOption,
+		setPodium = setPodium,
+		setSpectator = function(title: string, body: string)
+			spectatorTitle.Text = title
+			spectatorBody.Text = body
+		end,
+		setKartDisplay = setKartDisplay,
+		readyPrompt = readyPrompt,
+		garagePrompt = garagePrompt,
+		spectatePrompt = spectatePrompt,
+		practicePrompt = practicePrompt,
+		collectibles = tokens,
+	}
+end
+
+return LobbyBuilder
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="Script" referent="23">
         <Properties>
           <string name="Name">Main</string>
           <token name="RunContext">0</token>
           <string name="Source"><![CDATA[-- Server entry point.
 
 local RaceService = require(script.Parent.RaceService)
+local RoundService = require(script.Parent.RoundService)
 
 RaceService.start()
+RoundService.start()
 
-print("[KartRacer] server ready - pick a kart and press READY")
+print("[KartRacer] server ready - walk under the READY arch (or press READY) to race")
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="18">
+      <Item class="ModuleScript" referent="24">
         <Properties>
           <string name="Name">Net</string>
           <string name="Source"><![CDATA[-- Creates the RemoteEvents listed in Shared.RemoteNames under ReplicatedStorage.Remotes.
@@ -2023,7 +2990,100 @@ return Net
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="19">
+      <Item class="ModuleScript" referent="25">
+        <Properties>
+          <string name="Name">PracticeService</string>
+          <string name="Source"><![CDATA[-- Practice karts on the lobby loop. Anyone not in a race can take one out to
+-- try drifting, the jump ramp and the boost tunnel. Practice karts are
+-- client-driven like race karts but nothing is scored.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local Shared = ReplicatedStorage.Shared
+local LobbyLayout = require(Shared.LobbyLayout)
+local Track = require(Shared.Track)
+local KartRig = require(ReplicatedStorage.Common.KartRig)
+
+local Net = require(script.Parent.Net)
+
+local PracticeService = {}
+
+local folder = Instance.new("Folder")
+folder.Name = "PracticeKarts"
+folder.Parent = Workspace
+
+local practiceTrack = Track.build(LobbyLayout.PracticeTrack)
+local karts: { [Player]: Model } = {}
+local nextSlot = 0
+
+function PracticeService.stop(player: Player)
+	local kart = karts[player]
+	karts[player] = nil
+	if kart then
+		local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			humanoid.Sit = false
+		end
+		kart:Destroy()
+	end
+end
+
+function PracticeService.isPracticing(player: Player): boolean
+	return karts[player] ~= nil
+end
+
+function PracticeService.start(player: Player, kartId: string, look: any)
+	PracticeService.stop(player)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		return
+	end
+	nextSlot = nextSlot % 8 + 1
+	local pos, d = Track.gridSpot(practiceTrack, nextSlot)
+	local _, tan = Track.at(practiceTrack, d)
+	local yaw = math.atan2(-tan.x, -tan.z)
+	local kart = KartRig.build(kartId, player.DisplayName, CFrame.new(pos.x, pos.y, pos.z) * CFrame.Angles(0, yaw, 0), folder, look)
+	karts[player] = kart
+
+	local seat = kart:FindFirstChild("DriverSeat") :: Seat
+	humanoid.Sit = false
+	character:PivotTo(seat.CFrame + Vector3.new(0, 2, 0))
+	seat:Sit(humanoid)
+	if kart.PrimaryPart and kart.PrimaryPart:CanSetNetworkOwnership() then
+		kart.PrimaryPart:SetNetworkOwner(player)
+	end
+	-- Getting out of the seat ends practice.
+	seat:GetPropertyChangedSignal("Occupant"):Connect(function()
+		if seat.Occupant == nil then
+			task.delay(0.5, function()
+				if karts[player] == kart and seat.Occupant == nil then
+					PracticeService.stop(player)
+				end
+			end)
+		end
+	end)
+	Net.PracticeStart:FireClient(player, {
+		trackId = LobbyLayout.PracticeTrack.id,
+		theme = LobbyLayout.PracticeTrack.theme,
+		kart = kart,
+		kartId = kartId,
+		yaw = yaw,
+	})
+end
+
+function PracticeService.init()
+	Net.LeavePractice.OnServerEvent:Connect(PracticeService.stop)
+	Players.PlayerRemoving:Connect(PracticeService.stop)
+end
+
+return PracticeService
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="26">
         <Properties>
           <string name="Name">Props</string>
           <string name="Source"><![CDATA[-- Scenery models built from parts. Scenery.luau decides where they go; this
@@ -2069,28 +3129,28 @@ local builders: { [string]: (any, any, Instance) -> () } = {}
 builders.tree = function(prop, _theme, parent)
 	local s = prop.size
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
-	part(parent, Vector3.new(2, 14 * s, 2) , base * CFrame.new(0, 7 * s, 0), Color3.fromRGB(110, 75, 45), Enum.Material.Wood)
+	part(parent, Vector3.new(2, 14 * s, 2) , base * CFrame.new(0, 7 * s, 0), Color3.fromRGB(110, 75, 45), Enum.Material.SmoothPlastic)
 	local leaf = vary(Color3.fromRGB(70, 150, 60), 0.25, prop.x + prop.z)
-	part(parent, Vector3.one * 12 * s, base * CFrame.new(0, 16 * s, 0), leaf, Enum.Material.Grass, Enum.PartType.Ball)
-	part(parent, Vector3.one * 8 * s, base * CFrame.new(3 * s, 13 * s, 1 * s), leaf, Enum.Material.Grass, Enum.PartType.Ball)
+	part(parent, Vector3.one * 12 * s, base * CFrame.new(0, 16 * s, 0), leaf, Enum.Material.SmoothPlastic, Enum.PartType.Ball)
+	part(parent, Vector3.one * 8 * s, base * CFrame.new(3 * s, 13 * s, 1 * s), leaf, Enum.Material.SmoothPlastic, Enum.PartType.Ball)
 end
 
 builders.bush = function(prop, _theme, parent)
 	local s = prop.size
-	part(parent, Vector3.new(7, 5, 7) * s, CFrame.new(prop.x, prop.y + 1.5 * s, prop.z), vary(Color3.fromRGB(80, 160, 70), 0.2, prop.z), Enum.Material.Grass, Enum.PartType.Ball)
+	part(parent, Vector3.new(7, 5, 7) * s, CFrame.new(prop.x, prop.y + 1.5 * s, prop.z), vary(Color3.fromRGB(80, 160, 70), 0.2, prop.z), Enum.Material.SmoothPlastic, Enum.PartType.Ball)
 end
 
 builders.flag = function(prop, theme, parent)
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
-	part(parent, Vector3.new(0.4, 12, 0.4), base * CFrame.new(0, 6, 0), Color3.fromRGB(230, 230, 235), Enum.Material.Metal)
+	part(parent, Vector3.new(0.4, 12, 0.4), base * CFrame.new(0, 6, 0), Color3.fromRGB(230, 230, 235), Enum.Material.SmoothPlastic)
 	local colors = { rgb(theme.accent), rgb(theme.curb[1]), rgb(theme.curb[2]) }
-	part(parent, Vector3.new(0.1, 3, 5), base * CFrame.new(0, 10.5, 2.5), colors[(math.floor(prop.x) % 3) + 1], Enum.Material.Fabric)
+	part(parent, Vector3.new(0.1, 3, 5), base * CFrame.new(0, 10.5, 2.5), colors[(math.floor(prop.x) % 3) + 1], Enum.Material.SmoothPlastic)
 end
 
 builders.billboard = function(prop, theme, parent)
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
 	for _, side in { -9, 9 } do
-		part(parent, Vector3.new(1, 14, 1), base * CFrame.new(side, 7, 0), Color3.fromRGB(80, 80, 90), Enum.Material.Metal)
+		part(parent, Vector3.new(1, 14, 1), base * CFrame.new(side, 7, 0), Color3.fromRGB(80, 80, 90), Enum.Material.SmoothPlastic)
 	end
 	local board = part(parent, Vector3.new(24, 9, 0.6), base * CFrame.new(0, 16, 0), Color3.fromRGB(20, 20, 30), Enum.Material.SmoothPlastic)
 	local glow = theme.clock < 6 or theme.clock > 19
@@ -2119,7 +3179,7 @@ builders.grandstand = function(prop, theme, parent)
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
 	local steps = 5
 	for i = 0, steps - 1 do
-		local step = part(parent, Vector3.new(60, 2.5, 5), base * CFrame.new(0, 1.25 + i * 2.5, i * 4.5), Color3.fromRGB(150, 150, 160), Enum.Material.Concrete)
+		local step = part(parent, Vector3.new(60, 2.5, 5), base * CFrame.new(0, 1.25 + i * 2.5, i * 4.5), Color3.fromRGB(150, 150, 160), Enum.Material.SmoothPlastic)
 		step.CanCollide = true
 		-- Crowd: little coloured blocks.
 		for c = -27, 27, 3 do
@@ -2128,10 +3188,10 @@ builders.grandstand = function(prop, theme, parent)
 			part(parent, Vector3.new(1.4, 2, 1.2), base * CFrame.new(c, 3.5 + i * 2.5, i * 4.5 - 0.5), Color3.fromHSV(h, 0.6, 0.9), Enum.Material.SmoothPlastic)
 		end
 	end
-	local roof = part(parent, Vector3.new(64, 1, 26), base * CFrame.new(0, 20, 9) * CFrame.Angles(math.rad(-8), 0, 0), rgb(theme.accent), Enum.Material.Metal)
+	local roof = part(parent, Vector3.new(64, 1, 26), base * CFrame.new(0, 20, 9) * CFrame.Angles(math.rad(-8), 0, 0), rgb(theme.accent), Enum.Material.SmoothPlastic)
 	roof.CanCollide = true
 	for _, x in { -30, 30 } do
-		part(parent, Vector3.new(1.2, 20, 1.2), base * CFrame.new(x, 10, 20), Color3.fromRGB(90, 90, 100), Enum.Material.Metal)
+		part(parent, Vector3.new(1.2, 20, 1.2), base * CFrame.new(x, 10, 20), Color3.fromRGB(90, 90, 100), Enum.Material.SmoothPlastic)
 	end
 end
 
@@ -2139,8 +3199,8 @@ builders.rock = function(prop, theme, parent)
 	local s = prop.size
 	local color = vary(rgb(theme.wall), 0.2, prop.x)
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
-	part(parent, Vector3.new(10, 7, 8) * s, base * CFrame.new(0, 2.5 * s, 0) * CFrame.Angles(0.2, 0, 0.15), color, Enum.Material.Slate)
-	part(parent, Vector3.new(6, 5, 6) * s, base * CFrame.new(3 * s, 4.5 * s, 1 * s) * CFrame.Angles(-0.3, 0.6, 0.2), color, Enum.Material.Slate)
+	part(parent, Vector3.new(10, 7, 8) * s, base * CFrame.new(0, 2.5 * s, 0) * CFrame.Angles(0.2, 0, 0.15), color, Enum.Material.SmoothPlastic)
+	part(parent, Vector3.new(6, 5, 6) * s, base * CFrame.new(3 * s, 4.5 * s, 1 * s) * CFrame.Angles(-0.3, 0.6, 0.2), color, Enum.Material.SmoothPlastic)
 end
 
 builders.mesa = function(prop, theme, parent)
@@ -2150,7 +3210,7 @@ builders.mesa = function(prop, theme, parent)
 	local y = 0
 	for i, l in layers do
 		local color = vary(rgb(theme.wall), 0.25, i + prop.x)
-		local p = part(parent, Vector3.new(l[1], l[2], l[3]) * s, base * CFrame.new(0, (y + l[2] / 2) * s, 0), color, Enum.Material.Sandstone)
+		local p = part(parent, Vector3.new(l[1], l[2], l[3]) * s, base * CFrame.new(0, (y + l[2] / 2) * s, 0), color, Enum.Material.SmoothPlastic)
 		p.CanCollide = true
 		y += l[2]
 	end
@@ -2160,9 +3220,9 @@ builders.cactus = function(prop, _theme, parent)
 	local s = prop.size
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
 	local green = Color3.fromRGB(70, 130, 70)
-	part(parent, Vector3.new(2, 12, 2) * s, base * CFrame.new(0, 6 * s, 0), green, Enum.Material.Grass)
-	part(parent, Vector3.new(3, 1.4, 1.4) * s, base * CFrame.new(1.8 * s, 6 * s, 0), green, Enum.Material.Grass)
-	part(parent, Vector3.new(1.4, 4, 1.4) * s, base * CFrame.new(2.8 * s, 8 * s, 0), green, Enum.Material.Grass)
+	part(parent, Vector3.new(2, 12, 2) * s, base * CFrame.new(0, 6 * s, 0), green, Enum.Material.SmoothPlastic)
+	part(parent, Vector3.new(3, 1.4, 1.4) * s, base * CFrame.new(1.8 * s, 6 * s, 0), green, Enum.Material.SmoothPlastic)
+	part(parent, Vector3.new(1.4, 4, 1.4) * s, base * CFrame.new(2.8 * s, 8 * s, 0), green, Enum.Material.SmoothPlastic)
 end
 
 builders.tower = function(prop, theme, parent)
@@ -2183,7 +3243,7 @@ end
 
 builders.lamp = function(prop, theme, parent)
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
-	part(parent, Vector3.new(0.8, 16, 0.8), base * CFrame.new(0, 8, 0), Color3.fromRGB(60, 60, 80), Enum.Material.Metal)
+	part(parent, Vector3.new(0.8, 16, 0.8), base * CFrame.new(0, 8, 0), Color3.fromRGB(60, 60, 80), Enum.Material.SmoothPlastic)
 	local head = part(parent, Vector3.new(1.2, 1.2, 6), base * CFrame.new(0, 16, 2.5), rgb(theme.wall), Enum.Material.Neon)
 	local light = Instance.new("PointLight")
 	light.Color = rgb(theme.wall)
@@ -2205,13 +3265,17 @@ return Props
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="20">
+      <Item class="ModuleScript" referent="27">
         <Properties>
           <string name="Name">RaceService</string>
-          <string name="Source"><![CDATA[-- The game loop: lobby → Grand Prix (every track in the cup) → results → lobby.
--- Empty grid slots are filled with CPU drivers so solo play works. Players
--- drive their own karts on their client; the server tracks positions, laps,
--- respawns, items and points, and drives the CPU karts itself.
+          <string name="Source"><![CDATA[-- Runs one race: builds the track, puts karts on the grid, counts down,
+-- tracks positions and laps, respawns fallen karts, drives the CPU karts,
+-- runs items, and reports results. RoundService decides when races happen
+-- and who is in them.
+--
+-- Players drive their own karts on their client. The server checks progress
+-- (ordered sectors, so skipping the course never counts) and decides
+-- placings, item hits and the finish.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -2225,7 +3289,6 @@ local KartPhysics = require(Shared.KartPhysics)
 local Karts = require(Shared.Karts)
 local RaceRules = require(Shared.RaceRules)
 local Track = require(Shared.Track)
-local Tracks = require(Shared.Tracks)
 local KartRig = require(ReplicatedStorage.Common.KartRig)
 
 local ItemService = require(script.Parent.ItemService)
@@ -2234,13 +3297,12 @@ local TrackBuilder = require(script.Parent.TrackBuilder)
 
 local RaceService = {}
 
-local LOBBY_WAIT = 15 -- seconds after the first player readies up
 local LOAD_TIME = 3 -- time for clients to see the track before the countdown
-local RESULTS_TIME = 9
-local CUP_RESULTS_TIME = 14
 local END_GRACE = 4 -- after the last player finishes
+local FINISH_TIMEOUT = 30 -- once any player finishes, the rest get this long
 local FALL_DEPTH = 18
 local TICK = 1 / 20
+local RESPAWN_COOLDOWN = 2
 
 export type Entrant = {
 	id: string,
@@ -2249,27 +3311,44 @@ export type Entrant = {
 	player: Player?,
 	kartId: string,
 	look: KartBodies.Look,
-	points: number,
-	lastPlace: number,
 	profile: AIDriver.Profile,
 }
 
 export type Racer = {
 	entrant: Entrant,
 	model: Model,
-	state: KartPhysics.State?, -- CPU karts only; players simulate their own
+	state: KartPhysics.State?, -- CPU karts (and players who finished); players simulate their own
 	stats: Karts.KartStats,
 	progress: Track.Progress,
 	score: number,
 	place: number,
 	finishTime: number?,
 	invincibleUntil: number,
+	protectUntil: number, -- brief immunity after any hit, so nobody gets juggled
 	speedFactor: number,
+	lastRespawn: number,
+	-- Stats for results and awards
+	worstPlace: number,
+	hitsTaken: number,
 	-- Items (managed by ItemService)
 	item: string?,
 	uses: number,
 	itemReadyAt: number,
 	cpuUseAt: number,
+}
+
+export type ResultRow = {
+	place: number,
+	id: string,
+	name: string,
+	isCpu: boolean,
+	userId: number?,
+	time: number?,
+	finished: boolean,
+	kartId: string,
+	look: KartBodies.Look,
+	worstPlace: number,
+	hitsTaken: number,
 }
 
 type Race = {
@@ -2280,16 +3359,10 @@ type Race = {
 	endAt: number?,
 	timeLimit: number,
 	lastBroadcast: number,
+	onEnded: (({ ResultRow }, string) -> ())?,
+	ended: boolean,
 }
 
-local phase = "lobby"
-local choices: { [Player]: { kart: string, look: KartBodies.Look, ready: boolean } } = {}
-
-local function newChoice(): { kart: string, look: KartBodies.Look, ready: boolean }
-	return { kart = Karts.Default, look = KartBodies.sanitize(nil), ready = false }
-end
-local firstReadyAt: number? = nil
-local cup: { trackIndex: number, entrants: { Entrant } }? = nil
 local race: Race? = nil
 
 local kartsFolder = Instance.new("Folder")
@@ -2309,9 +3382,11 @@ end
 
 local function refreshRayFilter()
 	local ignore: { Instance } = { kartsFolder }
-	local items = Workspace:FindFirstChild("Items")
-	if items then
-		table.insert(ignore, items)
+	for _, name in { "Items", "PracticeKarts" } do
+		local f = Workspace:FindFirstChild(name)
+		if f then
+			table.insert(ignore, f)
+		end
 	end
 	for _, p in Players:GetPlayers() do
 		if p.Character then
@@ -2325,16 +3400,31 @@ end
 -- Effects (also used by ItemService)
 ---------------------------------------------------------------------------
 local Effects = {}
+RaceService.Effects = Effects
 
-function Effects.hit(racer: Racer): boolean
-	if now() < racer.invincibleUntil then
+local HIT_PROTECTION = 2.5
+
+-- Returns true if the hit landed. Overdrive and the post-hit grace period block it.
+function Effects.hit(racer: Racer, kind: string?): boolean
+	local t = now()
+	if t < racer.invincibleUntil or t < racer.protectUntil then
 		return false
 	end
+	racer.protectUntil = t + HIT_PROTECTION
+	racer.hitsTaken += 1
+	local hitKind = kind or "spin"
 	if racer.state then
-		return KartPhysics.hit(racer.state)
-	end
-	if racer.entrant.player then
-		Net.KartEvent:FireClient(racer.entrant.player, "hit")
+		if hitKind == "slow" then
+			KartPhysics.slow(racer.state, 2)
+		else
+			KartPhysics.hit(racer.state)
+		end
+		if hitKind == "launch" and racer.model.PrimaryPart then
+			local root = racer.model.PrimaryPart
+			root.AssemblyLinearVelocity += Vector3.new(0, 70, 0)
+		end
+	elseif racer.entrant.player then
+		Net.KartEvent:FireClient(racer.entrant.player, hitKind)
 	end
 	return true
 end
@@ -2356,6 +3446,12 @@ function Effects.overdrive(racer: Racer, seconds: number)
 	end
 end
 
+function Effects.warn(racer: Racer, text: string)
+	if racer.entrant.player then
+		Net.KartEvent:FireClient(racer.entrant.player, "warning", text)
+	end
+end
+
 function Effects.itemChanged(racer: Racer)
 	if racer.entrant.player then
 		Net.ItemState:FireClient(racer.entrant.player, racer.item, racer.uses, racer.itemReadyAt)
@@ -2363,62 +3459,7 @@ function Effects.itemChanged(racer: Racer)
 end
 
 ---------------------------------------------------------------------------
--- Lobby
----------------------------------------------------------------------------
-local function buildLobby()
-	local lobby = Instance.new("Model")
-	lobby.Name = "Lobby"
-	local floor = Instance.new("Part")
-	floor.Name = "Floor"
-	floor.Anchored = true
-	floor.Size = Vector3.new(120, 2, 120)
-	floor.Position = Vector3.new(0, 400, 1200)
-	floor.Material = Enum.Material.SmoothPlastic
-	floor.Color = Color3.fromRGB(40, 44, 60)
-	floor.Parent = lobby
-	local spawn = Instance.new("SpawnLocation")
-	spawn.Anchored = true
-	spawn.Size = Vector3.new(12, 1, 12)
-	spawn.Position = floor.Position + Vector3.new(0, 1.5, 0)
-	spawn.Neutral = true
-	spawn.Duration = 0
-	spawn.Color = Color3.fromRGB(255, 200, 40)
-	spawn.Material = Enum.Material.Neon
-	spawn.Parent = lobby
-	-- Showroom: every body design on display.
-	local count = #KartBodies.List
-	for i, body in KartBodies.List do
-		local x = (i - (count + 1) / 2) * 14
-		local cf = CFrame.new(floor.Position + Vector3.new(x, 1, -26)) * CFrame.Angles(0, math.pi, 0)
-		local look = KartBodies.cpuLook(i)
-		look.body = body.id
-		local display = KartRig.build(Karts.Default, body.name, cf, lobby, look)
-		display.PrimaryPart.Anchored = true
-	end
-	lobby.Parent = Workspace
-end
-
-local function lobbyState()
-	local list = {}
-	for player, c in choices do
-		table.insert(list, { name = player.DisplayName, kart = c.kart, body = c.look.body, ready = c.ready })
-	end
-	return {
-		phase = phase,
-		players = list,
-		startsAt = if firstReadyAt then firstReadyAt + LOBBY_WAIT else nil,
-		cupName = Tracks.Cup.name,
-		raceNumber = cup and cup.trackIndex,
-		raceCount = #Tracks.Cup.tracks,
-	}
-end
-
-local function broadcastLobby()
-	Net.Lobby:FireAllClients(lobbyState())
-end
-
----------------------------------------------------------------------------
--- Racing
+-- Helpers
 ---------------------------------------------------------------------------
 local function yawFromTangent(tan: Track.Vec): number
 	return math.atan2(-tan.x, -tan.z)
@@ -2437,115 +3478,14 @@ local function seatDriver(player: Player, model: Model)
 	local humanoid = character:WaitForChild("Humanoid", 5) :: Humanoid?
 	local seat = model:FindFirstChild("DriverSeat") :: Seat
 	if humanoid and seat then
+		humanoid.Sit = false
 		character:PivotTo(seat.CFrame + Vector3.new(0, 2, 0))
 		seat:Sit(humanoid)
 	end
 end
 
-local function startRace(index: number)
-	assert(cup, "no cup")
-	cup.trackIndex = index
-	local trackId = Tracks.Cup.tracks[index]
-	local _, track = TrackBuilder.build(trackId)
-	kartsFolder:ClearAllChildren()
-
-	-- Grid: race 1 puts players at the back; later races reverse the standings.
-	local order = table.clone(cup.entrants)
-	if index == 1 then
-		table.sort(order, function(a, b)
-			if a.isCpu ~= b.isCpu then
-				return a.isCpu
-			end
-			return a.id < b.id
-		end)
-	else
-		table.sort(order, function(a, b)
-			if a.points ~= b.points then
-				return a.points < b.points
-			end
-			return a.id < b.id
-		end)
-	end
-
-	local r: Race = {
-		trackId = trackId,
-		track = track,
-		racers = {},
-		goTime = now() + LOAD_TIME + RaceRules.CountdownSeconds,
-		timeLimit = track.def.laps * 120,
-		lastBroadcast = 0,
-	}
-
-	for slot, entrant in order do
-		local pos, gridD = Track.gridSpot(track, slot)
-		local _, tan = Track.at(track, gridD)
-		local yaw = yawFromTangent(tan)
-		local cf = CFrame.new(pos.x, pos.y, pos.z) * CFrame.Angles(0, yaw, 0)
-		local model = KartRig.build(entrant.kartId, entrant.name, cf, kartsFolder, entrant.look)
-		model.PrimaryPart.Anchored = true
-		local stats = Karts.get(entrant.kartId).stats
-		local racer: Racer = {
-			entrant = entrant,
-			model = model,
-			state = if entrant.isCpu then KartPhysics.newState(yaw) else nil,
-			stats = stats,
-			progress = Track.newProgress(track, gridD),
-			score = 0,
-			place = slot,
-			finishTime = nil,
-			invincibleUntil = 0,
-			speedFactor = 1,
-			item = nil,
-			uses = 0,
-			itemReadyAt = 0,
-			cpuUseAt = 0,
-		}
-		racer.score = Track.score(track, racer.progress)
-		table.insert(r.racers, racer)
-
-		if entrant.player then
-			seatDriver(entrant.player, model)
-			Net.ItemState:FireClient(entrant.player, nil, 0, 0)
-			Net.RaceStart:FireClient(entrant.player, {
-				trackId = trackId,
-				trackName = track.def.name,
-				kart = model,
-				kartId = entrant.kartId,
-				yaw = yaw,
-				goTime = r.goTime,
-				laps = track.def.laps,
-				raceNumber = index,
-				raceCount = #Tracks.Cup.tracks,
-			})
-		end
-	end
-
-	ItemService.setup(track)
-	race = r
-	phase = "racing"
-	refreshRayFilter()
-	broadcastLobby()
-
-	task.delay(r.goTime - now(), function()
-		if race ~= r then
-			return
-		end
-		for _, racer in r.racers do
-			local root = racer.model.PrimaryPart
-			if root then
-				root.Anchored = false
-				local player = racer.entrant.player
-				if player and player.Parent then
-					root:SetNetworkOwner(player)
-				else
-					root:SetNetworkOwner(nil)
-				end
-			end
-		end
-	end)
-end
-
 local function respawn(r: Race, racer: Racer)
+	racer.lastRespawn = now()
 	local d = racer.progress.distance
 	local pos = Track.spot(r.track, d, 0)
 	local _, tan = Track.at(r.track, d)
@@ -2556,12 +3496,15 @@ local function respawn(r: Race, racer: Racer)
 		racer.state.yaw = yaw
 		racer.state.drift = 0
 		racer.state.charge = 0
-	elseif racer.entrant.player then
+	end
+	if racer.entrant.player then
 		Net.KartEvent:FireClient(racer.entrant.player, "respawn", yaw)
 	end
+	-- A moment of protection so nothing hits you while getting going again.
+	racer.protectUntil = math.max(racer.protectUntil, now() + 2)
 end
 
-local function standings(r: Race)
+local function standings(r: Race): { Racer }
 	local entries = {}
 	local byId = {}
 	for _, racer in r.racers do
@@ -2578,143 +3521,258 @@ local function standings(r: Race)
 	return out
 end
 
-local function raceStateFor(r: Race, ranked: { Racer }, me: Racer)
+local function rowsOf(ranked: { Racer })
 	local rows = {}
 	for _, racer in ranked do
-		table.insert(rows, { name = racer.entrant.name, isCpu = racer.entrant.isCpu, finished = racer.finishTime ~= nil })
+		table.insert(rows, {
+			name = racer.entrant.name,
+			isCpu = racer.entrant.isCpu,
+			finished = racer.finishTime ~= nil,
+			kart = racer.model.Name,
+		})
 	end
+	return rows
+end
+
+local function raceStateFor(r: Race, ranked: { Racer }, me: Racer)
 	return {
 		place = me.place,
 		field = #ranked,
 		lap = math.clamp(me.progress.lap, 1, r.track.def.laps),
 		laps = r.track.def.laps,
 		finishTime = me.finishTime,
-		rows = rows,
+		rows = rowsOf(ranked),
+		endAt = r.endAt,
 	}
 end
 
-local function endRace(r: Race)
-	if race ~= r or not cup then
+-- A player who has finished keeps cruising under CPU control while they spectate.
+local function autopilot(racer: Racer)
+	local root = racer.model.PrimaryPart
+	if racer.state or not root then
 		return
 	end
-	race = nil
-	phase = "results"
+	local look = root.CFrame.LookVector
+	local s = KartPhysics.newState(math.atan2(-look.X, -look.Z))
+	s.speed = math.max(0, root.AssemblyLinearVelocity:Dot(Vector3.new(look.X, 0, look.Z)))
+	racer.state = s
+	if root:CanSetNetworkOwnership() then
+		root:SetNetworkOwner(nil)
+	end
+end
+
+local function finishRace(r: Race)
+	if r.ended then
+		return
+	end
+	r.ended = true
+	if race == r then
+		race = nil
+	end
 	local ranked = standings(r)
-	local rows = {}
+	local rows: { ResultRow } = {}
 	for place, racer in ranked do
-		local gained = RaceRules.pointsFor(place)
-		racer.entrant.points += gained
-		racer.entrant.lastPlace = place
 		table.insert(rows, {
 			place = place,
+			id = racer.entrant.id,
 			name = racer.entrant.name,
 			isCpu = racer.entrant.isCpu,
+			userId = racer.entrant.player and racer.entrant.player.UserId,
 			time = racer.finishTime,
-			gained = gained,
-			total = racer.entrant.points,
+			finished = racer.finishTime ~= nil,
+			kartId = racer.entrant.kartId,
+			look = racer.entrant.look,
+			worstPlace = racer.worstPlace,
+			hitsTaken = racer.hitsTaken,
 		})
 	end
 	ItemService.clear()
 	kartsFolder:ClearAllChildren()
-
-	local lastRace = cup.trackIndex >= #Tracks.Cup.tracks
-	Net.Results:FireAllClients({ kind = "race", trackName = r.track.def.name, rows = rows, lastRace = lastRace })
-	for _, entrant in cup.entrants do
-		if entrant.player and entrant.player.Parent then
-			entrant.player:LoadCharacter()
-		end
+	if r.onEnded then
+		r.onEnded(rows, r.trackId)
 	end
-
-	task.wait(RESULTS_TIME)
-	if not lastRace and cup and RaceService.humansInCup() > 0 then
-		startRace(cup.trackIndex + 1)
-		return
-	end
-
-	-- Final cup standings.
-	if cup then
-		local cupRows = {}
-		for _, e in cup.entrants do
-			table.insert(cupRows, { id = e.id, name = e.name, points = e.points, lastPlace = e.lastPlace })
-		end
-		local final = RaceRules.cupStandings(cupRows)
-		local out = {}
-		for i, row in final do
-			table.insert(out, { place = i, name = row.name, total = row.points })
-		end
-		Net.Results:FireAllClients({ kind = "cup", cupName = Tracks.Cup.name, rows = out })
-		task.wait(CUP_RESULTS_TIME)
-	end
-	RaceService.toLobby()
 end
 
-function RaceService.humansInCup(): number
-	local count = 0
-	if cup then
-		for _, e in cup.entrants do
-			if e.player and e.player.Parent then
-				count += 1
+---------------------------------------------------------------------------
+-- Public API
+---------------------------------------------------------------------------
+
+-- Starts a race. `onEnded(rows, trackId)` is called once with the final placings.
+function RaceService.startRace(trackId: string, entrants: { Entrant }, onEnded: ({ ResultRow }, string) -> ())
+	if race then
+		finishRace(race)
+	end
+	local _, track = TrackBuilder.build(trackId)
+	kartsFolder:ClearAllChildren()
+
+	-- Grid: CPUs at the front, players at the back, so players get to overtake.
+	local order = table.clone(entrants)
+	table.sort(order, function(a, b)
+		if a.isCpu ~= b.isCpu then
+			return a.isCpu
+		end
+		return a.id < b.id
+	end)
+
+	local r: Race = {
+		trackId = trackId,
+		track = track,
+		racers = {},
+		goTime = now() + LOAD_TIME + RaceRules.CountdownSeconds,
+		timeLimit = track.def.laps * 150,
+		lastBroadcast = 0,
+		onEnded = onEnded,
+		ended = false,
+	}
+
+	for slot, entrant in order do
+		local pos, gridD = Track.gridSpot(track, slot)
+		local _, tan = Track.at(track, gridD)
+		local yaw = yawFromTangent(tan)
+		local cf = CFrame.new(pos.x, pos.y, pos.z) * CFrame.Angles(0, yaw, 0)
+		local model = KartRig.build(entrant.kartId, entrant.name, cf, kartsFolder, entrant.look)
+		model.PrimaryPart.Anchored = true
+		local racer: Racer = {
+			entrant = entrant,
+			model = model,
+			state = if entrant.isCpu then KartPhysics.newState(yaw) else nil,
+			stats = Karts.get(entrant.kartId).stats,
+			progress = Track.newProgress(track, gridD),
+			score = 0,
+			place = slot,
+			finishTime = nil,
+			invincibleUntil = 0,
+			protectUntil = 0,
+			speedFactor = 1,
+			lastRespawn = 0,
+			worstPlace = slot,
+			hitsTaken = 0,
+			item = nil,
+			uses = 0,
+			itemReadyAt = 0,
+			cpuUseAt = 0,
+		}
+		racer.score = Track.score(track, racer.progress)
+		table.insert(r.racers, racer)
+	end
+
+	race = r
+	ItemService.setup(track)
+	refreshRayFilter()
+
+	for _, racer in r.racers do
+		local player = racer.entrant.player
+		if player then
+			task.spawn(function()
+				seatDriver(player, racer.model)
+				Net.ItemState:FireClient(player, nil, 0, 0)
+				Net.RaceStart:FireClient(player, {
+					trackId = trackId,
+					trackName = track.def.name,
+					theme = track.def.theme,
+					kart = racer.model,
+					kartId = racer.entrant.kartId,
+					yaw = racer.state and racer.state.yaw or yawFromTangent(select(2, Track.at(track, racer.progress.distance))),
+					goTime = r.goTime,
+					laps = track.def.laps,
+				})
+			end)
+		end
+	end
+
+	task.delay(r.goTime - now(), function()
+		if race ~= r then
+			return
+		end
+		for _, racer in r.racers do
+			local root = racer.model.PrimaryPart
+			if root then
+				root.Anchored = false
+				local player = racer.entrant.player
+				if player and player.Parent and not racer.state then
+					root:SetNetworkOwner(player)
+				else
+					root:SetNetworkOwner(nil)
+				end
+			end
+		end
+	end)
+end
+
+function RaceService.isRunning(): boolean
+	return race ~= nil
+end
+
+function RaceService.isRacing(player: Player): boolean
+	if race then
+		for _, racer in race.racers do
+			if racer.entrant.player == player then
+				return true
 			end
 		end
 	end
-	return count
+	return false
 end
 
-function RaceService.toLobby()
-	race = nil
-	cup = nil
-	phase = "lobby"
-	firstReadyAt = nil
-	ItemService.clear()
-	kartsFolder:ClearAllChildren()
-	local track = Workspace:FindFirstChild("Track")
-	if track then
-		track:Destroy()
+-- What lobby spectators see: track name and live standings.
+function RaceService.spectatorInfo()
+	local r = race
+	if not r then
+		return nil
 	end
-	for player, c in choices do
-		c.ready = false
-		if player.Character == nil then
-			player:LoadCharacter()
-		end
+	local ranked = {}
+	for _, racer in r.racers do
+		table.insert(ranked, racer)
 	end
-	broadcastLobby()
+	table.sort(ranked, function(a, b)
+		return a.place < b.place
+	end)
+	return {
+		trackName = r.track.def.name,
+		theme = r.track.def.theme,
+		rows = rowsOf(ranked),
+		goTime = r.goTime,
+	}
 end
 
-local function startCup()
-	local entrants: { Entrant } = {}
-	for player, c in choices do
-		if c.ready then
-			table.insert(entrants, {
-				id = `u{player.UserId}`,
-				name = player.DisplayName,
-				isCpu = false,
-				player = player,
-				kartId = c.kart,
-				look = c.look,
-				points = 0,
-				lastPlace = 0,
-				profile = { lane = 0, skill = 1 },
-			})
+function RaceService.abort()
+	if race then
+		finishRace(race)
+	end
+end
+
+local function findRacer(player: Player): Racer?
+	if race then
+		for _, racer in race.racers do
+			if racer.entrant.player == player then
+				return racer
+			end
 		end
 	end
-	local cpuIndex = 0
-	while #entrants < RaceRules.MaxRacers do
-		cpuIndex += 1
-		local driver = Karts.CpuDrivers[cpuIndex]
-		table.insert(entrants, {
-			id = `cpu{cpuIndex}`,
-			name = driver.name,
-			isCpu = true,
-			kartId = driver.kart,
-			look = KartBodies.cpuLook(cpuIndex),
-			points = 0,
-			lastPlace = 0,
-			profile = { lane = ((cpuIndex % 3) - 1) * 0.6, skill = 0.45 + (cpuIndex % 4) * 0.15 },
-		})
+	return nil
+end
+
+function RaceService.useItem(player: Player, aimBack: boolean?)
+	local racer = findRacer(player)
+	if racer and race and now() >= race.goTime and not racer.finishTime then
+		ItemService.use(race.track, race.racers, racer, Effects, aimBack == true)
 	end
-	cup = { trackIndex = 1, entrants = entrants }
-	firstReadyAt = nil
-	startRace(1)
+end
+
+-- Manual recovery: puts a stuck kart back on the road (with a short cooldown).
+function RaceService.requestRespawn(player: Player)
+	local racer = findRacer(player)
+	if racer and race and now() >= race.goTime and now() - racer.lastRespawn > RESPAWN_COOLDOWN and not racer.finishTime then
+		respawn(race, racer)
+	end
+end
+
+function RaceService.removePlayer(player: Player)
+	local racer = findRacer(player)
+	if racer and race then
+		racer.model:Destroy()
+		table.remove(race.racers, table.find(race.racers, racer) :: number)
+	end
 end
 
 ---------------------------------------------------------------------------
@@ -2758,17 +3816,22 @@ local function tickRace(r: Race)
 		if not root then
 			continue
 		end
+		local player = racer.entrant.player
 		local pos = vec(root.Position)
 		local proj = Track.project(track, pos, racer.progress.index)
 		local roadY = Track.spot(track, proj.distance, 0).y
 		if proj.gap > track.def.width + Track.ShoulderWidth * 2 or root.Position.Y < roadY - FALL_DEPTH then
 			respawn(r, racer)
 		elseif Track.updateProgress(track, racer.progress, proj) then
-			local player = racer.entrant.player
 			if racer.progress.lap > track.def.laps and not racer.finishTime then
 				racer.finishTime = t - r.goTime
 				if player then
 					Net.Notify:FireClient(player, "FINISH!")
+					autopilot(racer)
+					-- Once any player finishes, the rest have a limited time left.
+					if not r.endAt then
+						r.endAt = t + FINISH_TIMEOUT
+					end
 				end
 			elseif player and racer.progress.lap == track.def.laps then
 				Net.Notify:FireClient(player, "FINAL LAP!")
@@ -2778,7 +3841,6 @@ local function tickRace(r: Race)
 		end
 		racer.score = Track.score(track, racer.progress)
 
-		local player = racer.entrant.player
 		if player then
 			if not player.Parent then
 				continue
@@ -2791,6 +3853,9 @@ local function tickRace(r: Race)
 	end
 
 	local ranked = standings(r)
+	for _, racer in ranked do
+		racer.worstPlace = math.max(racer.worstPlace, racer.place)
+	end
 
 	-- CPU pace: catch up when far behind, ease off when running away from players.
 	local leaderScore = ranked[1] and ranked[1].score or 0
@@ -2820,113 +3885,23 @@ local function tickRace(r: Race)
 	end
 
 	if humansLeft == 0 then
-		task.spawn(RaceService.toLobby)
+		finishRace(r)
 		return
 	end
-	if humansRacing == 0 and not r.endAt then
-		r.endAt = t + END_GRACE
+	if humansRacing == 0 then
+		r.endAt = math.min(r.endAt or math.huge, t + END_GRACE)
 	end
 	if (r.endAt and t >= r.endAt) or t - r.goTime > r.timeLimit then
-		task.spawn(endRace, r)
+		finishRace(r)
 	end
-end
-
----------------------------------------------------------------------------
--- Remotes
----------------------------------------------------------------------------
-local function findRacer(player: Player): Racer?
-	if race then
-		for _, racer in race.racers do
-			if racer.entrant.player == player then
-				return racer
-			end
-		end
-	end
-	return nil
 end
 
 function RaceService.start()
-	buildLobby()
-
-	Players.PlayerAdded:Connect(function(player)
-		choices[player] = newChoice()
-		task.delay(1, broadcastLobby)
-	end)
-	for _, player in Players:GetPlayers() do
-		choices[player] = newChoice()
-	end
-	Players.PlayerRemoving:Connect(function(player)
-		choices[player] = nil
-		local racer = findRacer(player)
-		if racer then
-			racer.model:Destroy()
-			table.remove(race.racers, table.find(race.racers, racer) :: number)
-		end
-		broadcastLobby()
-	end)
-
-	Net.ChooseKart.OnServerEvent:Connect(function(player, kartId)
-		local c = choices[player]
-		if c and phase == "lobby" then
-			c.kart = Karts.get(tostring(kartId)).id
-			broadcastLobby()
-		end
-	end)
-	Net.ChooseLook.OnServerEvent:Connect(function(player, look)
-		local c = choices[player]
-		if c and phase == "lobby" then
-			c.look = KartBodies.sanitize(look)
-			broadcastLobby()
-		end
-	end)
-	Net.Ready.OnServerEvent:Connect(function(player, isReady)
-		local c = choices[player]
-		if c and phase == "lobby" then
-			c.ready = isReady == true
-			if c.ready and not firstReadyAt then
-				firstReadyAt = now()
-			end
-			broadcastLobby()
-		end
-	end)
-	Net.UseItem.OnServerEvent:Connect(function(player)
-		local racer = findRacer(player)
-		if racer and race and now() >= race.goTime then
-			ItemService.use(race.track, race.racers, racer, Effects)
-		end
-	end)
-
-	-- Lobby: start when everyone is ready, or LOBBY_WAIT after the first ready.
-	task.spawn(function()
-		while true do
-			task.wait(1)
-			if phase == "lobby" then
-				local total, ready = 0, 0
-				for _, c in choices do
-					total += 1
-					if c.ready then
-						ready += 1
-					end
-				end
-				if ready == 0 then
-					firstReadyAt = nil
-				elseif ready == total or (firstReadyAt and now() >= firstReadyAt + LOBBY_WAIT) then
-					local ok, err = pcall(startCup)
-					if not ok then
-						warn("[RaceService] could not start the cup:", err)
-						RaceService.toLobby()
-					end
-				end
-				broadcastLobby()
-			end
-		end
-	end)
-
 	task.spawn(function()
 		while true do
 			task.wait(TICK)
 			local r = race
-			if r then
+			if r and not r.ended then
 				local ok, err = pcall(tickRace, r)
 				if not ok then
 					warn("[RaceService] race tick failed:", err)
@@ -2947,20 +3922,532 @@ function RaceService.start()
 			task.defer(refreshRayFilter)
 		end)
 	end)
+	Players.PlayerRemoving:Connect(RaceService.removePlayer)
 end
 
 return RaceService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="21">
+      <Item class="ModuleScript" referent="28">
+        <Properties>
+          <string name="Name">RoundService</string>
+          <string name="Source"><![CDATA[-- The round loop:
+--   lobby → (someone readies up) → ready countdown → map voting (20s)
+--   → race → results → back to the lobby
+--
+-- Players explore the Kart Carnival freely. Only players who ready up race
+-- and vote; everyone else can keep practising or watch. Late joiners spawn in
+-- the lobby and can ready up for the next race. Empty grid slots are filled
+-- with CPU drivers, so one player can race alone.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local Shared = ReplicatedStorage.Shared
+local KartBodies = require(Shared.KartBodies)
+local Karts = require(Shared.Karts)
+local LobbyLayout = require(Shared.LobbyLayout)
+local RaceRules = require(Shared.RaceRules)
+local Tracks = require(Shared.Tracks)
+local Voting = require(Shared.Voting)
+
+local LobbyBuilder = require(script.Parent.LobbyBuilder)
+local Net = require(script.Parent.Net)
+local PracticeService = require(script.Parent.PracticeService)
+local RaceService = require(script.Parent.RaceService)
+
+local RoundService = {}
+
+local READY_WAIT = 10 -- seconds after the first ready-up before voting opens
+local RESULTS_TIME = 10
+local TICK = 0.25
+
+type Choice = { kart: string, look: KartBodies.Look, ready: boolean }
+
+local phase: "lobby" | "voting" | "racing" | "results" = "lobby"
+local deadline: number? = nil
+local choices: { [Player]: Choice } = {}
+local options: { string } = {}
+local votes: { [number]: string } = {} -- UserId -> track id
+local voters: { [Player]: boolean } = {}
+local lastTrack: string? = nil
+local lastResults: { any } = {}
+local winner: string? = nil
+local handles: LobbyBuilder.Handles
+local foundTokens: { [Player]: { [number]: boolean } } = {}
+local dirty = true
+
+local function now(): number
+	return Workspace:GetServerTimeNow()
+end
+
+local function choiceOf(player: Player): Choice
+	local c = choices[player]
+	if not c then
+		c = { kart = Karts.Default, look = KartBodies.sanitize(nil), ready = false }
+		choices[player] = c
+	end
+	return c
+end
+
+local function rootOf(player: Player): BasePart?
+	local character = player.Character
+	return character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+end
+
+---------------------------------------------------------------------------
+-- State for clients and signs
+---------------------------------------------------------------------------
+local function optionInfo(id: string)
+	local def = Tracks.get(id)
+	local voterIds = Voting.votersFor(votes, id)
+	return {
+		id = id,
+		name = def.name,
+		icon = def.icon or "🏁",
+		difficulty = def.difficulty or "Medium",
+		feature = def.feature or "",
+		theme = def.theme,
+		votes = #voterIds,
+		voters = voterIds,
+	}
+end
+
+local function roundState()
+	local players = {}
+	for player, c in choices do
+		if player.Parent then
+			table.insert(players, {
+				userId = player.UserId,
+				name = player.DisplayName,
+				ready = c.ready,
+				racing = RaceService.isRacing(player),
+				voter = voters[player] == true,
+			})
+		end
+	end
+	local opts = {}
+	for _, id in options do
+		table.insert(opts, optionInfo(id))
+	end
+	return {
+		phase = phase,
+		deadline = deadline,
+		players = players,
+		options = opts,
+		winner = winner,
+		spectate = RaceService.spectatorInfo(),
+		lastResults = lastResults,
+	}
+end
+
+local function countReady(): (number, number)
+	local total, ready = 0, 0
+	for player, c in choices do
+		if player.Parent then
+			total += 1
+			if c.ready and not RaceService.isRacing(player) then
+				ready += 1
+			end
+		end
+	end
+	return total, ready
+end
+
+local function secondsLeft(): number
+	return if deadline then math.max(0, math.ceil(deadline - now())) else 0
+end
+
+local function updateSigns()
+	local _, ready = countReady()
+	if phase == "lobby" then
+		if deadline then
+			handles.setStatus("GET READY!", `{ready} racer{if ready == 1 then "" else "s"} ready\nVoting opens in {secondsLeft()}s`)
+		else
+			handles.setStatus("KART CARNIVAL", "Step under the READY arch\n(or press READY) to join the next race")
+		end
+	elseif phase == "voting" then
+		handles.setStatus("VOTE FOR A TRACK!", `Stand on a pad or use the menu\n{secondsLeft()}s left`)
+	elseif phase == "racing" then
+		local info = RaceService.spectatorInfo()
+		handles.setStatus("RACE IN PROGRESS", if info then `{info.trackName}\nReady up to join the next one` else "")
+	elseif phase == "results" then
+		handles.setStatus("RESULTS", `Back to the lobby in {secondsLeft()}s`)
+	end
+
+	for i = 1, #LobbyLayout.VotePads do
+		local id = options[i]
+		handles.setVoteOption(i, if id and (phase == "voting" or phase == "racing") then optionInfo(id) else nil)
+	end
+
+	local info = RaceService.spectatorInfo()
+	if info then
+		local lines = {}
+		for place, row in info.rows do
+			if place > 8 then
+				break
+			end
+			table.insert(lines, `{place}. {row.name}{if row.finished then " ✓" else ""}`)
+		end
+		handles.setSpectator(`LIVE: {info.trackName}`, table.concat(lines, "\n"))
+	else
+		handles.setSpectator("LIVE RACE", "No race running.\nReady up to start one!")
+	end
+end
+
+local function broadcast()
+	dirty = false
+	Net.Round:FireAllClients(roundState())
+	updateSigns()
+end
+
+local function refreshDisplays()
+	local slot = 0
+	for player, c in choices do
+		if player.Parent then
+			slot += 1
+			if slot <= #LobbyLayout.KartDisplays then
+				handles.setKartDisplay(slot, player.DisplayName, c.kart, c.look)
+			end
+		end
+	end
+	for s = slot + 1, #LobbyLayout.KartDisplays do
+		handles.setKartDisplay(s, nil)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Phases
+---------------------------------------------------------------------------
+local function toLobby()
+	phase = "lobby"
+	deadline = nil
+	options = {}
+	votes = {}
+	voters = {}
+	winner = nil
+	dirty = true
+end
+
+local function startVoting()
+	phase = "voting"
+	deadline = now() + Voting.VoteSeconds
+	votes = {}
+	voters = {}
+	options = Voting.pickOptions(Tracks.VotePool, Voting.OptionCount, math.random, lastTrack)
+	for player, c in choices do
+		if c.ready and player.Parent then
+			voters[player] = true
+		end
+	end
+	for player in voters do
+		Net.Notify:FireClient(player, "Vote for a track!")
+	end
+	dirty = true
+end
+
+local function onRaceEnded(rows: { any }, trackId: string)
+	phase = "results"
+	deadline = now() + RESULTS_TIME
+	lastTrack = trackId
+	lastResults = {}
+	for i, row in rows do
+		if i <= 3 then
+			table.insert(lastResults, { name = row.name, kartId = row.kartId, look = row.look })
+		end
+	end
+	handles.setPodium(lastResults)
+
+	local def = Tracks.get(trackId)
+	local out = {}
+	for _, row in rows do
+		table.insert(out, {
+			place = row.place,
+			name = row.name,
+			isCpu = row.isCpu,
+			userId = row.userId,
+			time = row.time,
+			finished = row.finished,
+		})
+	end
+	Net.Results:FireAllClients({ trackName = def.name, rows = out })
+
+	-- Racers go back to the lobby; they ready up again for the next race.
+	for _, row in rows do
+		if row.userId then
+			local player = Players:GetPlayerByUserId(row.userId)
+			if player then
+				choiceOf(player).ready = false
+				task.defer(function()
+					if player.Parent then
+						player:LoadCharacter()
+					end
+				end)
+			end
+		end
+	end
+	dirty = true
+end
+
+local function startRace()
+	-- Highest vote wins; ties are broken at random.
+	local trackId = Voting.winner(options, votes, math.random)
+	winner = trackId
+	local entrants = {}
+	for player in voters do
+		if player.Parent then
+			local c = choiceOf(player)
+			PracticeService.stop(player)
+			table.insert(entrants, {
+				id = `u{player.UserId}`,
+				name = player.DisplayName,
+				isCpu = false,
+				player = player,
+				kartId = c.kart,
+				look = c.look,
+				profile = { lane = 0, skill = 1 },
+			})
+		end
+	end
+	if #entrants == 0 then
+		toLobby()
+		return
+	end
+	local cpuIndex = 0
+	while #entrants < RaceRules.MaxRacers do
+		cpuIndex += 1
+		local driver = Karts.CpuDrivers[cpuIndex]
+		table.insert(entrants, {
+			id = `cpu{cpuIndex}`,
+			name = driver.name,
+			isCpu = true,
+			kartId = driver.kart,
+			look = KartBodies.cpuLook(cpuIndex),
+			profile = { lane = ((cpuIndex % 3) - 1) * 0.6, skill = 0.45 + (cpuIndex % 4) * 0.15 },
+		})
+	end
+	phase = "racing"
+	deadline = nil
+	-- Voters are now racers; their ready flag is spent.
+	for player in voters do
+		choiceOf(player).ready = false
+	end
+	voters = {}
+	dirty = true
+	local ok, err = pcall(RaceService.startRace, trackId, entrants, onRaceEnded)
+	if not ok then
+		warn("[RoundService] could not start the race:", err)
+		RaceService.abort()
+		toLobby()
+	end
+end
+
+local function step()
+	local t = now()
+	local _, ready = countReady()
+
+	if phase == "lobby" then
+		if ready == 0 then
+			if deadline then
+				deadline = nil
+				dirty = true
+			end
+		else
+			if not deadline then
+				deadline = t + READY_WAIT
+				dirty = true
+			end
+			-- Everyone in the server ready? No need to wait.
+			local total = 0
+			for player in choices do
+				if player.Parent and not RaceService.isRacing(player) then
+					total += 1
+				end
+			end
+			if t >= (deadline :: number) or ready == total then
+				startVoting()
+			end
+		end
+	elseif phase == "voting" then
+		-- Standing on a vote pad counts as a vote.
+		for player in voters do
+			local root = rootOf(player)
+			if root then
+				local pad = LobbyLayout.padAt(root.Position.X, root.Position.Z)
+				if pad and options[pad] and votes[player.UserId] ~= options[pad] then
+					votes[player.UserId] = options[pad]
+					dirty = true
+				end
+			end
+		end
+		local anyVoter = next(voters) ~= nil
+		if not anyVoter then
+			toLobby()
+		elseif t >= (deadline :: number) then
+			startRace()
+		end
+	elseif phase == "racing" then
+		if not RaceService.isRunning() and phase == "racing" then
+			-- The race ended without results (everyone left).
+			toLobby()
+		end
+	elseif phase == "results" then
+		if t >= (deadline :: number) then
+			toLobby()
+		end
+	end
+
+	-- Hidden tokens in the lobby.
+	for _, player in Players:GetPlayers() do
+		local root = rootOf(player)
+		if root then
+			for _, token in handles.collectibles do
+				local id = token:GetAttribute("TokenId")
+				local found = foundTokens[player]
+				if found and not found[id] and (token.Position - root.Position).Magnitude < 7 then
+					found[id] = true
+					local count = 0
+					for _ in found do
+						count += 1
+					end
+					Net.Notify:FireClient(player, `Golden token found! {count}/{#handles.collectibles}`)
+				end
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Remotes and setup
+---------------------------------------------------------------------------
+local function setReady(player: Player, isReady: boolean)
+	if RaceService.isRacing(player) then
+		return
+	end
+	local c = choiceOf(player)
+	if c.ready == isReady then
+		return
+	end
+	c.ready = isReady
+	if phase == "voting" then
+		if isReady then
+			voters[player] = true
+		else
+			voters[player] = nil
+			votes[player.UserId] = nil
+		end
+	end
+	Net.Notify:FireClient(player, if isReady then "You're in the next race!" else "You left the next race.")
+	dirty = true
+end
+
+function RoundService.start()
+	handles = LobbyBuilder.build()
+	PracticeService.init()
+
+	local function onPlayer(player: Player)
+		choiceOf(player)
+		foundTokens[player] = {}
+		dirty = true
+		refreshDisplays()
+	end
+	Players.PlayerAdded:Connect(onPlayer)
+	for _, player in Players:GetPlayers() do
+		onPlayer(player)
+	end
+	Players.PlayerRemoving:Connect(function(player)
+		choices[player] = nil
+		voters[player] = nil
+		votes[player.UserId] = nil
+		foundTokens[player] = nil
+		dirty = true
+		task.defer(refreshDisplays)
+	end)
+
+	Net.Ready.OnServerEvent:Connect(function(player, isReady)
+		setReady(player, isReady == true)
+	end)
+	handles.readyPrompt.Triggered:Connect(function(player)
+		setReady(player, not choiceOf(player).ready)
+	end)
+	Net.Vote.OnServerEvent:Connect(function(player, trackId)
+		if phase == "voting" and voters[player] and table.find(options, trackId) then
+			votes[player.UserId] = trackId
+			dirty = true
+		end
+	end)
+	Net.ChooseKart.OnServerEvent:Connect(function(player, kartId)
+		if not RaceService.isRacing(player) then
+			choiceOf(player).kart = Karts.get(tostring(kartId)).id
+			refreshDisplays()
+			dirty = true
+		end
+	end)
+	Net.ChooseLook.OnServerEvent:Connect(function(player, look)
+		if not RaceService.isRacing(player) then
+			choiceOf(player).look = KartBodies.sanitize(look)
+			refreshDisplays()
+			dirty = true
+		end
+	end)
+	Net.UseItem.OnServerEvent:Connect(function(player, aimBack)
+		RaceService.useItem(player, aimBack == true)
+	end)
+	Net.Respawn.OnServerEvent:Connect(RaceService.requestRespawn)
+
+	handles.garagePrompt.Triggered:Connect(function(player)
+		Net.OpenGarage:FireClient(player)
+	end)
+	handles.spectatePrompt.Triggered:Connect(function(player)
+		if RaceService.isRunning() and not RaceService.isRacing(player) then
+			Net.Spectate:FireClient(player)
+		else
+			Net.Notify:FireClient(player, "No race to watch right now.")
+		end
+	end)
+	handles.practicePrompt.Triggered:Connect(function(player)
+		if RaceService.isRacing(player) then
+			return
+		end
+		local c = choiceOf(player)
+		PracticeService.start(player, c.kart, c.look)
+	end)
+
+	task.spawn(function()
+		local lastSecond = -1
+		while true do
+			task.wait(TICK)
+			local ok, err = pcall(step)
+			if not ok then
+				warn("[RoundService]", err)
+			end
+			-- Rebroadcast on changes, and once a second so countdowns tick on signs.
+			local second = math.floor(now())
+			if dirty or second ~= lastSecond then
+				lastSecond = second
+				local ok2, err2 = pcall(broadcast)
+				if not ok2 then
+					warn("[RoundService] broadcast failed:", err2)
+				end
+			end
+		end
+	end)
+end
+
+return RoundService
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="29">
         <Properties>
           <string name="Name">TrackBuilder</string>
           <string name="Source"><![CDATA[-- Builds a track's parts from its centerline: road, curbs and lane lines,
 -- grass shoulders, walls, bridge pillars, boost pads, the start line, the
--- ground, scenery (see Scenery.luau / Props.luau) and the theme's lighting.
+-- ground and scenery (see Scenery.luau / Props.luau). Lighting is applied on
+-- each client (common/Atmos), so lobby players keep the lobby's look.
 
-local Lighting = game:GetService("Lighting")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
@@ -3005,69 +4492,31 @@ local function decal(parent: Instance, size: Vector3, cf: CFrame, color: Color3,
 	return p
 end
 
--- Sky, sun and colour grading for a theme. Replaces the previous track's.
-local function applyLighting(theme: any)
-	for _, name in { "KartAtmosphere", "KartBloom", "KartGrade", "KartSunRays" } do
-		local old = Lighting:FindFirstChild(name)
-		if old then
-			old:Destroy()
-		end
-	end
-	Lighting.ClockTime = theme.clock
-	Lighting.Brightness = theme.brightness
-	Lighting.Ambient = rgb(theme.ambient)
-	Lighting.OutdoorAmbient = rgb(theme.ambient)
-	Lighting.GlobalShadows = true
-	Lighting.EnvironmentDiffuseScale = 0.5
-	Lighting.EnvironmentSpecularScale = 0.5
-
-	local a = theme.atmosphere
-	local atmosphere = Instance.new("Atmosphere")
-	atmosphere.Name = "KartAtmosphere"
-	atmosphere.Density = a.density
-	atmosphere.Haze = a.haze
-	atmosphere.Glare = a.glare
-	atmosphere.Color = rgb(a.color)
-	atmosphere.Decay = rgb(a.decay)
-	atmosphere.Parent = Lighting
-
-	local bloom = Instance.new("BloomEffect")
-	bloom.Name = "KartBloom"
-	bloom.Intensity = theme.bloom
-	bloom.Size = 24
-	bloom.Threshold = 0.9
-	bloom.Parent = Lighting
-
-	local grade = Instance.new("ColorCorrectionEffect")
-	grade.Name = "KartGrade"
-	grade.TintColor = rgb(theme.tint)
-	grade.Saturation = theme.saturation
-	grade.Contrast = 0.08
-	grade.Parent = Lighting
-
-	local rays = Instance.new("SunRaysEffect")
-	rays.Name = "KartSunRays"
-	rays.Intensity = if theme.clock > 6 and theme.clock < 19 then 0.08 else 0
-	rays.Spread = 0.6
-	rays.Parent = Lighting
-end
-
 local function flatAngle(a: Vector3, b: Vector3): number
 	return math.atan2(b.X - a.X, b.Z - a.Z)
 end
 
-function TrackBuilder.build(trackId: string): (Folder, Track.Built)
+export type Options = {
+	folderName: string?, -- default "Track"; the lobby practice loop uses its own folder
+	ground: boolean?, -- build ground under the track (default true)
+	scenery: boolean?, -- place scenery props (default true)
+}
+
+function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.Built)
+	local opts = options or {}
 	local def = Tracks.get(trackId)
 	local track = Track.build(def)
 	local theme = Tracks.Themes[def.theme]
 	local roadColor, shoulderColor, wallColor = rgb(theme.road), rgb(theme.shoulder), rgb(theme.wall)
+	local walled = def.walls ~= false
 
-	local old = Workspace:FindFirstChild("Track")
+	local folderName = opts.folderName or "Track"
+	local old = Workspace:FindFirstChild(folderName)
 	if old then
 		old:Destroy()
 	end
 	local folder = Instance.new("Folder")
-	folder.Name = "Track"
+	folder.Name = folderName
 	folder:SetAttribute("TrackId", trackId)
 
 	local half = def.width / 2
@@ -3091,16 +4540,16 @@ function TrackBuilder.build(trackId: string): (Folder, Track.Built)
 		local cf = CFrame.lookAt((a + b) / 2, b)
 		local segLen = length + extra
 
-		local road = part(folder, "Road", Vector3.new(def.width, 1, segLen), cf * CFrame.new(0, -0.5, 0), roadColor, Enum.Material.Asphalt)
+		local road = part(folder, "Road", Vector3.new(def.width, 1, segLen), cf * CFrame.new(0, -0.5, 0), roadColor, Enum.Material.SmoothPlastic)
 		road:SetAttribute("Surface", "road")
-		for _, side in { -1, 1 } do
-			local shoulder = part(folder, "Shoulder", Vector3.new(sw, 1, segLen), cf * CFrame.new(side * (half + sw / 2), -0.52, 0), shoulderColor, Enum.Material.Grass)
+		for _, side in (if walled then { -1, 1 } else {}) :: { number } do
+			local shoulder = part(folder, "Shoulder", Vector3.new(sw, 1, segLen), cf * CFrame.new(side * (half + sw / 2), -0.52, 0), shoulderColor, Enum.Material.SmoothPlastic)
 			shoulder:SetAttribute("Surface", "offroad")
 			part(folder, "Wall", Vector3.new(1, 4, segLen), cf * CFrame.new(side * (half + sw + 0.5), 1.5, 0), wallColor, if def.theme == "neon" then Enum.Material.Neon else Enum.Material.SmoothPlastic)
 		end
 
 		-- Red-and-white curbs through corners, lane lines on the straights.
-		if turn > 0.02 then
+		if turn > 0.02 and walled then
 			for _, side in { -1, 1 } do
 				decal(markings, Vector3.new(3, 0.1, length + 0.6), cf * CFrame.new(side * (half - 1.5), 0.05, 0), curbColors[i % 2 + 1], neon)
 			end
@@ -3132,19 +4581,21 @@ function TrackBuilder.build(trackId: string): (Folder, Track.Built)
 			end
 			if not blocked then
 				local h = p.y - minY
-				part(folder, "Pillar", Vector3.new(6, h, 6), CFrame.new(p.x, minY + h / 2 - 1, p.z), wallColor, Enum.Material.Concrete)
+				part(folder, "Pillar", Vector3.new(6, h, 6), CFrame.new(p.x, minY + h / 2 - 1, p.z), wallColor, Enum.Material.SmoothPlastic)
 			end
 		end
 	end
 
 	-- Ground under everything.
-	local margin = 300
-	local sizeX, sizeZ = maxX - minX + margin * 2, maxZ - minZ + margin * 2
-	local tile = 1000
-	for x = minX - margin, minX - margin + sizeX, tile do
-		for z = minZ - margin, minZ - margin + sizeZ, tile do
-			local g = part(folder, "Ground", Vector3.new(tile, 2, tile), CFrame.new(x + tile / 2, minY - 1.6, z + tile / 2), rgb(theme.ground), Enum.Material.Grass)
-			g:SetAttribute("Surface", "offroad")
+	if opts.ground ~= false then
+		local margin = 300
+		local sizeX, sizeZ = maxX - minX + margin * 2, maxZ - minZ + margin * 2
+		local tile = 1000
+		for x = minX - margin, minX - margin + sizeX, tile do
+			for z = minZ - margin, minZ - margin + sizeZ, tile do
+				local g = part(folder, "Ground", Vector3.new(tile, 2, tile), CFrame.new(x + tile / 2, minY - 1.6, z + tile / 2), rgb(theme.ground), Enum.Material.SmoothPlastic)
+				g:SetAttribute("Surface", "offroad")
+			end
 		end
 	end
 
@@ -3176,19 +4627,43 @@ function TrackBuilder.build(trackId: string): (Folder, Track.Built)
 	end
 	-- Banner over the line.
 	for _, side in { -1, 1 } do
-		part(folder, "BannerPost", Vector3.new(1.5, 18, 1.5), lineCf * CFrame.new(side * (half + 4), 9, 0), wallColor, Enum.Material.Metal)
+		part(folder, "BannerPost", Vector3.new(1.5, 18, 1.5), lineCf * CFrame.new(side * (half + 4), 9, 0), wallColor, Enum.Material.SmoothPlastic)
 	end
 	part(folder, "Banner", Vector3.new(def.width + 10, 3, 1), lineCf * CFrame.new(0, 17, 0), rgb(theme.accent), Enum.Material.Neon)
 
-	-- Scenery around the track.
-	local scenery = Instance.new("Folder")
-	scenery.Name = "Scenery"
-	scenery.Parent = folder
-	for _, prop in Scenery.place(track) do
-		Props.build(prop, theme, scenery)
+	-- Jump ramps. The low edge faces oncoming karts; the tall back edge launches them.
+	for _, ramp in def.ramps or {} do
+		local d = ramp.t * track.length
+		local pos = v3(Track.spot(track, d, ramp.offset * (half - ramp.width / 2)))
+		local _, rampTan = Track.at(track, d)
+		local cf = CFrame.lookAt(pos, pos - v3(rampTan))
+		local wedge = Instance.new("WedgePart")
+		wedge.Name = "Ramp"
+		wedge.Anchored = true
+		wedge.Size = Vector3.new(ramp.width, 5, 18)
+		wedge.CFrame = cf * CFrame.new(0, 2.5, 0)
+		wedge.Color = rgb(theme.accent)
+		wedge.Material = Enum.Material.SmoothPlastic
+		wedge.TopSurface = Enum.SurfaceType.Smooth
+		wedge:SetAttribute("Surface", "ramp")
+		wedge.Parent = folder
+		for k = -1, 1, 2 do
+			local stripe = part(folder, "RampStripe", Vector3.new(1.2, 0.2, 18.6), cf * CFrame.new(k * (ramp.width / 2 - 1.5), 2.6, 0) * CFrame.Angles(math.atan2(5, 18), 0, 0), Color3.new(1, 1, 1), Enum.Material.Neon)
+			stripe.CanCollide = false
+			stripe.CanQuery = false
+		end
 	end
 
-	applyLighting(theme)
+	-- Scenery around the track.
+	if opts.scenery ~= false then
+		local scenery = Instance.new("Folder")
+		scenery.Name = "Scenery"
+		scenery.Parent = folder
+		for _, prop in Scenery.place(track) do
+			Props.build(prop, theme, scenery)
+		end
+	end
+
 	folder.Parent = Workspace
 	return folder, track
 end
@@ -3199,176 +4674,94 @@ return TrackBuilder
       </Item>
     </Item>
   </Item>
-  <Item class="StarterPlayer" referent="22">
+  <Item class="StarterPlayer" referent="30">
     <Properties>
       <string name="Name">StarterPlayer</string>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="23">
+    <Item class="StarterPlayerScripts" referent="31">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="Folder" referent="24">
+      <Item class="Folder" referent="32">
         <Properties>
           <string name="Name">Client</string>
         </Properties>
-        <Item class="ModuleScript" referent="25">
+        <Item class="ModuleScript" referent="33">
           <Properties>
-            <string name="Name">Hud</string>
-            <string name="Source"><![CDATA[-- All screens, built in code: lobby (pick a kart, ready up), race HUD (place,
--- lap, item slot with roulette, standings, countdown, wrong-way warning),
--- race results, cup results and touch buttons.
+            <string name="Name">GarageUI</string>
+            <string name="Source"><![CDATA[-- The garage: choose your kart type (stats), body design and paint. Opens
+-- from the GARAGE button or the garage building in the lobby.
 
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
-local Items = require(Shared:WaitForChild("Items"))
 local KartBodies = require(Shared:WaitForChild("KartBodies"))
 local Karts = require(Shared:WaitForChild("Karts"))
 
-local Hud = {}
+local UI = require(script.Parent.UI)
 
-local player = Players.LocalPlayer
-local gui = Instance.new("ScreenGui")
-gui.Name = "KartHud"
-gui.ResetOnSpawn = false
-gui.Parent = player:WaitForChild("PlayerGui")
+local GarageUI = {}
 
-local YELLOW = Color3.fromRGB(255, 210, 50)
-local PLACE_COLORS = { Color3.fromRGB(255, 210, 50), Color3.fromRGB(200, 210, 225), Color3.fromRGB(230, 140, 70) }
-
-local function frame(parent: Instance, props: { [string]: any }): Frame
-	local f = Instance.new("Frame")
-	f.BackgroundColor3 = Color3.fromRGB(16, 16, 24)
-	f.BackgroundTransparency = 0.2
-	f.BorderSizePixel = 0
-	for k, v in props do
-		(f :: any)[k] = v
-	end
-	local c = Instance.new("UICorner")
-	c.CornerRadius = UDim.new(0, 10)
-	c.Parent = f
-	f.Parent = parent
-	return f
-end
-
-local function text(parent: Instance, props: { [string]: any }): TextLabel
-	local l = Instance.new("TextLabel")
-	l.BackgroundTransparency = 1
-	l.Font = Enum.Font.GothamBlack
-	l.TextColor3 = Color3.new(1, 1, 1)
-	l.TextScaled = true
-	l.TextStrokeTransparency = 0.5
-	for k, v in props do
-		(l :: any)[k] = v
-	end
-	l.Parent = parent
-	return l
-end
-
-local function button(parent: Instance, label: string, props: { [string]: any }, onClick: () -> ()): TextButton
-	local b = Instance.new("TextButton")
-	b.Font = Enum.Font.GothamBlack
-	b.TextScaled = true
-	b.TextColor3 = Color3.new(1, 1, 1)
-	b.BorderSizePixel = 0
-	b.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-	b.Text = label
-	for k, v in props do
-		(b :: any)[k] = v
-	end
-	local c = Instance.new("UICorner")
-	c.CornerRadius = UDim.new(0, 10)
-	c.Parent = b
-	b.Parent = parent
-	b.Activated:Connect(onClick)
-	return b
-end
-
-local function ordinal(n: number): string
-	local suffix = "th"
-	if n % 100 < 11 or n % 100 > 13 then
-		suffix = ({ "st", "nd", "rd" })[n % 10] or "th"
-	end
-	return `{n}{suffix}`
-end
-
-local function fmtTime(t: number?): string
-	if not t then
-		return "--"
-	end
-	local m = math.floor(t / 60)
-	return string.format("%d:%05.2f", m, t - m * 60)
-end
-
----------------------------------------------------------------------------
--- Lobby
----------------------------------------------------------------------------
-local lobby = frame(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 620, 0, 560) })
-text(lobby, { Position = UDim2.new(0, 20, 0, 14), Size = UDim2.new(1, -40, 0, 44), Text = "KART RACER" , TextColor3 = YELLOW })
-local lobbySub = text(lobby, { Position = UDim2.new(0, 20, 0, 60), Size = UDim2.new(1, -40, 0, 22), Font = Enum.Font.GothamMedium, Text = "" })
-local cards = Instance.new("Frame")
-cards.BackgroundTransparency = 1
-cards.Position = UDim2.new(0, 20, 0, 96)
-cards.Size = UDim2.new(1, -40, 0, 170)
-cards.Parent = lobby
-local cardLayout = Instance.new("UIListLayout")
-cardLayout.FillDirection = Enum.FillDirection.Horizontal
-cardLayout.Padding = UDim.new(0, 10)
-cardLayout.Parent = cards
-local playersLabel = text(lobby, { Position = UDim2.new(0, 20, 0, 420), Size = UDim2.new(1, -40, 0, 60), Font = Enum.Font.GothamMedium, TextScaled = false, TextSize = 15, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Text = "" })
+GarageUI.onChooseKart = nil :: ((string) -> ())?
+GarageUI.onLook = nil :: ((any) -> ())?
 
 local chosenKart = Karts.Default
 local look = { body = KartBodies.Default, main = 1, accent = 10 }
-Hud.onLook = nil :: ((any) -> ())?
-local isReady = false
-local cardButtons: { [string]: TextButton } = {}
-Hud.onChooseKart = nil :: ((string) -> ())?
-Hud.onReady = nil :: ((boolean) -> ())?
+
+local panel = UI.panel(UI.Screen, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 640, 0, 520), Visible = false })
+UI.label(panel, { Position = UDim2.new(0, 20, 0, 10), Size = UDim2.new(1, -100, 0, 44), Text = "🔧 GARAGE", TextColor3 = UI.Colors.yellow, TextXAlignment = Enum.TextXAlignment.Left })
+UI.button(panel, "✕", UI.Colors.red, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 12), Size = UDim2.new(0, 52, 0, 46) }, function()
+	GarageUI.close()
+end)
 
 local function statBar(n: number, lo: number, hi: number): string
 	local filled = math.clamp(math.floor((n - lo) / (hi - lo) * 5 + 0.5), 1, 5)
-	return string.rep("■", filled) .. string.rep("□", 5 - filled)
+	return string.rep("●", filled) .. string.rep("○", 5 - filled)
 end
 
+-- Kart type cards (these set the stats).
+local cards = Instance.new("Frame")
+cards.BackgroundTransparency = 1
+cards.Position = UDim2.new(0, 20, 0, 64)
+cards.Size = UDim2.new(1, -40, 0, 160)
+cards.Parent = panel
+UI.list(cards, true, 10)
+local cardButtons: { [string]: TextButton } = {}
 for _, def in Karts.List do
 	local c = Color3.fromRGB(def.color[1], def.color[2], def.color[3])
-	local card = button(cards, "", { Size = UDim2.new(1 / 3, -7, 1, 0), BackgroundColor3 = c:Lerp(Color3.new(0, 0, 0), 0.55) }, function()
+	local card = UI.button(cards, "", c:Lerp(Color3.new(0, 0, 0), 0.55), { Size = UDim2.new(1 / 3, -7, 1, 0) }, function()
 		chosenKart = def.id
-		if Hud.onChooseKart then
-			Hud.onChooseKart(def.id)
+		if GarageUI.onChooseKart then
+			GarageUI.onChooseKart(def.id)
 		end
-		Hud.refreshCards()
+		GarageUI.refresh()
 	end)
-	text(card, { Position = UDim2.new(0, 10, 0, 8), Size = UDim2.new(1, -20, 0, 30), Text = def.name, TextColor3 = c })
-	text(card, {
-		Position = UDim2.new(0, 10, 0, 42),
-		Size = UDim2.new(1, -20, 0, 120),
-		Font = Enum.Font.GothamMedium,
+	UI.label(card, { Size = UDim2.new(1, 0, 0, 30), Text = def.name, TextColor3 = c })
+	UI.label(card, {
+		Position = UDim2.new(0, 0, 0, 34),
+		Size = UDim2.new(1, 0, 1, -34),
 		TextScaled = false,
-		TextSize = 14,
-		TextWrapped = true,
+		TextSize = 15,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextYAlignment = Enum.TextYAlignment.Top,
-		Text = `{def.blurb}\n\nSpeed  {statBar(def.stats.topSpeed, 88, 108)}\nAccel  {statBar(def.stats.accel, 44, 72)}\nTurn    {statBar(def.stats.handling, 1.9, 2.4)}\nWeight {statBar(def.stats.weight, 1, 5)}`,
+		Text = `{def.blurb}\nSpeed  {statBar(def.stats.topSpeed, 88, 108)}\nAccel  {statBar(def.stats.accel, 44, 72)}\nTurn   {statBar(def.stats.handling, 1.9, 2.4)}`,
 	})
 	cardButtons[def.id] = card
 end
 
--- Body design and paint pickers ---------------------------------------------
-local function pickerRow(y: number, title: string): Frame
-	text(lobby, { Position = UDim2.new(0, 20, 0, y), Size = UDim2.new(0, 70, 0, 30), Font = Enum.Font.GothamBold, TextScaled = false, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left, Text = title })
-	local row = Instance.new("Frame")
-	row.BackgroundTransparency = 1
-	row.Position = UDim2.new(0, 92, 0, y)
-	row.Size = UDim2.new(1, -112, 0, 30)
-	row.Parent = lobby
-	local layout = Instance.new("UIListLayout")
-	layout.FillDirection = Enum.FillDirection.Horizontal
-	layout.Padding = UDim.new(0, 6)
-	layout.Parent = row
-	return row
+local function row(y: number, title: string, height: number): Frame
+	UI.label(panel, { Position = UDim2.new(0, 20, 0, y), Size = UDim2.new(0, 80, 0, height), TextScaled = false, TextSize = 18, Text = title, TextXAlignment = Enum.TextXAlignment.Left })
+	local r = Instance.new("Frame")
+	r.BackgroundTransparency = 1
+	r.Position = UDim2.new(0, 100, 0, y)
+	r.Size = UDim2.new(1, -120, 0, height)
+	r.Parent = panel
+	local grid = Instance.new("UIGridLayout")
+	grid.CellPadding = UDim2.new(0, 6, 0, 6)
+	grid.CellSize = if height > 60 then UDim2.new(0, 160, 0, 40) else UDim2.new(0, 36, 0, 36)
+	grid.SortOrder = Enum.SortOrder.LayoutOrder
+	grid.Parent = r
+	return r
 end
 
 local bodyButtons: { [string]: TextButton } = {}
@@ -3376,150 +4769,134 @@ local mainSwatches: { TextButton } = {}
 local accentSwatches: { TextButton } = {}
 
 local function sendLook()
-	if Hud.onLook then
-		Hud.onLook(look)
+	if GarageUI.onLook then
+		GarageUI.onLook(look)
 	end
-	Hud.refreshPickers()
+	GarageUI.refresh()
 end
 
-local bodyRow = pickerRow(278, "Body")
+local bodyRow = row(238, "Body", 132)
 for _, body in KartBodies.List do
-	bodyButtons[body.id] = button(bodyRow, body.name, { Size = UDim2.new(0, 78, 1, 0), TextScaled = true, Font = Enum.Font.GothamBold }, function()
+	bodyButtons[body.id] = UI.button(bodyRow, body.name, UI.Colors.panelLight, {}, function()
 		look.body = body.id
 		sendLook()
 	end)
 end
 
-local function swatchRow(y: number, title: string, list: { TextButton }, key: string)
-	local row = pickerRow(y, title)
+local function swatches(y: number, title: string, list: { TextButton }, key: string)
+	local r = row(y, title, 36)
 	for i, c in KartBodies.Palette do
-		list[i] = button(row, "", { Size = UDim2.new(0, 30, 1, 0), BackgroundColor3 = Color3.fromRGB(c[1], c[2], c[3]) }, function()
+		list[i] = UI.button(r, "", Color3.fromRGB(c[1], c[2], c[3]), {}, function()
 			look[key] = i
 			sendLook()
 		end)
 	end
 end
-swatchRow(318, "Paint", mainSwatches, "main")
-swatchRow(358, "Trim", accentSwatches, "accent")
+swatches(384, "Paint", mainSwatches, "main")
+swatches(432, "Trim", accentSwatches, "accent")
 
-local function outline(b: GuiObject, on: boolean)
-	local stroke = b:FindFirstChildOfClass("UIStroke") or Instance.new("UIStroke")
-	stroke.Thickness = if on then 3 else 0
-	stroke.Color = YELLOW
-	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	stroke.Parent = b
-end
-
-function Hud.refreshPickers()
+function GarageUI.refresh()
+	for id, card in cardButtons do
+		UI.highlight(card, id == chosenKart)
+	end
 	for id, b in bodyButtons do
-		outline(b, id == look.body)
-		b.BackgroundColor3 = if id == look.body then Color3.fromRGB(90, 90, 120) else Color3.fromRGB(60, 60, 80)
+		UI.highlight(b, id == look.body)
 	end
 	for i, b in mainSwatches do
-		outline(b, i == look.main)
+		UI.highlight(b, i == look.main)
 	end
 	for i, b in accentSwatches do
-		outline(b, i == look.accent)
+		UI.highlight(b, i == look.accent)
 	end
 end
-Hud.refreshPickers()
+GarageUI.refresh()
 
-function Hud.refreshCards()
-	for id, card in cardButtons do
-		local stroke = card:FindFirstChildOfClass("UIStroke") or Instance.new("UIStroke")
-		stroke.Thickness = if id == chosenKart then 4 else 0
-		stroke.Color = YELLOW
-		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-		stroke.Parent = card
-	end
-end
-Hud.refreshCards()
-
-local readyButton = button(lobby, "READY", { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -16), Size = UDim2.new(0, 240, 0, 52), BackgroundColor3 = Color3.fromRGB(40, 160, 80) }, function()
-	isReady = not isReady
-	if Hud.onReady then
-		Hud.onReady(isReady)
-	end
-end)
-
-local lobbyState: any = nil
-function Hud.setLobby(state: any)
-	lobbyState = state
-	lobby.Visible = state.phase == "lobby"
-	local lines = {}
-	for _, p in state.players do
-		local kart = Karts.get(p.kart).name
-		local body = KartBodies.get(p.body).name
-		table.insert(lines, `{if p.ready then "✔" else "…"} {p.name} ({kart}, {body})`)
-		if p.name == player.DisplayName then
-			isReady = p.ready
-		end
-	end
-	playersLabel.Text = table.concat(lines, "    ")
-	readyButton.Text = if isReady then "NOT READY" else "READY"
-	readyButton.BackgroundColor3 = if isReady then Color3.fromRGB(150, 60, 60) else Color3.fromRGB(40, 160, 80)
+function GarageUI.open()
+	panel.Visible = true
+	UI.pop(panel)
 end
 
-function Hud.updateLobby()
-	local s = lobbyState
-	if not s or s.phase ~= "lobby" then
-		if s and s.phase ~= "lobby" then
-			lobbySub.Text = "Race in progress - you'll join the next cup."
-		end
-		return
-	end
-	local t = Workspace:GetServerTimeNow()
-	if s.startsAt then
-		lobbySub.Text = `{s.cupName}: {s.raceCount} races. Starting in {math.max(0, math.ceil(s.startsAt - t))}s (or when everyone is ready)`
+function GarageUI.close()
+	panel.Visible = false
+end
+
+function GarageUI.toggle()
+	if panel.Visible then
+		GarageUI.close()
 	else
-		lobbySub.Text = `{s.cupName}: {s.raceCount} races. Pick a kart and press READY. CPU drivers fill empty spots.`
+		GarageUI.open()
 	end
 end
 
----------------------------------------------------------------------------
--- Race HUD
----------------------------------------------------------------------------
+return GarageUI
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="34">
+          <Properties>
+            <string name="Name">Hud</string>
+            <string name="Source"><![CDATA[-- In-race screens: place, lap, item slot with roulette, standings, countdown,
+-- warnings, speed, touch buttons, and the results screen after each race.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Items = require(Shared:WaitForChild("Items"))
+
+local UI = require(script.Parent.UI)
+
+local Hud = {}
+
+local PLACE_COLORS = { Color3.fromRGB(255, 210, 60), Color3.fromRGB(210, 220, 235), Color3.fromRGB(240, 150, 80) }
+
 local race = Instance.new("Frame")
+race.Name = "Race"
 race.BackgroundTransparency = 1
 race.Size = UDim2.fromScale(1, 1)
 race.Visible = false
-race.Parent = gui
+race.Parent = UI.Screen
 
-local placeLabel = text(race, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -24, 1, -20), Size = UDim2.new(0, 200, 0, 110), Text = "" })
-local lapLabel = text(race, { Position = UDim2.new(0, 20, 0, 16), Size = UDim2.new(0, 220, 0, 44), Text = "" , TextXAlignment = Enum.TextXAlignment.Left })
-local trackLabel = text(race, { Position = UDim2.new(0, 20, 0, 60), Size = UDim2.new(0, 300, 0, 22), Font = Enum.Font.GothamMedium, Text = "", TextXAlignment = Enum.TextXAlignment.Left })
-local itemSlot = frame(race, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 14), Size = UDim2.new(0, 210, 0, 74) })
-local itemLabel = text(itemSlot, { Position = UDim2.new(0, 10, 0, 6), Size = UDim2.new(1, -20, 0, 40), Text = "" })
-local itemHint = text(itemSlot, { Position = UDim2.new(0, 10, 0, 48), Size = UDim2.new(1, -20, 0, 18), Font = Enum.Font.GothamMedium, Text = "" })
-local standings = frame(race, { Position = UDim2.new(0, 20, 0, 96), Size = UDim2.new(0, 190, 0, 8 * 24 + 12) })
+local placeLabel = UI.label(race, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -24, 1, -20), Size = UDim2.new(0, 210, 0, 110), Text = "" })
+local lapPanel = UI.panel(race, { Position = UDim2.new(0, 16, 0, 14), Size = UDim2.new(0, 220, 0, 74) })
+local lapLabel = UI.label(lapPanel, { Position = UDim2.new(0, 12, 0, 6), Size = UDim2.new(1, -24, 0, 40), Text = "", TextXAlignment = Enum.TextXAlignment.Left })
+local trackLabel = UI.label(lapPanel, { Position = UDim2.new(0, 12, 0, 46), Size = UDim2.new(1, -24, 0, 20), Text = "", TextColor3 = UI.Colors.muted, TextXAlignment = Enum.TextXAlignment.Left })
+
+local itemSlot = UI.panel(race, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 12), Size = UDim2.new(0, 230, 0, 92) })
+local itemIcon = UI.label(itemSlot, { Position = UDim2.new(0, 10, 0, 8), Size = UDim2.new(0, 64, 0, 64), Text = "" })
+local itemLabel = UI.label(itemSlot, { Position = UDim2.new(0, 80, 0, 10), Size = UDim2.new(1, -90, 0, 36), Text = "", TextXAlignment = Enum.TextXAlignment.Left })
+local itemHint = UI.label(itemSlot, { Position = UDim2.new(0, 80, 0, 50), Size = UDim2.new(1, -90, 0, 30), Text = "", TextColor3 = UI.Colors.muted, TextXAlignment = Enum.TextXAlignment.Left })
+
+local standings = UI.panel(race, { Position = UDim2.new(0, 16, 0, 98), Size = UDim2.new(0, 200, 0, 8 * 24 + 16) })
 local standingRows: { TextLabel } = {}
 for i = 1, 8 do
-	standingRows[i] = text(standings, {
-		Position = UDim2.new(0, 10, 0, 6 + (i - 1) * 24),
-		Size = UDim2.new(1, -20, 0, 22),
-		Font = Enum.Font.GothamBold,
+	standingRows[i] = UI.label(standings, {
+		Position = UDim2.new(0, 12, 0, 8 + (i - 1) * 24),
+		Size = UDim2.new(1, -24, 0, 22),
 		TextScaled = false,
-		TextSize = 16,
+		TextSize = 17,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Text = "",
 	})
 end
-local bigText = text(race, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.38), Size = UDim2.new(0, 500, 0, 120), Text = "", TextColor3 = YELLOW })
-local speedLabel = text(race, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -24, 1, -132), Size = UDim2.new(0, 200, 0, 30), Font = Enum.Font.GothamBold, Text = "" })
-local warnLabel = text(race, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 100), Size = UDim2.new(0, 360, 0, 40), Text = "", TextColor3 = Color3.fromRGB(255, 80, 80) })
+local bigText = UI.label(race, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.36), Size = UDim2.new(0, 520, 0, 130), Text = "", TextColor3 = UI.Colors.yellow, TextStrokeTransparency = 0.2 })
+local speedLabel = UI.label(race, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -24, 1, -132), Size = UDim2.new(0, 210, 0, 32), Text = "" })
+local warnLabel = UI.label(race, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 112), Size = UDim2.new(0, 420, 0, 42), Text = "", TextColor3 = UI.Colors.red, TextStrokeTransparency = 0.3 })
+local timeoutLabel = UI.label(race, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -24), Size = UDim2.new(0, 420, 0, 30), Text = "", TextColor3 = UI.Colors.yellow })
 
 local raceInfo: any = nil
-local item: { id: string?, uses: number, readyAt: number } = { id = nil, uses = 0, readyAt = 0 }
-local flashUntil = 0
-local flashText = ""
 local raceState: any = nil
+local item: { id: string?, uses: number, readyAt: number } = { id = nil, uses = 0, readyAt = 0 }
+local flashUntil, flashText = 0, ""
+local warnUntil, warnText = 0, ""
 
 function Hud.raceStarted(info: any)
 	raceInfo = info
 	raceState = nil
+	item = { id = nil, uses = 0, readyAt = 0 }
 	race.Visible = true
-	lobby.Visible = false
-	trackLabel.Text = `{info.trackName}  -  Race {info.raceNumber}/{info.raceCount}`
+	trackLabel.Text = info.trackName or ""
+	lapLabel.Text = `LAP 1/{info.laps or 3}`
 end
 
 function Hud.raceEnded()
@@ -3527,19 +4904,19 @@ function Hud.raceEnded()
 	raceInfo = nil
 end
 
+function Hud.isRacing(): boolean
+	return raceInfo ~= nil
+end
+
 function Hud.setRaceState(s: any)
 	raceState = s
-	if s.finishTime then
-		lapLabel.Text = fmtTime(s.finishTime)
-	else
-		lapLabel.Text = `LAP {s.lap}/{s.laps}`
-	end
-	placeLabel.Text = ordinal(s.place)
-	placeLabel.TextColor3 = PLACE_COLORS[s.place] or Color3.new(1, 1, 1)
+	lapLabel.Text = if s.finishTime then `🏁 {UI.time(s.finishTime)}` else `LAP {s.lap}/{s.laps}`
+	placeLabel.Text = UI.ordinal(s.place)
+	placeLabel.TextColor3 = PLACE_COLORS[s.place] or UI.Colors.text
 	for i, row in standingRows do
 		local r = s.rows[i]
-		row.Text = if r then `{i}. {r.name}{if r.finished then "  ✓" else ""}` else ""
-		row.TextColor3 = if r and not r.isCpu then YELLOW else Color3.new(1, 1, 1)
+		row.Text = if r then `{i}. {r.name}{if r.finished then "  🏁" else ""}` else ""
+		row.TextColor3 = if r and not r.isCpu then UI.Colors.yellow else UI.Colors.text
 	end
 end
 
@@ -3552,6 +4929,11 @@ function Hud.flash(message: string, seconds: number?)
 	flashUntil = os.clock() + (seconds or 1.5)
 end
 
+function Hud.warn(message: string, seconds: number?)
+	warnText = message
+	warnUntil = os.clock() + (seconds or 1.5)
+end
+
 function Hud.setKart(info: any)
 	if info.countdown and info.countdown > 0 then
 		local n = math.ceil(info.countdown)
@@ -3562,10 +4944,15 @@ function Hud.setKart(info: any)
 		bigText.Text = ""
 	end
 	speedLabel.Text = `{math.floor(math.abs(info.speed or 0) * 0.6 + 0.5)} km/h`
-	warnLabel.Text = if info.wrongWay then "WRONG WAY!" else ""
+	if os.clock() < warnUntil then
+		warnLabel.Text = warnText
+	else
+		warnLabel.Text = if info.wrongWay then "WRONG WAY!" elseif info.drafting then "💨 SLIPSTREAM" else ""
+		warnLabel.TextColor3 = if info.wrongWay then UI.Colors.red else UI.Colors.blue
+	end
 end
 
-function Hud.updateRace()
+function Hud.update()
 	if not raceInfo then
 		return
 	end
@@ -3573,19 +4960,28 @@ function Hud.updateRace()
 	if raceInfo.goTime and t >= raceInfo.goTime and t < raceInfo.goTime + 1 and os.clock() >= flashUntil then
 		bigText.Text = "GO!"
 	end
+	if raceState and raceState.endAt and not raceState.finishTime then
+		timeoutLabel.Text = `⏱ Race ends in {math.max(0, math.ceil(raceState.endAt - t))}s`
+	else
+		timeoutLabel.Text = ""
+	end
 	if item.id then
 		local def = Items.Defs[item.id]
 		if t < item.readyAt then
 			-- Roulette: flick through items until it lands.
 			local i = math.floor(t * 14) % #Items.Order + 1
-			itemLabel.Text = Items.Defs[Items.Order[i]].name
+			local spin = Items.Defs[Items.Order[i]]
+			itemIcon.Text = spin.icon or "?"
+			itemLabel.Text = spin.name
 			itemHint.Text = ""
 		else
+			itemIcon.Text = def.icon or "?"
 			itemLabel.Text = if item.uses > 1 then `{def.name} x{item.uses}` else def.name
-			itemHint.Text = "Press E (X / ITEM) to use"
+			itemHint.Text = "E / X / ITEM · hold S to aim back"
 		end
 	else
-		itemLabel.Text = ""
+		itemIcon.Text = "❔"
+		itemLabel.Text = "No item"
 		itemHint.Text = "Drive through a ? box"
 	end
 end
@@ -3593,40 +4989,38 @@ end
 ---------------------------------------------------------------------------
 -- Results
 ---------------------------------------------------------------------------
-local results = frame(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 460, 0, 400), Visible = false })
-local resultsTitle = text(results, { Position = UDim2.new(0, 20, 0, 12), Size = UDim2.new(1, -40, 0, 38), TextColor3 = YELLOW, Text = "" })
-local resultsBody = text(results, {
-	Position = UDim2.new(0, 24, 0, 60),
-	Size = UDim2.new(1, -48, 1, -76),
-	Font = Enum.Font.GothamBold,
+local results = UI.panel(UI.Screen, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 480, 0, 430), Visible = false })
+local resultsTitle = UI.label(results, { Position = UDim2.new(0, 20, 0, 12), Size = UDim2.new(1, -40, 0, 40), TextColor3 = UI.Colors.yellow, Text = "" })
+local resultsBody = UI.label(results, {
+	Position = UDim2.new(0, 24, 0, 62),
+	Size = UDim2.new(1, -48, 1, -130),
 	TextScaled = false,
-	TextSize = 18,
+	TextSize = 19,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	TextYAlignment = Enum.TextYAlignment.Top,
 	RichText = true,
 	Text = "",
 })
+UI.button(results, "OK", UI.Colors.green, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -14), Size = UDim2.new(0, 160, 0, 50) }, function()
+	results.Visible = false
+end)
 
 function Hud.showResults(info: any)
 	Hud.raceEnded()
+	resultsTitle.Text = `🏁 {info.trackName}`
 	local lines = {}
-	if info.kind == "race" then
-		resultsTitle.Text = `{info.trackName} results`
-		for _, r in info.rows do
-			local name = if r.isCpu then r.name else `<font color="#FFD232">{r.name}</font>`
-			table.insert(lines, `{ordinal(r.place)}  {name}   {fmtTime(r.time)}   +{r.gained}  ({r.total})`)
-		end
-		table.insert(lines, "")
-		table.insert(lines, if info.lastRace then "Final standings next..." else "Next race coming up...")
-	else
-		resultsTitle.Text = `{info.cupName} final standings`
-		for _, r in info.rows do
-			table.insert(lines, `{ordinal(r.place)}  {r.name}   {r.total} pts`)
-		end
+	for _, r in info.rows do
+		local name = if r.isCpu then r.name else `<font color="#FFD23C">{r.name}</font>`
+		local medal = ({ "🥇", "🥈", "🥉" })[r.place] or `{r.place}.`
+		table.insert(lines, `{medal}  {name}   {if r.finished then UI.time(r.time) else "DNF"}`)
+	end
+	for _, line in info.extra or {} do
+		table.insert(lines, line)
 	end
 	resultsBody.Text = table.concat(lines, "\n")
 	results.Visible = true
-	task.delay(if info.kind == "cup" then 13 else 8.5, function()
+	UI.pop(results)
+	task.delay(10, function()
 		results.Visible = false
 	end)
 end
@@ -3634,8 +5028,20 @@ end
 ---------------------------------------------------------------------------
 -- Touch buttons
 ---------------------------------------------------------------------------
-function Hud.addTouchButtons(onDrift: (boolean) -> (), onItem: () -> ())
-	local drift = button(race, "DRIFT", { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -24, 1, -170), Size = UDim2.new(0, 110, 0, 80), BackgroundColor3 = Color3.fromRGB(170, 70, 40) }, function() end)
+-- Touch controls live in their own layer so they also work on the practice loop.
+local touch = Instance.new("Frame")
+touch.Name = "Touch"
+touch.BackgroundTransparency = 1
+touch.Size = UDim2.fromScale(1, 1)
+touch.Visible = false
+touch.Parent = UI.Screen
+
+function Hud.setDriving(on: boolean)
+	touch.Visible = on
+end
+
+function Hud.addTouchButtons(onDrift: (boolean) -> (), onItem: () -> (), onReset: () -> ())
+	local drift = UI.button(touch, "DRIFT", UI.Colors.pink, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -24, 1, -176), Size = UDim2.new(0, 120, 0, 90) })
 	drift.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.Touch then
 			onDrift(true)
@@ -3646,22 +5052,27 @@ function Hud.addTouchButtons(onDrift: (boolean) -> (), onItem: () -> ())
 			onDrift(false)
 		end
 	end)
-	button(race, "ITEM", { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -144, 1, -170), Size = UDim2.new(0, 90, 0, 80), BackgroundColor3 = Color3.fromRGB(50, 110, 210) }, onItem)
+	UI.button(touch, "ITEM", UI.Colors.blue, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -154, 1, -176), Size = UDim2.new(0, 100, 0, 90) }, onItem)
+	UI.button(touch, "↺", UI.Colors.panelLight, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -264, 1, -196), Size = UDim2.new(0, 60, 0, 60) }, onReset)
 end
 
 return Hud
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="26">
+        <Item class="ModuleScript" referent="35">
           <Properties>
             <string name="Name">KartController</string>
             <string name="Source"><![CDATA[-- Drives your kart: reads input, runs KartPhysics on this client (you own the
 -- kart's physics), handles drift / items / rocket starts, and runs the chase
 -- camera.
 --
+-- Two modes: "race" (server tracks laps, respawns and items) and "practice"
+-- (the lobby loop; nothing is scored and resets happen here on the client).
+--
 -- Controls: W/S or stick to drive, A/D steer, Space or Shift to drift,
--- E to use your item. Gamepad: R2/L2 gas and brake, R1 drift, X item.
+-- E to use your item (hold S to aim it behind you), R to reset a stuck kart.
+-- Gamepad: R2/L2 gas and brake, R1 drift, X item, Y reset.
 
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
@@ -3686,6 +5097,7 @@ local camera = Workspace.CurrentCamera
 local controls = require(player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule")):GetControls()
 
 type Session = {
+	mode: string, -- "race" | "practice"
 	kart: Model,
 	track: Track.Built,
 	stats: Karts.KartStats,
@@ -3706,10 +5118,12 @@ rayParams.FilterType = Enum.RaycastFilterType.Exclude
 -- Hooks set by Main so the HUD can show speed, drift charge and warnings.
 KartController.onUpdate = nil :: ((info: any) -> ())?
 KartController.onTurbo = nil :: ((level: number) -> ())?
+KartController.onWarning = nil :: ((text: string) -> ())?
+KartController.onStopped = nil :: ((mode: string) -> ())?
 
 local function refreshRayFilter()
 	local ignore: { Instance } = {}
-	for _, name in { "Karts", "Items" } do
+	for _, name in { "Karts", "Items", "PracticeKarts" } do
 		local f = Workspace:FindFirstChild(name)
 		if f then
 			table.insert(ignore, f)
@@ -3737,10 +5151,16 @@ local function setRacingControls(racing: boolean)
 		end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.Space, Enum.KeyCode.LeftShift, Enum.KeyCode.ButtonR1)
 		ContextActionService:BindActionAtPriority("KartItem", function(_, inputState)
 			if inputState == Enum.UserInputState.Begin then
-				Remotes.UseItem:FireServer()
+				KartController.useItem()
 			end
 			return Enum.ContextActionResult.Sink
 		end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.E, Enum.KeyCode.ButtonX)
+		ContextActionService:BindActionAtPriority("KartReset", function(_, inputState)
+			if inputState == Enum.UserInputState.Begin then
+				KartController.reset()
+			end
+			return Enum.ContextActionResult.Sink
+		end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.R, Enum.KeyCode.ButtonY)
 		ContextActionService:BindActionAtPriority("KartPedals", function(action, inputState, input)
 			local down = inputState ~= Enum.UserInputState.End
 			if input.KeyCode == Enum.KeyCode.ButtonR2 then
@@ -3754,6 +5174,7 @@ local function setRacingControls(racing: boolean)
 		ContextActionService:UnbindAction("KartDrift")
 		ContextActionService:UnbindAction("KartItem")
 		ContextActionService:UnbindAction("KartPedals")
+		ContextActionService:UnbindAction("KartReset")
 		driftHeld, gasHeld, brakeHeld = false, false, false
 	end
 end
@@ -3762,15 +5183,53 @@ end
 function KartController.setDrift(on: boolean)
 	driftHeld = on
 end
+local readInput: () -> (number, number)
+
 function KartController.useItem()
-	Remotes.UseItem:FireServer()
+	local s = session
+	if not s or s.mode ~= "race" then
+		return
+	end
+	-- Holding brake/back while using an item throws or drops it behind you.
+	local throttle = readInput()
+	Remotes.UseItem:FireServer(throttle < -0.3)
 end
 
 function KartController.isRacing(): boolean
-	return session ~= nil
+	return session ~= nil and session.mode == "race"
+end
+
+function KartController.mode(): string?
+	return session and session.mode
+end
+
+-- Puts the kart back on the road. In races the server does it (with a short
+-- cooldown); on the practice loop the client does it directly.
+function KartController.reset()
+	local s = session
+	if not s or not s.kart.PrimaryPart then
+		return
+	end
+	if s.mode == "race" then
+		Remotes.Respawn:FireServer()
+		return
+	end
+	local root = s.kart.PrimaryPart
+	local proj = Track.project(s.track, Track.v(root.Position.X, root.Position.Y, root.Position.Z))
+	local pos = Track.spot(s.track, proj.distance, 0)
+	local _, tan = Track.at(s.track, proj.distance)
+	local yaw = math.atan2(-tan.x, -tan.z)
+	KartRig.place(s.kart, CFrame.new(pos.x, pos.y, pos.z) * CFrame.Angles(0, yaw, 0))
+	s.state.speed = 0
+	s.state.yaw = yaw
+	s.state.drift = 0
+	s.state.charge = 0
+	s.camYaw = yaw
+	s.hint = nil
 end
 
 local function stop()
+	local mode = session and session.mode
 	session = nil
 	setRacingControls(false)
 	camera.CameraType = Enum.CameraType.Custom
@@ -3779,9 +5238,22 @@ local function stop()
 	if humanoid then
 		camera.CameraSubject = humanoid
 	end
+	if mode and KartController.onStopped then
+		KartController.onStopped(mode)
+	end
 end
 
-local function begin(info: any)
+-- Stops driving without touching the camera (used when a racer finishes and
+-- switches to spectating while the server drives their kart home).
+function KartController.handOff()
+	if session then
+		session = nil
+		setRacingControls(false)
+		camera.FieldOfView = 70
+	end
+end
+
+local function begin(info: any, mode: string)
 	local kart: Model = info.kart
 	local deadline = os.clock() + 10
 	while (not kart or not kart.PrimaryPart) and os.clock() < deadline do
@@ -3792,14 +5264,15 @@ local function begin(info: any)
 		return
 	end
 	session = {
+		mode = mode,
 		kart = kart,
 		track = Track.build(Tracks.get(info.trackId)),
 		stats = Karts.get(info.kartId).stats,
 		state = KartPhysics.newState(info.yaw),
-		goTime = info.goTime,
+		goTime = info.goTime or (Workspace:GetServerTimeNow() - 1),
 		hint = nil,
 		throttleDownAt = nil,
-		started = false,
+		started = mode ~= "race",
 		camYaw = info.yaw,
 	}
 	refreshRayFilter()
@@ -3807,7 +5280,7 @@ local function begin(info: any)
 	camera.CameraType = Enum.CameraType.Scriptable
 end
 
-local function readInput(): (number, number)
+function readInput(): (number, number)
 	local move = controls:GetMoveVector()
 	local steer = math.clamp(move.X, -1, 1)
 	local throttle = math.clamp(-move.Z, -1, 1)
@@ -3874,12 +5347,20 @@ local function step(dt: number)
 	if root.Anchored then
 		return
 	end
+	-- Off the edge of the practice area: put the kart back.
+	if s.mode == "practice" and root.Position.Y < -25 then
+		KartController.reset()
+		return
+	end
 
 	local sensed = KartRig.sense(s.kart, rayParams)
 	local pos = Track.v(root.Position.X, root.Position.Y, root.Position.Z)
 	local proj = Track.project(s.track, pos, s.hint)
 	s.hint = proj.index
 	local surface = Track.surfaceAt(s.track, proj)
+	if s.mode == "practice" and (surface == "offroad" or surface == "wall") then
+		surface = "road" -- the practice area is open tarmac
+	end
 
 	local _, released = KartPhysics.step(s.stats, s.state, {
 		throttle = throttle,
@@ -3903,7 +5384,7 @@ local function step(dt: number)
 			drift = level,
 			boosting = s.state.boost > 0,
 			invincible = s.state.invincible > 0,
-			wrongWay = s.state.speed > 15 and Track.wrongWay(s.track, proj, fx, fz),
+			wrongWay = s.mode == "race" and s.state.speed > 15 and Track.wrongWay(s.track, proj, fx, fz),
 		})
 	end
 end
@@ -3913,8 +5394,20 @@ local function onKartEvent(kind: string, value: any)
 	if not s then
 		return
 	end
-	if kind == "hit" then
+	if kind == "warning" then
+		if KartController.onWarning then
+			KartController.onWarning(tostring(value))
+		end
+	elseif kind == "hit" or kind == "spin" then
 		KartPhysics.hit(s.state)
+	elseif kind == "slow" then
+		KartPhysics.slow(s.state, 2)
+	elseif kind == "launch" then
+		KartPhysics.hit(s.state)
+		local root = s.kart.PrimaryPart
+		if root then
+			root.AssemblyLinearVelocity += Vector3.new(0, 70, 0)
+		end
 	elseif kind == "boost" then
 		KartPhysics.giveBoost(s.state, tonumber(value) or 1)
 	elseif kind == "overdrive" then
@@ -3931,11 +5424,14 @@ end
 
 function KartController.start()
 	Remotes.RaceStart.OnClientEvent:Connect(function(info)
-		task.spawn(begin, info)
+		task.spawn(begin, info, "race")
+	end)
+	Remotes.PracticeStart.OnClientEvent:Connect(function(info)
+		task.spawn(begin, info, "practice")
 	end)
 	Remotes.KartEvent.OnClientEvent:Connect(onKartEvent)
 	Remotes.Results.OnClientEvent:Connect(function()
-		if session then
+		if session and session.mode == "race" then
 			stop()
 		end
 	end)
@@ -3962,55 +5458,474 @@ return KartController
 ]]></string>
           </Properties>
         </Item>
-        <Item class="LocalScript" referent="27">
+        <Item class="ModuleScript" referent="36">
+          <Properties>
+            <string name="Name">LobbyUI</string>
+            <string name="Source"><![CDATA[-- Lobby screens: the status bar (phase + countdown, always visible), the
+-- READY button, GARAGE and WATCH buttons, the map voting cards, the practice
+-- "leave kart" button and spectator controls.
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+local UI = require(script.Parent.UI)
+
+local LobbyUI = {}
+
+LobbyUI.onReady = nil :: ((boolean) -> ())?
+LobbyUI.onVote = nil :: ((string) -> ())?
+LobbyUI.onGarage = nil :: (() -> ())?
+LobbyUI.onWatch = nil :: (() -> ())?
+LobbyUI.onLeavePractice = nil :: (() -> ())?
+LobbyUI.onSpectateNext = nil :: ((number) -> ())?
+LobbyUI.onStopSpectating = nil :: (() -> ())?
+
+local me = Players.LocalPlayer
+local state: any = nil
+local hidden = false -- hidden while racing
+
+local root = Instance.new("Frame")
+root.Name = "Lobby"
+root.BackgroundTransparency = 1
+root.Size = UDim2.fromScale(1, 1)
+root.Parent = UI.Screen
+
+-- Status bar ---------------------------------------------------------------
+local status = UI.panel(root, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 10), Size = UDim2.new(0, 460, 0, 70) })
+local statusTitle = UI.label(status, { Position = UDim2.new(0, 14, 0, 4), Size = UDim2.new(1, -28, 0, 36), Text = "KART CARNIVAL", TextColor3 = UI.Colors.yellow })
+local statusSub = UI.label(status, { Position = UDim2.new(0, 14, 0, 40), Size = UDim2.new(1, -28, 0, 24), Text = "", TextColor3 = UI.Colors.muted })
+
+-- Bottom buttons -------------------------------------------------------------
+local isReady = false
+local readyButton = UI.button(root, "READY UP", UI.Colors.green, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -18), Size = UDim2.new(0, 260, 0, 66) }, function()
+	if LobbyUI.onReady then
+		LobbyUI.onReady(not isReady)
+	end
+end)
+local garageButton = UI.button(root, "🔧 GARAGE", UI.Colors.blue, { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 18, 1, -18), Size = UDim2.new(0, 170, 0, 58) }, function()
+	if LobbyUI.onGarage then
+		LobbyUI.onGarage()
+	end
+end)
+local watchButton = UI.button(root, "📺 WATCH", UI.Colors.purple, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -18, 1, -18), Size = UDim2.new(0, 170, 0, 58), Visible = false }, function()
+	if LobbyUI.onWatch then
+		LobbyUI.onWatch()
+	end
+end)
+local leaveButton = UI.button(root, "🚪 LEAVE KART", UI.Colors.red, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -92), Size = UDim2.new(0, 220, 0, 52), Visible = false }, function()
+	if LobbyUI.onLeavePractice then
+		LobbyUI.onLeavePractice()
+	end
+end)
+
+-- Voting cards ---------------------------------------------------------------
+local votePanel = UI.panel(root, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 90), Size = UDim2.new(0, 720, 0, 300), Visible = false })
+local voteTitle = UI.label(votePanel, { Position = UDim2.new(0, 16, 0, 8), Size = UDim2.new(1, -32, 0, 34), Text = "VOTE FOR A TRACK", TextColor3 = UI.Colors.yellow })
+local cardHolder = Instance.new("Frame")
+cardHolder.BackgroundTransparency = 1
+cardHolder.Position = UDim2.new(0, 14, 0, 50)
+cardHolder.Size = UDim2.new(1, -28, 1, -62)
+cardHolder.Parent = votePanel
+UI.list(cardHolder, true, 12)
+
+local THEME_COLORS = {
+	sunny = Color3.fromRGB(90, 170, 80),
+	canyon = Color3.fromRGB(200, 120, 70),
+	neon = Color3.fromRGB(120, 60, 200),
+	toyroom = Color3.fromRGB(70, 80, 170),
+	kitchen = Color3.fromRGB(230, 140, 90),
+	backyard = Color3.fromRGB(100, 170, 70),
+	carnival = Color3.fromRGB(240, 90, 140),
+}
+local DIFFICULTY_COLORS = { Easy = UI.Colors.green, Medium = UI.Colors.yellow, Hard = UI.Colors.red }
+
+type Card = { button: TextButton, icon: TextLabel, name: TextLabel, chip: TextLabel, feature: TextLabel, votes: TextLabel, faces: Frame, id: string? }
+local cards: { Card } = {}
+for i = 1, 3 do
+	local card: Card = {} :: any
+	card.button = UI.button(cardHolder, "", UI.Colors.panelLight, { Size = UDim2.new(1 / 3, -8, 1, 0), LayoutOrder = i }, function()
+		if card.id and LobbyUI.onVote then
+			LobbyUI.onVote(card.id)
+		end
+	end)
+	card.icon = UI.label(card.button, { Size = UDim2.new(1, 0, 0, 56), Text = "" })
+	card.name = UI.label(card.button, { Position = UDim2.new(0, 0, 0, 58), Size = UDim2.new(1, 0, 0, 28), Text = "" })
+	card.chip = UI.label(card.button, { Position = UDim2.new(0.25, 0, 0, 90), Size = UDim2.new(0.5, 0, 0, 22), Text = "", BackgroundTransparency = 0, TextColor3 = Color3.fromRGB(30, 30, 40), TextStrokeTransparency = 1 })
+	local chipCorner = Instance.new("UICorner")
+	chipCorner.CornerRadius = UDim.new(1, 0)
+	chipCorner.Parent = card.chip
+	card.feature = UI.label(card.button, { Position = UDim2.new(0, 0, 0, 116), Size = UDim2.new(1, 0, 0, 40), TextScaled = false, TextSize = 15, Text = "", TextColor3 = UI.Colors.muted })
+	card.votes = UI.label(card.button, { Position = UDim2.new(0, 0, 1, -66), Size = UDim2.new(1, 0, 0, 26), Text = "" })
+	card.faces = Instance.new("Frame")
+	card.faces.BackgroundTransparency = 1
+	card.faces.Position = UDim2.new(0, 0, 1, -36)
+	card.faces.Size = UDim2.new(1, 0, 0, 30)
+	card.faces.Parent = card.button
+	UI.list(card.faces, true, 4, true)
+	cards[i] = card
+end
+
+-- Spectator controls ---------------------------------------------------------
+local spectateBar = UI.panel(root, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -18), Size = UDim2.new(0, 460, 0, 70), Visible = false })
+local spectateLabel = UI.label(spectateBar, { Position = UDim2.new(0, 80, 0, 10), Size = UDim2.new(1, -240, 0, 50), Text = "" })
+UI.button(spectateBar, "◀", UI.Colors.panelLight, { Position = UDim2.new(0, 10, 0, 10), Size = UDim2.new(0, 60, 0, 50) }, function()
+	if LobbyUI.onSpectateNext then
+		LobbyUI.onSpectateNext(-1)
+	end
+end)
+UI.button(spectateBar, "▶", UI.Colors.panelLight, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -150, 0, 10), Size = UDim2.new(0, 60, 0, 50) }, function()
+	if LobbyUI.onSpectateNext then
+		LobbyUI.onSpectateNext(1)
+	end
+end)
+UI.button(spectateBar, "EXIT", UI.Colors.red, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 10), Size = UDim2.new(0, 130, 0, 50) }, function()
+	if LobbyUI.onStopSpectating then
+		LobbyUI.onStopSpectating()
+	end
+end)
+
+-- Toasts (short messages while in the lobby) ---------------------------------
+local toastHolder = Instance.new("Frame")
+toastHolder.BackgroundTransparency = 1
+toastHolder.AnchorPoint = Vector2.new(0.5, 0)
+toastHolder.Position = UDim2.new(0.5, 0, 0, 90)
+toastHolder.Size = UDim2.new(0, 420, 0, 200)
+toastHolder.Parent = UI.Screen
+UI.list(toastHolder, false, 6, true)
+
+function LobbyUI.toast(text: string)
+	local t = UI.panel(toastHolder, { Size = UDim2.new(1, 0, 0, 44) })
+	UI.label(t, { Position = UDim2.new(0, 12, 0, 6), Size = UDim2.new(1, -24, 1, -12), Text = text })
+	UI.pop(t)
+	task.delay(3.5, function()
+		t:Destroy()
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Updates
+---------------------------------------------------------------------------
+local practicing = false
+local spectating = false
+
+function LobbyUI.setPracticing(on: boolean)
+	practicing = on
+	LobbyUI.refresh()
+end
+
+function LobbyUI.setSpectating(on: boolean, name: string?)
+	spectating = on
+	spectateLabel.Text = if name then `Watching {name}` else ""
+	LobbyUI.refresh()
+end
+
+function LobbyUI.setHidden(on: boolean)
+	hidden = on
+	LobbyUI.refresh()
+end
+
+local function myEntry(): any?
+	if not state then
+		return nil
+	end
+	for _, p in state.players do
+		if p.userId == me.UserId then
+			return p
+		end
+	end
+	return nil
+end
+
+function LobbyUI.setState(s: any)
+	state = s
+	local mine = myEntry()
+	isReady = mine ~= nil and mine.ready
+	LobbyUI.refresh()
+end
+
+function LobbyUI.refresh()
+	local s = state
+	local mine = myEntry()
+	local racing = mine and mine.racing
+	root.Visible = not hidden
+	if not s then
+		return
+	end
+
+	readyButton.Visible = not racing and not spectating and s.phase ~= "results"
+	readyButton.Text = if isReady then "✓ READY (tap to cancel)" else "READY UP"
+	readyButton.BackgroundColor3 = if isReady then UI.Colors.yellow else UI.Colors.green
+	readyButton.TextColor3 = if isReady then Color3.fromRGB(40, 40, 50) else UI.Colors.text
+	garageButton.Visible = not spectating
+	watchButton.Visible = s.phase == "racing" and s.spectate ~= nil and not racing and not spectating
+	leaveButton.Visible = practicing and not spectating
+	spectateBar.Visible = spectating
+
+	local voting = s.phase == "voting" and mine ~= nil and mine.voter
+	votePanel.Visible = voting
+	if voting then
+		local myVote = nil
+		for _, opt in s.options do
+			if table.find(opt.voters, me.UserId) then
+				myVote = opt.id
+			end
+		end
+		for i, card in cards do
+			local opt = s.options[i]
+			card.button.Visible = opt ~= nil
+			if opt then
+				card.id = opt.id
+				card.button.BackgroundColor3 = (THEME_COLORS[opt.theme] or UI.Colors.panelLight):Lerp(Color3.new(0, 0, 0), 0.35)
+				card.icon.Text = opt.icon
+				card.name.Text = opt.name
+				card.chip.Text = opt.difficulty
+				card.chip.BackgroundColor3 = DIFFICULTY_COLORS[opt.difficulty] or UI.Colors.muted
+				card.feature.Text = opt.feature
+				card.votes.Text = `{opt.votes} vote{if opt.votes == 1 then "" else "s"}`
+				UI.highlight(card.button, opt.id == myVote)
+				for _, child in card.faces:GetChildren() do
+					if child:IsA("ImageLabel") then
+						child:Destroy()
+					end
+				end
+				for n, userId in opt.voters do
+					if n > 6 then
+						break
+					end
+					local face = Instance.new("ImageLabel")
+					face.Size = UDim2.new(0, 28, 0, 28)
+					face.BackgroundColor3 = Color3.new(1, 1, 1)
+					face.Image = UI.headshot(userId)
+					local corner = Instance.new("UICorner")
+					corner.CornerRadius = UDim.new(1, 0)
+					corner.Parent = face
+					face.Parent = card.faces
+				end
+			end
+		end
+	end
+end
+
+-- Called every frame for the countdowns.
+function LobbyUI.update()
+	local s = state
+	if not s then
+		return
+	end
+	local t = Workspace:GetServerTimeNow()
+	local left = if s.deadline then math.max(0, math.ceil(s.deadline - t)) else nil
+	local readyCount = 0
+	for _, p in s.players do
+		if p.ready then
+			readyCount += 1
+		end
+	end
+	if s.phase == "lobby" then
+		if left then
+			statusTitle.Text = `RACE STARTING · {left}s`
+			statusSub.Text = `{readyCount} ready · voting opens soon`
+		else
+			statusTitle.Text = "KART CARNIVAL"
+			statusSub.Text = "Ready up to race · practice loop is south of spawn"
+		end
+	elseif s.phase == "voting" then
+		statusTitle.Text = `VOTING · {left or 0}s`
+		statusSub.Text = if myEntry() and myEntry().voter then "Tap a card or stand on a pad" else "Ready up to vote and race"
+		voteTitle.Text = `VOTE FOR A TRACK · {left or 0}s`
+	elseif s.phase == "racing" then
+		statusTitle.Text = "RACE IN PROGRESS"
+		statusSub.Text = if s.spectate then `{s.spectate.trackName} · ready up for the next race` else ""
+	elseif s.phase == "results" then
+		statusTitle.Text = "RESULTS"
+		statusSub.Text = `Next round in {left or 0}s`
+	end
+end
+
+return LobbyUI
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="LocalScript" referent="37">
           <Properties>
             <string name="Name">Main</string>
-            <string name="Source"><![CDATA[-- Client entry point: wires remotes to the HUD and the kart controller.
+            <string name="Source"><![CDATA[-- Client entry point: wires remotes to the lobby screens, garage, race HUD,
+-- kart controller, spectator camera and lighting.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local Atmos = require(ReplicatedStorage:WaitForChild("Common"):WaitForChild("Atmos"))
 
+local GarageUI = require(script.Parent.GarageUI)
 local Hud = require(script.Parent.Hud)
 local KartController = require(script.Parent.KartController)
+local LobbyUI = require(script.Parent.LobbyUI)
+local Spectate = require(script.Parent.Spectate)
 
+local roundState: any = nil
+
+Atmos.apply("carnival")
 KartController.start()
 
-Hud.onChooseKart = function(kartId)
-	Remotes.ChooseKart:FireServer(kartId)
-end
-Hud.onLook = function(look)
-	Remotes.ChooseLook:FireServer(look)
-end
-Hud.onReady = function(ready)
-	Remotes.Ready:FireServer(ready)
+local function namesOf(rows: { any }): { string }
+	local names = {}
+	for _, r in rows do
+		table.insert(names, r.kart or r.name)
+	end
+	return names
 end
 
+local function stopSpectating()
+	Spectate.stop()
+	LobbyUI.setSpectating(false)
+	if not KartController.isRacing() then
+		Atmos.apply("carnival")
+	end
+end
+
+local function startSpectating(rows: { any }, theme: string?)
+	if theme then
+		Atmos.apply(theme)
+	end
+	GarageUI.close()
+	Spectate.start(namesOf(rows), function(name)
+		LobbyUI.setSpectating(true, name)
+	end)
+end
+
+-- Lobby ----------------------------------------------------------------------
+LobbyUI.onReady = function(ready)
+	Remotes.Ready:FireServer(ready)
+end
+LobbyUI.onVote = function(trackId)
+	Remotes.Vote:FireServer(trackId)
+end
+LobbyUI.onGarage = GarageUI.toggle
+LobbyUI.onWatch = function()
+	if roundState and roundState.spectate then
+		startSpectating(roundState.spectate.rows, roundState.spectate.theme)
+	end
+end
+LobbyUI.onLeavePractice = function()
+	Remotes.LeavePractice:FireServer()
+end
+LobbyUI.onSpectateNext = Spectate.cycle
+LobbyUI.onStopSpectating = stopSpectating
+
+GarageUI.onChooseKart = function(kartId)
+	Remotes.ChooseKart:FireServer(kartId)
+end
+GarageUI.onLook = function(look)
+	Remotes.ChooseLook:FireServer(look)
+end
+
+Remotes.Round.OnClientEvent:Connect(function(state)
+	roundState = state
+	LobbyUI.setState(state)
+	if Spectate.isActive() and not KartController.isRacing() then
+		if state.spectate then
+			Spectate.setOrder(namesOf(state.spectate.rows))
+		elseif state.phase ~= "racing" then
+			stopSpectating()
+		end
+	end
+end)
+Remotes.OpenGarage.OnClientEvent:Connect(GarageUI.open)
+Remotes.Spectate.OnClientEvent:Connect(LobbyUI.onWatch)
+
+-- Racing ---------------------------------------------------------------------
+Remotes.RaceStart.OnClientEvent:Connect(function(info)
+	stopSpectating()
+	GarageUI.close()
+	LobbyUI.setHidden(true)
+	Hud.raceStarted(info)
+	Hud.setDriving(true)
+	Atmos.apply(info.theme or "sunny")
+end)
+Remotes.PracticeStart.OnClientEvent:Connect(function()
+	GarageUI.close()
+	LobbyUI.setPracticing(true)
+	Hud.setDriving(true)
+	LobbyUI.toast("Practice! Drift, jump and boost. R resets the kart.")
+end)
+KartController.onStopped = function(mode)
+	Hud.setDriving(false)
+	if mode == "practice" then
+		LobbyUI.setPracticing(false)
+	end
+end
+
+Remotes.RaceState.OnClientEvent:Connect(function(s)
+	Hud.setRaceState(s)
+	-- Finished: the server drives your kart home while you watch the others.
+	if s.finishTime and KartController.isRacing() then
+		KartController.handOff()
+		Hud.setDriving(false)
+		startSpectating(s.rows)
+	elseif Spectate.isActive() then
+		Spectate.setOrder(namesOf(s.rows))
+	end
+end)
+Remotes.ItemState.OnClientEvent:Connect(Hud.setItem)
+Remotes.Results.OnClientEvent:Connect(function(info)
+	stopSpectating()
+	Hud.setDriving(false)
+	Hud.showResults(info)
+	LobbyUI.setHidden(false)
+	Atmos.apply("carnival")
+end)
+Remotes.Notify.OnClientEvent:Connect(function(message)
+	if Hud.isRacing() then
+		Hud.flash(message, 1.6)
+	else
+		LobbyUI.toast(message)
+	end
+end)
+
 KartController.onUpdate = Hud.setKart
+KartController.onWarning = function(text)
+	Hud.warn(text, 1.5)
+end
 KartController.onTurbo = function(level)
 	Hud.flash(if level == 0 then "ROCKET START!" elseif level == 3 then "ULTRA TURBO!" elseif level == 2 then "SUPER TURBO!" else "TURBO!", 0.8)
 end
 
-Remotes.Lobby.OnClientEvent:Connect(Hud.setLobby)
-Remotes.RaceStart.OnClientEvent:Connect(Hud.raceStarted)
-Remotes.RaceState.OnClientEvent:Connect(Hud.setRaceState)
-Remotes.ItemState.OnClientEvent:Connect(Hud.setItem)
-Remotes.Results.OnClientEvent:Connect(Hud.showResults)
-Remotes.Notify.OnClientEvent:Connect(function(message)
-	Hud.flash(message, 1.6)
-end)
-
 if UserInputService.TouchEnabled then
-	Hud.addTouchButtons(KartController.setDrift, KartController.useItem)
+	Hud.addTouchButtons(KartController.setDrift, KartController.useItem, KartController.reset)
 end
 
--- Spin the item boxes (visual only; pickups are decided by the server).
+-- Spinning things (Ferris wheel, golden tokens, item boxes) turn on each client.
+local spinners: { Instance } = {}
+local function track(inst: Instance)
+	if inst:GetAttribute("Spin") then
+		table.insert(spinners, inst)
+	end
+end
+for _, d in Workspace:GetDescendants() do
+	track(d)
+end
+Workspace.DescendantAdded:Connect(track)
+
 RunService.RenderStepped:Connect(function(dt)
-	Hud.updateLobby()
-	Hud.updateRace()
-	local items = workspace:FindFirstChild("Items")
+	LobbyUI.update()
+	Hud.update()
+	for i = #spinners, 1, -1 do
+		local inst = spinners[i]
+		if not inst.Parent then
+			table.remove(spinners, i)
+			continue
+		end
+		local rate = inst:GetAttribute("Spin") or 0
+		if inst:IsA("Model") then
+			inst:PivotTo(inst:GetPivot() * CFrame.Angles(rate * dt, 0, 0))
+		elseif inst:IsA("BasePart") then
+			inst.CFrame *= CFrame.Angles(0, rate * dt, 0)
+		end
+	end
+	local items = Workspace:FindFirstChild("Items")
 	if items then
 		for _, box in items:GetChildren() do
 			if box:GetAttribute("ItemBox") and box:IsA("BasePart") then
@@ -4022,7 +5937,300 @@ end)
 ]]></string>
           </Properties>
         </Item>
+        <Item class="ModuleScript" referent="38">
+          <Properties>
+            <string name="Name">Spectate</string>
+            <string name="Source"><![CDATA[-- Spectator camera: follows a racer's kart from behind. Used by lobby players
+-- watching a race and by racers who have already finished.
+
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local Spectate = {}
+
+local camera = Workspace.CurrentCamera
+local active = false
+local order: { string } = {} -- kart (driver) names in race order
+local index = 1
+local onTargetChanged: ((string?) -> ())? = nil
+
+local function karts(): Instance?
+	return Workspace:FindFirstChild("Karts")
+end
+
+local function target(): Model?
+	local folder = karts()
+	if not folder or #order == 0 then
+		return nil
+	end
+	index = (index - 1) % #order + 1
+	local m = folder:FindFirstChild(order[index])
+	return if m and m:IsA("Model") then m else nil
+end
+
+function Spectate.isActive(): boolean
+	return active
+end
+
+-- `names` is the race order (leader first).
+function Spectate.setOrder(names: { string })
+	local current = order[index]
+	order = names
+	local found = table.find(order, current)
+	index = found or 1
+end
+
+function Spectate.start(names: { string }?, changed: ((string?) -> ())?)
+	active = true
+	onTargetChanged = changed
+	if names then
+		order = names
+		index = 1
+	end
+	camera.CameraType = Enum.CameraType.Scriptable
+	if onTargetChanged then
+		onTargetChanged(order[index])
+	end
+end
+
+function Spectate.cycle(step: number)
+	if #order == 0 then
+		return
+	end
+	index = (index - 1 + step) % #order + 1
+	if onTargetChanged then
+		onTargetChanged(order[index])
+	end
+end
+
+function Spectate.stop()
+	if not active then
+		return
+	end
+	active = false
+	camera.CameraType = Enum.CameraType.Custom
+	local character = game:GetService("Players").LocalPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		camera.CameraSubject = humanoid
+	end
+end
+
+RunService:BindToRenderStep("SpectateCamera", Enum.RenderPriority.Camera.Value + 2, function(dt)
+	if not active then
+		return
+	end
+	local m = target()
+	local root = m and m.PrimaryPart
+	if not root then
+		return
+	end
+	local look = root.CFrame.LookVector
+	local flat = Vector3.new(look.X, 0, look.Z)
+	if flat.Magnitude < 0.1 then
+		flat = Vector3.zAxis
+	end
+	flat = flat.Unit
+	local goal = CFrame.lookAt(root.Position - flat * 20 + Vector3.new(0, 8, 0), root.Position + flat * 8)
+	camera.CFrame = camera.CFrame:Lerp(goal, math.min(1, dt * 6))
+end)
+
+return Spectate
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="39">
+          <Properties>
+            <string name="Name">UI</string>
+            <string name="Source"><![CDATA[-- Shared look for every screen: rounded panels, chunky buttons sized for
+-- thumbs, a friendly rounded font, soft outlines and gentle gradients.
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+
+local UI = {}
+
+UI.Font = Enum.Font.FredokaOne
+UI.Colors = {
+	panel = Color3.fromRGB(28, 26, 48),
+	panelLight = Color3.fromRGB(48, 44, 80),
+	text = Color3.fromRGB(255, 255, 255),
+	muted = Color3.fromRGB(190, 190, 215),
+	yellow = Color3.fromRGB(255, 210, 60),
+	pink = Color3.fromRGB(255, 95, 140),
+	green = Color3.fromRGB(70, 200, 120),
+	red = Color3.fromRGB(230, 80, 90),
+	blue = Color3.fromRGB(80, 150, 255),
+	purple = Color3.fromRGB(150, 100, 240),
+}
+
+local screen = Instance.new("ScreenGui")
+screen.Name = "KartUI"
+screen.ResetOnSpawn = false
+screen.IgnoreGuiInset = false
+screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screen.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+UI.Screen = screen
+
+local function round(gui: GuiObject, radius: number)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, radius)
+	c.Parent = gui
+end
+
+local function stroke(gui: GuiObject, color: Color3, thickness: number, transparency: number?)
+	local s = Instance.new("UIStroke")
+	s.Color = color
+	s.Thickness = thickness
+	s.Transparency = transparency or 0
+	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	s.Parent = gui
+	return s
+end
+UI.stroke = stroke
+
+local function apply(gui: Instance, props: { [string]: any }?)
+	for k, v in props or {} do
+		(gui :: any)[k] = v
+	end
+end
+
+function UI.panel(parent: Instance, props: { [string]: any }?): Frame
+	local f = Instance.new("Frame")
+	f.BackgroundColor3 = UI.Colors.panel
+	f.BackgroundTransparency = 0.08
+	f.BorderSizePixel = 0
+	round(f, 18)
+	stroke(f, Color3.new(1, 1, 1), 2, 0.75)
+	local g = Instance.new("UIGradient")
+	g.Rotation = 90
+	g.Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(200, 200, 220))
+	g.Parent = f
+	apply(f, props)
+	f.Parent = parent
+	return f
+end
+
+function UI.label(parent: Instance, props: { [string]: any }?): TextLabel
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Font = UI.Font
+	l.TextColor3 = UI.Colors.text
+	l.TextScaled = true
+	l.TextWrapped = true
+	l.TextStrokeTransparency = 0.7
+	apply(l, props)
+	l.Parent = parent
+	return l
+end
+
+-- A chunky rounded button with a little press bounce.
+function UI.button(parent: Instance, text: string, color: Color3, props: { [string]: any }?, onClick: (() -> ())?): TextButton
+	local b = Instance.new("TextButton")
+	b.Font = UI.Font
+	b.TextScaled = true
+	b.TextColor3 = UI.Colors.text
+	b.TextStrokeTransparency = 0.6
+	b.BackgroundColor3 = color
+	b.BorderSizePixel = 0
+	b.AutoButtonColor = true
+	b.Text = text
+	round(b, 14)
+	stroke(b, Color3.new(1, 1, 1), 2, 0.6)
+	local pad = Instance.new("UIPadding")
+	pad.PaddingTop = UDim.new(0, 6)
+	pad.PaddingBottom = UDim.new(0, 6)
+	pad.PaddingLeft = UDim.new(0, 10)
+	pad.PaddingRight = UDim.new(0, 10)
+	pad.Parent = b
+	apply(b, props)
+	b.Parent = parent
+	if onClick then
+		b.Activated:Connect(function()
+			local scale = b:FindFirstChildOfClass("UIScale") or Instance.new("UIScale")
+			scale.Parent = b
+			scale.Scale = 0.92
+			TweenService:Create(scale, TweenInfo.new(0.18, Enum.EasingStyle.Back), { Scale = 1 }):Play()
+			onClick()
+		end)
+	end
+	return b
+end
+
+function UI.list(parent: Instance, horizontal: boolean, padding: number, center: boolean?): UIListLayout
+	local l = Instance.new("UIListLayout")
+	l.FillDirection = if horizontal then Enum.FillDirection.Horizontal else Enum.FillDirection.Vertical
+	l.Padding = UDim.new(0, padding)
+	l.SortOrder = Enum.SortOrder.LayoutOrder
+	if center then
+		l.HorizontalAlignment = Enum.HorizontalAlignment.Center
+		l.VerticalAlignment = Enum.VerticalAlignment.Center
+	end
+	l.Parent = parent
+	return l
+end
+
+function UI.highlight(gui: GuiObject, on: boolean)
+	local s = gui:FindFirstChild("Highlight") :: UIStroke?
+	if not s then
+		s = stroke(gui, UI.Colors.yellow, 4)
+		s.Name = "Highlight"
+	end
+	s.Enabled = on
+end
+
+-- Pops a panel in with a quick scale bounce.
+function UI.pop(gui: GuiObject)
+	local scale = gui:FindFirstChildOfClass("UIScale") or Instance.new("UIScale")
+	scale.Parent = gui
+	scale.Scale = 0.85
+	TweenService:Create(scale, TweenInfo.new(0.25, Enum.EasingStyle.Back), { Scale = 1 }):Play()
+end
+
+local thumbs: { [number]: string } = {}
+-- Avatar headshot for a user (cached). Empty string until it loads.
+function UI.headshot(userId: number): string
+	if thumbs[userId] then
+		return thumbs[userId]
+	end
+	thumbs[userId] = ""
+	task.spawn(function()
+		local ok, content = pcall(Players.GetUserThumbnailAsync, Players, userId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
+		if ok then
+			thumbs[userId] = content
+		end
+	end)
+	return ""
+end
+
+function UI.ordinal(n: number): string
+	local suffix = "th"
+	if n % 100 < 11 or n % 100 > 13 then
+		suffix = ({ "st", "nd", "rd" })[n % 10] or "th"
+	end
+	return `{n}{suffix}`
+end
+
+function UI.time(t: number?): string
+	if not t then
+		return "--"
+	end
+	local m = math.floor(t / 60)
+	return string.format("%d:%05.2f", m, t - m * 60)
+end
+
+return UI
+]]></string>
+          </Properties>
+        </Item>
       </Item>
     </Item>
+  </Item>
+  <Item class="Workspace" referent="40">
+    <Properties>
+      <string name="Name">Workspace</string>
+      <float name="Gravity">150</float>
+      <bool name="NeedsPivotMigration">false</bool>
+    </Properties>
   </Item>
 </roblox>

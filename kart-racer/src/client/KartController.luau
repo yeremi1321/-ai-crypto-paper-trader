@@ -2,8 +2,12 @@
 -- kart's physics), handles drift / items / rocket starts, and runs the chase
 -- camera.
 --
+-- Two modes: "race" (server tracks laps, respawns and items) and "practice"
+-- (the lobby loop; nothing is scored and resets happen here on the client).
+--
 -- Controls: W/S or stick to drive, A/D steer, Space or Shift to drift,
--- E to use your item. Gamepad: R2/L2 gas and brake, R1 drift, X item.
+-- E to use your item (hold S to aim it behind you), R to reset a stuck kart.
+-- Gamepad: R2/L2 gas and brake, R1 drift, X item, Y reset.
 
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
@@ -28,6 +32,7 @@ local camera = Workspace.CurrentCamera
 local controls = require(player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule")):GetControls()
 
 type Session = {
+	mode: string, -- "race" | "practice"
 	kart: Model,
 	track: Track.Built,
 	stats: Karts.KartStats,
@@ -48,10 +53,12 @@ rayParams.FilterType = Enum.RaycastFilterType.Exclude
 -- Hooks set by Main so the HUD can show speed, drift charge and warnings.
 KartController.onUpdate = nil :: ((info: any) -> ())?
 KartController.onTurbo = nil :: ((level: number) -> ())?
+KartController.onWarning = nil :: ((text: string) -> ())?
+KartController.onStopped = nil :: ((mode: string) -> ())?
 
 local function refreshRayFilter()
 	local ignore: { Instance } = {}
-	for _, name in { "Karts", "Items" } do
+	for _, name in { "Karts", "Items", "PracticeKarts" } do
 		local f = Workspace:FindFirstChild(name)
 		if f then
 			table.insert(ignore, f)
@@ -79,10 +86,16 @@ local function setRacingControls(racing: boolean)
 		end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.Space, Enum.KeyCode.LeftShift, Enum.KeyCode.ButtonR1)
 		ContextActionService:BindActionAtPriority("KartItem", function(_, inputState)
 			if inputState == Enum.UserInputState.Begin then
-				Remotes.UseItem:FireServer()
+				KartController.useItem()
 			end
 			return Enum.ContextActionResult.Sink
 		end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.E, Enum.KeyCode.ButtonX)
+		ContextActionService:BindActionAtPriority("KartReset", function(_, inputState)
+			if inputState == Enum.UserInputState.Begin then
+				KartController.reset()
+			end
+			return Enum.ContextActionResult.Sink
+		end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.R, Enum.KeyCode.ButtonY)
 		ContextActionService:BindActionAtPriority("KartPedals", function(action, inputState, input)
 			local down = inputState ~= Enum.UserInputState.End
 			if input.KeyCode == Enum.KeyCode.ButtonR2 then
@@ -96,6 +109,7 @@ local function setRacingControls(racing: boolean)
 		ContextActionService:UnbindAction("KartDrift")
 		ContextActionService:UnbindAction("KartItem")
 		ContextActionService:UnbindAction("KartPedals")
+		ContextActionService:UnbindAction("KartReset")
 		driftHeld, gasHeld, brakeHeld = false, false, false
 	end
 end
@@ -104,15 +118,53 @@ end
 function KartController.setDrift(on: boolean)
 	driftHeld = on
 end
+local readInput: () -> (number, number)
+
 function KartController.useItem()
-	Remotes.UseItem:FireServer()
+	local s = session
+	if not s or s.mode ~= "race" then
+		return
+	end
+	-- Holding brake/back while using an item throws or drops it behind you.
+	local throttle = readInput()
+	Remotes.UseItem:FireServer(throttle < -0.3)
 end
 
 function KartController.isRacing(): boolean
-	return session ~= nil
+	return session ~= nil and session.mode == "race"
+end
+
+function KartController.mode(): string?
+	return session and session.mode
+end
+
+-- Puts the kart back on the road. In races the server does it (with a short
+-- cooldown); on the practice loop the client does it directly.
+function KartController.reset()
+	local s = session
+	if not s or not s.kart.PrimaryPart then
+		return
+	end
+	if s.mode == "race" then
+		Remotes.Respawn:FireServer()
+		return
+	end
+	local root = s.kart.PrimaryPart
+	local proj = Track.project(s.track, Track.v(root.Position.X, root.Position.Y, root.Position.Z))
+	local pos = Track.spot(s.track, proj.distance, 0)
+	local _, tan = Track.at(s.track, proj.distance)
+	local yaw = math.atan2(-tan.x, -tan.z)
+	KartRig.place(s.kart, CFrame.new(pos.x, pos.y, pos.z) * CFrame.Angles(0, yaw, 0))
+	s.state.speed = 0
+	s.state.yaw = yaw
+	s.state.drift = 0
+	s.state.charge = 0
+	s.camYaw = yaw
+	s.hint = nil
 end
 
 local function stop()
+	local mode = session and session.mode
 	session = nil
 	setRacingControls(false)
 	camera.CameraType = Enum.CameraType.Custom
@@ -121,9 +173,22 @@ local function stop()
 	if humanoid then
 		camera.CameraSubject = humanoid
 	end
+	if mode and KartController.onStopped then
+		KartController.onStopped(mode)
+	end
 end
 
-local function begin(info: any)
+-- Stops driving without touching the camera (used when a racer finishes and
+-- switches to spectating while the server drives their kart home).
+function KartController.handOff()
+	if session then
+		session = nil
+		setRacingControls(false)
+		camera.FieldOfView = 70
+	end
+end
+
+local function begin(info: any, mode: string)
 	local kart: Model = info.kart
 	local deadline = os.clock() + 10
 	while (not kart or not kart.PrimaryPart) and os.clock() < deadline do
@@ -134,14 +199,15 @@ local function begin(info: any)
 		return
 	end
 	session = {
+		mode = mode,
 		kart = kart,
 		track = Track.build(Tracks.get(info.trackId)),
 		stats = Karts.get(info.kartId).stats,
 		state = KartPhysics.newState(info.yaw),
-		goTime = info.goTime,
+		goTime = info.goTime or (Workspace:GetServerTimeNow() - 1),
 		hint = nil,
 		throttleDownAt = nil,
-		started = false,
+		started = mode ~= "race",
 		camYaw = info.yaw,
 	}
 	refreshRayFilter()
@@ -149,7 +215,7 @@ local function begin(info: any)
 	camera.CameraType = Enum.CameraType.Scriptable
 end
 
-local function readInput(): (number, number)
+function readInput(): (number, number)
 	local move = controls:GetMoveVector()
 	local steer = math.clamp(move.X, -1, 1)
 	local throttle = math.clamp(-move.Z, -1, 1)
@@ -216,12 +282,20 @@ local function step(dt: number)
 	if root.Anchored then
 		return
 	end
+	-- Off the edge of the practice area: put the kart back.
+	if s.mode == "practice" and root.Position.Y < -25 then
+		KartController.reset()
+		return
+	end
 
 	local sensed = KartRig.sense(s.kart, rayParams)
 	local pos = Track.v(root.Position.X, root.Position.Y, root.Position.Z)
 	local proj = Track.project(s.track, pos, s.hint)
 	s.hint = proj.index
 	local surface = Track.surfaceAt(s.track, proj)
+	if s.mode == "practice" and (surface == "offroad" or surface == "wall") then
+		surface = "road" -- the practice area is open tarmac
+	end
 
 	local _, released = KartPhysics.step(s.stats, s.state, {
 		throttle = throttle,
@@ -245,7 +319,7 @@ local function step(dt: number)
 			drift = level,
 			boosting = s.state.boost > 0,
 			invincible = s.state.invincible > 0,
-			wrongWay = s.state.speed > 15 and Track.wrongWay(s.track, proj, fx, fz),
+			wrongWay = s.mode == "race" and s.state.speed > 15 and Track.wrongWay(s.track, proj, fx, fz),
 		})
 	end
 end
@@ -255,8 +329,20 @@ local function onKartEvent(kind: string, value: any)
 	if not s then
 		return
 	end
-	if kind == "hit" then
+	if kind == "warning" then
+		if KartController.onWarning then
+			KartController.onWarning(tostring(value))
+		end
+	elseif kind == "hit" or kind == "spin" then
 		KartPhysics.hit(s.state)
+	elseif kind == "slow" then
+		KartPhysics.slow(s.state, 2)
+	elseif kind == "launch" then
+		KartPhysics.hit(s.state)
+		local root = s.kart.PrimaryPart
+		if root then
+			root.AssemblyLinearVelocity += Vector3.new(0, 70, 0)
+		end
 	elseif kind == "boost" then
 		KartPhysics.giveBoost(s.state, tonumber(value) or 1)
 	elseif kind == "overdrive" then
@@ -273,11 +359,14 @@ end
 
 function KartController.start()
 	Remotes.RaceStart.OnClientEvent:Connect(function(info)
-		task.spawn(begin, info)
+		task.spawn(begin, info, "race")
+	end)
+	Remotes.PracticeStart.OnClientEvent:Connect(function(info)
+		task.spawn(begin, info, "practice")
 	end)
 	Remotes.KartEvent.OnClientEvent:Connect(onKartEvent)
 	Remotes.Results.OnClientEvent:Connect(function()
-		if session then
+		if session and session.mode == "race" then
 			stop()
 		end
 	end)

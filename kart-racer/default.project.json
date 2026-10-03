@@ -21,6 +21,20 @@
           "$path": "src/client"
         }
       }
+    },
+    "Lighting": {
+      "$properties": {
+        "Technology": "Future",
+        "GlobalShadows": true,
+        "Brightness": 3,
+        "EnvironmentDiffuseScale": 0.5,
+        "EnvironmentSpecularScale": 0.5
+      }
+    },
+    "Workspace": {
+      "$properties": {
+        "Gravity": 150
+      }
     }
   }
 }

@@ -17,6 +17,14 @@ export type TrackDef = {
 	-- Multiplies every control point (x, y and z), so the whole layout grows
 	-- without changing its shape or how steep the hills are. Default 1.
 	scale: number?,
+	-- Shown on the voting cards.
+	difficulty: string?, -- "Easy" | "Medium" | "Hard"
+	feature: string?, -- the track's main attraction, one short line
+	icon: string?, -- emoji for the card
+	-- false = open area with no walls or grass shoulders (the lobby practice loop).
+	walls: boolean?,
+	-- Jump ramps: t along the lap, offset across (-1..1), ramp width in studs.
+	ramps: { { t: number, offset: number, width: number } }?,
 }
 
 export type Built = {

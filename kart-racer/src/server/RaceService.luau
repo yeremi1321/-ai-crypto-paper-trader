@@ -1,7 +1,11 @@
--- The game loop: lobby → Grand Prix (every track in the cup) → results → lobby.
--- Empty grid slots are filled with CPU drivers so solo play works. Players
--- drive their own karts on their client; the server tracks positions, laps,
--- respawns, items and points, and drives the CPU karts itself.
+-- Runs one race: builds the track, puts karts on the grid, counts down,
+-- tracks positions and laps, respawns fallen karts, drives the CPU karts,
+-- runs items, and reports results. RoundService decides when races happen
+-- and who is in them.
+--
+-- Players drive their own karts on their client. The server checks progress
+-- (ordered sectors, so skipping the course never counts) and decides
+-- placings, item hits and the finish.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -15,7 +19,6 @@ local KartPhysics = require(Shared.KartPhysics)
 local Karts = require(Shared.Karts)
 local RaceRules = require(Shared.RaceRules)
 local Track = require(Shared.Track)
-local Tracks = require(Shared.Tracks)
 local KartRig = require(ReplicatedStorage.Common.KartRig)
 
 local ItemService = require(script.Parent.ItemService)
@@ -24,13 +27,12 @@ local TrackBuilder = require(script.Parent.TrackBuilder)
 
 local RaceService = {}
 
-local LOBBY_WAIT = 15 -- seconds after the first player readies up
 local LOAD_TIME = 3 -- time for clients to see the track before the countdown
-local RESULTS_TIME = 9
-local CUP_RESULTS_TIME = 14
 local END_GRACE = 4 -- after the last player finishes
+local FINISH_TIMEOUT = 30 -- once any player finishes, the rest get this long
 local FALL_DEPTH = 18
 local TICK = 1 / 20
+local RESPAWN_COOLDOWN = 2
 
 export type Entrant = {
 	id: string,
@@ -39,27 +41,44 @@ export type Entrant = {
 	player: Player?,
 	kartId: string,
 	look: KartBodies.Look,
-	points: number,
-	lastPlace: number,
 	profile: AIDriver.Profile,
 }
 
 export type Racer = {
 	entrant: Entrant,
 	model: Model,
-	state: KartPhysics.State?, -- CPU karts only; players simulate their own
+	state: KartPhysics.State?, -- CPU karts (and players who finished); players simulate their own
 	stats: Karts.KartStats,
 	progress: Track.Progress,
 	score: number,
 	place: number,
 	finishTime: number?,
 	invincibleUntil: number,
+	protectUntil: number, -- brief immunity after any hit, so nobody gets juggled
 	speedFactor: number,
+	lastRespawn: number,
+	-- Stats for results and awards
+	worstPlace: number,
+	hitsTaken: number,
 	-- Items (managed by ItemService)
 	item: string?,
 	uses: number,
 	itemReadyAt: number,
 	cpuUseAt: number,
+}
+
+export type ResultRow = {
+	place: number,
+	id: string,
+	name: string,
+	isCpu: boolean,
+	userId: number?,
+	time: number?,
+	finished: boolean,
+	kartId: string,
+	look: KartBodies.Look,
+	worstPlace: number,
+	hitsTaken: number,
 }
 
 type Race = {
@@ -70,16 +89,10 @@ type Race = {
 	endAt: number?,
 	timeLimit: number,
 	lastBroadcast: number,
+	onEnded: (({ ResultRow }, string) -> ())?,
+	ended: boolean,
 }
 
-local phase = "lobby"
-local choices: { [Player]: { kart: string, look: KartBodies.Look, ready: boolean } } = {}
-
-local function newChoice(): { kart: string, look: KartBodies.Look, ready: boolean }
-	return { kart = Karts.Default, look = KartBodies.sanitize(nil), ready = false }
-end
-local firstReadyAt: number? = nil
-local cup: { trackIndex: number, entrants: { Entrant } }? = nil
 local race: Race? = nil
 
 local kartsFolder = Instance.new("Folder")
@@ -99,9 +112,11 @@ end
 
 local function refreshRayFilter()
 	local ignore: { Instance } = { kartsFolder }
-	local items = Workspace:FindFirstChild("Items")
-	if items then
-		table.insert(ignore, items)
+	for _, name in { "Items", "PracticeKarts" } do
+		local f = Workspace:FindFirstChild(name)
+		if f then
+			table.insert(ignore, f)
+		end
 	end
 	for _, p in Players:GetPlayers() do
 		if p.Character then
@@ -115,16 +130,31 @@ end
 -- Effects (also used by ItemService)
 ---------------------------------------------------------------------------
 local Effects = {}
+RaceService.Effects = Effects
 
-function Effects.hit(racer: Racer): boolean
-	if now() < racer.invincibleUntil then
+local HIT_PROTECTION = 2.5
+
+-- Returns true if the hit landed. Overdrive and the post-hit grace period block it.
+function Effects.hit(racer: Racer, kind: string?): boolean
+	local t = now()
+	if t < racer.invincibleUntil or t < racer.protectUntil then
 		return false
 	end
+	racer.protectUntil = t + HIT_PROTECTION
+	racer.hitsTaken += 1
+	local hitKind = kind or "spin"
 	if racer.state then
-		return KartPhysics.hit(racer.state)
-	end
-	if racer.entrant.player then
-		Net.KartEvent:FireClient(racer.entrant.player, "hit")
+		if hitKind == "slow" then
+			KartPhysics.slow(racer.state, 2)
+		else
+			KartPhysics.hit(racer.state)
+		end
+		if hitKind == "launch" and racer.model.PrimaryPart then
+			local root = racer.model.PrimaryPart
+			root.AssemblyLinearVelocity += Vector3.new(0, 70, 0)
+		end
+	elseif racer.entrant.player then
+		Net.KartEvent:FireClient(racer.entrant.player, hitKind)
 	end
 	return true
 end
@@ -146,6 +176,12 @@ function Effects.overdrive(racer: Racer, seconds: number)
 	end
 end
 
+function Effects.warn(racer: Racer, text: string)
+	if racer.entrant.player then
+		Net.KartEvent:FireClient(racer.entrant.player, "warning", text)
+	end
+end
+
 function Effects.itemChanged(racer: Racer)
 	if racer.entrant.player then
 		Net.ItemState:FireClient(racer.entrant.player, racer.item, racer.uses, racer.itemReadyAt)
@@ -153,62 +189,7 @@ function Effects.itemChanged(racer: Racer)
 end
 
 ---------------------------------------------------------------------------
--- Lobby
----------------------------------------------------------------------------
-local function buildLobby()
-	local lobby = Instance.new("Model")
-	lobby.Name = "Lobby"
-	local floor = Instance.new("Part")
-	floor.Name = "Floor"
-	floor.Anchored = true
-	floor.Size = Vector3.new(120, 2, 120)
-	floor.Position = Vector3.new(0, 400, 1200)
-	floor.Material = Enum.Material.SmoothPlastic
-	floor.Color = Color3.fromRGB(40, 44, 60)
-	floor.Parent = lobby
-	local spawn = Instance.new("SpawnLocation")
-	spawn.Anchored = true
-	spawn.Size = Vector3.new(12, 1, 12)
-	spawn.Position = floor.Position + Vector3.new(0, 1.5, 0)
-	spawn.Neutral = true
-	spawn.Duration = 0
-	spawn.Color = Color3.fromRGB(255, 200, 40)
-	spawn.Material = Enum.Material.Neon
-	spawn.Parent = lobby
-	-- Showroom: every body design on display.
-	local count = #KartBodies.List
-	for i, body in KartBodies.List do
-		local x = (i - (count + 1) / 2) * 14
-		local cf = CFrame.new(floor.Position + Vector3.new(x, 1, -26)) * CFrame.Angles(0, math.pi, 0)
-		local look = KartBodies.cpuLook(i)
-		look.body = body.id
-		local display = KartRig.build(Karts.Default, body.name, cf, lobby, look)
-		display.PrimaryPart.Anchored = true
-	end
-	lobby.Parent = Workspace
-end
-
-local function lobbyState()
-	local list = {}
-	for player, c in choices do
-		table.insert(list, { name = player.DisplayName, kart = c.kart, body = c.look.body, ready = c.ready })
-	end
-	return {
-		phase = phase,
-		players = list,
-		startsAt = if firstReadyAt then firstReadyAt + LOBBY_WAIT else nil,
-		cupName = Tracks.Cup.name,
-		raceNumber = cup and cup.trackIndex,
-		raceCount = #Tracks.Cup.tracks,
-	}
-end
-
-local function broadcastLobby()
-	Net.Lobby:FireAllClients(lobbyState())
-end
-
----------------------------------------------------------------------------
--- Racing
+-- Helpers
 ---------------------------------------------------------------------------
 local function yawFromTangent(tan: Track.Vec): number
 	return math.atan2(-tan.x, -tan.z)
@@ -227,115 +208,14 @@ local function seatDriver(player: Player, model: Model)
 	local humanoid = character:WaitForChild("Humanoid", 5) :: Humanoid?
 	local seat = model:FindFirstChild("DriverSeat") :: Seat
 	if humanoid and seat then
+		humanoid.Sit = false
 		character:PivotTo(seat.CFrame + Vector3.new(0, 2, 0))
 		seat:Sit(humanoid)
 	end
 end
 
-local function startRace(index: number)
-	assert(cup, "no cup")
-	cup.trackIndex = index
-	local trackId = Tracks.Cup.tracks[index]
-	local _, track = TrackBuilder.build(trackId)
-	kartsFolder:ClearAllChildren()
-
-	-- Grid: race 1 puts players at the back; later races reverse the standings.
-	local order = table.clone(cup.entrants)
-	if index == 1 then
-		table.sort(order, function(a, b)
-			if a.isCpu ~= b.isCpu then
-				return a.isCpu
-			end
-			return a.id < b.id
-		end)
-	else
-		table.sort(order, function(a, b)
-			if a.points ~= b.points then
-				return a.points < b.points
-			end
-			return a.id < b.id
-		end)
-	end
-
-	local r: Race = {
-		trackId = trackId,
-		track = track,
-		racers = {},
-		goTime = now() + LOAD_TIME + RaceRules.CountdownSeconds,
-		timeLimit = track.def.laps * 120,
-		lastBroadcast = 0,
-	}
-
-	for slot, entrant in order do
-		local pos, gridD = Track.gridSpot(track, slot)
-		local _, tan = Track.at(track, gridD)
-		local yaw = yawFromTangent(tan)
-		local cf = CFrame.new(pos.x, pos.y, pos.z) * CFrame.Angles(0, yaw, 0)
-		local model = KartRig.build(entrant.kartId, entrant.name, cf, kartsFolder, entrant.look)
-		model.PrimaryPart.Anchored = true
-		local stats = Karts.get(entrant.kartId).stats
-		local racer: Racer = {
-			entrant = entrant,
-			model = model,
-			state = if entrant.isCpu then KartPhysics.newState(yaw) else nil,
-			stats = stats,
-			progress = Track.newProgress(track, gridD),
-			score = 0,
-			place = slot,
-			finishTime = nil,
-			invincibleUntil = 0,
-			speedFactor = 1,
-			item = nil,
-			uses = 0,
-			itemReadyAt = 0,
-			cpuUseAt = 0,
-		}
-		racer.score = Track.score(track, racer.progress)
-		table.insert(r.racers, racer)
-
-		if entrant.player then
-			seatDriver(entrant.player, model)
-			Net.ItemState:FireClient(entrant.player, nil, 0, 0)
-			Net.RaceStart:FireClient(entrant.player, {
-				trackId = trackId,
-				trackName = track.def.name,
-				kart = model,
-				kartId = entrant.kartId,
-				yaw = yaw,
-				goTime = r.goTime,
-				laps = track.def.laps,
-				raceNumber = index,
-				raceCount = #Tracks.Cup.tracks,
-			})
-		end
-	end
-
-	ItemService.setup(track)
-	race = r
-	phase = "racing"
-	refreshRayFilter()
-	broadcastLobby()
-
-	task.delay(r.goTime - now(), function()
-		if race ~= r then
-			return
-		end
-		for _, racer in r.racers do
-			local root = racer.model.PrimaryPart
-			if root then
-				root.Anchored = false
-				local player = racer.entrant.player
-				if player and player.Parent then
-					root:SetNetworkOwner(player)
-				else
-					root:SetNetworkOwner(nil)
-				end
-			end
-		end
-	end)
-end
-
 local function respawn(r: Race, racer: Racer)
+	racer.lastRespawn = now()
 	local d = racer.progress.distance
 	local pos = Track.spot(r.track, d, 0)
 	local _, tan = Track.at(r.track, d)
@@ -346,12 +226,15 @@ local function respawn(r: Race, racer: Racer)
 		racer.state.yaw = yaw
 		racer.state.drift = 0
 		racer.state.charge = 0
-	elseif racer.entrant.player then
+	end
+	if racer.entrant.player then
 		Net.KartEvent:FireClient(racer.entrant.player, "respawn", yaw)
 	end
+	-- A moment of protection so nothing hits you while getting going again.
+	racer.protectUntil = math.max(racer.protectUntil, now() + 2)
 end
 
-local function standings(r: Race)
+local function standings(r: Race): { Racer }
 	local entries = {}
 	local byId = {}
 	for _, racer in r.racers do
@@ -368,143 +251,258 @@ local function standings(r: Race)
 	return out
 end
 
-local function raceStateFor(r: Race, ranked: { Racer }, me: Racer)
+local function rowsOf(ranked: { Racer })
 	local rows = {}
 	for _, racer in ranked do
-		table.insert(rows, { name = racer.entrant.name, isCpu = racer.entrant.isCpu, finished = racer.finishTime ~= nil })
+		table.insert(rows, {
+			name = racer.entrant.name,
+			isCpu = racer.entrant.isCpu,
+			finished = racer.finishTime ~= nil,
+			kart = racer.model.Name,
+		})
 	end
+	return rows
+end
+
+local function raceStateFor(r: Race, ranked: { Racer }, me: Racer)
 	return {
 		place = me.place,
 		field = #ranked,
 		lap = math.clamp(me.progress.lap, 1, r.track.def.laps),
 		laps = r.track.def.laps,
 		finishTime = me.finishTime,
-		rows = rows,
+		rows = rowsOf(ranked),
+		endAt = r.endAt,
 	}
 end
 
-local function endRace(r: Race)
-	if race ~= r or not cup then
+-- A player who has finished keeps cruising under CPU control while they spectate.
+local function autopilot(racer: Racer)
+	local root = racer.model.PrimaryPart
+	if racer.state or not root then
 		return
 	end
-	race = nil
-	phase = "results"
+	local look = root.CFrame.LookVector
+	local s = KartPhysics.newState(math.atan2(-look.X, -look.Z))
+	s.speed = math.max(0, root.AssemblyLinearVelocity:Dot(Vector3.new(look.X, 0, look.Z)))
+	racer.state = s
+	if root:CanSetNetworkOwnership() then
+		root:SetNetworkOwner(nil)
+	end
+end
+
+local function finishRace(r: Race)
+	if r.ended then
+		return
+	end
+	r.ended = true
+	if race == r then
+		race = nil
+	end
 	local ranked = standings(r)
-	local rows = {}
+	local rows: { ResultRow } = {}
 	for place, racer in ranked do
-		local gained = RaceRules.pointsFor(place)
-		racer.entrant.points += gained
-		racer.entrant.lastPlace = place
 		table.insert(rows, {
 			place = place,
+			id = racer.entrant.id,
 			name = racer.entrant.name,
 			isCpu = racer.entrant.isCpu,
+			userId = racer.entrant.player and racer.entrant.player.UserId,
 			time = racer.finishTime,
-			gained = gained,
-			total = racer.entrant.points,
+			finished = racer.finishTime ~= nil,
+			kartId = racer.entrant.kartId,
+			look = racer.entrant.look,
+			worstPlace = racer.worstPlace,
+			hitsTaken = racer.hitsTaken,
 		})
 	end
 	ItemService.clear()
 	kartsFolder:ClearAllChildren()
-
-	local lastRace = cup.trackIndex >= #Tracks.Cup.tracks
-	Net.Results:FireAllClients({ kind = "race", trackName = r.track.def.name, rows = rows, lastRace = lastRace })
-	for _, entrant in cup.entrants do
-		if entrant.player and entrant.player.Parent then
-			entrant.player:LoadCharacter()
-		end
+	if r.onEnded then
+		r.onEnded(rows, r.trackId)
 	end
-
-	task.wait(RESULTS_TIME)
-	if not lastRace and cup and RaceService.humansInCup() > 0 then
-		startRace(cup.trackIndex + 1)
-		return
-	end
-
-	-- Final cup standings.
-	if cup then
-		local cupRows = {}
-		for _, e in cup.entrants do
-			table.insert(cupRows, { id = e.id, name = e.name, points = e.points, lastPlace = e.lastPlace })
-		end
-		local final = RaceRules.cupStandings(cupRows)
-		local out = {}
-		for i, row in final do
-			table.insert(out, { place = i, name = row.name, total = row.points })
-		end
-		Net.Results:FireAllClients({ kind = "cup", cupName = Tracks.Cup.name, rows = out })
-		task.wait(CUP_RESULTS_TIME)
-	end
-	RaceService.toLobby()
 end
 
-function RaceService.humansInCup(): number
-	local count = 0
-	if cup then
-		for _, e in cup.entrants do
-			if e.player and e.player.Parent then
-				count += 1
+---------------------------------------------------------------------------
+-- Public API
+---------------------------------------------------------------------------
+
+-- Starts a race. `onEnded(rows, trackId)` is called once with the final placings.
+function RaceService.startRace(trackId: string, entrants: { Entrant }, onEnded: ({ ResultRow }, string) -> ())
+	if race then
+		finishRace(race)
+	end
+	local _, track = TrackBuilder.build(trackId)
+	kartsFolder:ClearAllChildren()
+
+	-- Grid: CPUs at the front, players at the back, so players get to overtake.
+	local order = table.clone(entrants)
+	table.sort(order, function(a, b)
+		if a.isCpu ~= b.isCpu then
+			return a.isCpu
+		end
+		return a.id < b.id
+	end)
+
+	local r: Race = {
+		trackId = trackId,
+		track = track,
+		racers = {},
+		goTime = now() + LOAD_TIME + RaceRules.CountdownSeconds,
+		timeLimit = track.def.laps * 150,
+		lastBroadcast = 0,
+		onEnded = onEnded,
+		ended = false,
+	}
+
+	for slot, entrant in order do
+		local pos, gridD = Track.gridSpot(track, slot)
+		local _, tan = Track.at(track, gridD)
+		local yaw = yawFromTangent(tan)
+		local cf = CFrame.new(pos.x, pos.y, pos.z) * CFrame.Angles(0, yaw, 0)
+		local model = KartRig.build(entrant.kartId, entrant.name, cf, kartsFolder, entrant.look)
+		model.PrimaryPart.Anchored = true
+		local racer: Racer = {
+			entrant = entrant,
+			model = model,
+			state = if entrant.isCpu then KartPhysics.newState(yaw) else nil,
+			stats = Karts.get(entrant.kartId).stats,
+			progress = Track.newProgress(track, gridD),
+			score = 0,
+			place = slot,
+			finishTime = nil,
+			invincibleUntil = 0,
+			protectUntil = 0,
+			speedFactor = 1,
+			lastRespawn = 0,
+			worstPlace = slot,
+			hitsTaken = 0,
+			item = nil,
+			uses = 0,
+			itemReadyAt = 0,
+			cpuUseAt = 0,
+		}
+		racer.score = Track.score(track, racer.progress)
+		table.insert(r.racers, racer)
+	end
+
+	race = r
+	ItemService.setup(track)
+	refreshRayFilter()
+
+	for _, racer in r.racers do
+		local player = racer.entrant.player
+		if player then
+			task.spawn(function()
+				seatDriver(player, racer.model)
+				Net.ItemState:FireClient(player, nil, 0, 0)
+				Net.RaceStart:FireClient(player, {
+					trackId = trackId,
+					trackName = track.def.name,
+					theme = track.def.theme,
+					kart = racer.model,
+					kartId = racer.entrant.kartId,
+					yaw = racer.state and racer.state.yaw or yawFromTangent(select(2, Track.at(track, racer.progress.distance))),
+					goTime = r.goTime,
+					laps = track.def.laps,
+				})
+			end)
+		end
+	end
+
+	task.delay(r.goTime - now(), function()
+		if race ~= r then
+			return
+		end
+		for _, racer in r.racers do
+			local root = racer.model.PrimaryPart
+			if root then
+				root.Anchored = false
+				local player = racer.entrant.player
+				if player and player.Parent and not racer.state then
+					root:SetNetworkOwner(player)
+				else
+					root:SetNetworkOwner(nil)
+				end
+			end
+		end
+	end)
+end
+
+function RaceService.isRunning(): boolean
+	return race ~= nil
+end
+
+function RaceService.isRacing(player: Player): boolean
+	if race then
+		for _, racer in race.racers do
+			if racer.entrant.player == player then
+				return true
 			end
 		end
 	end
-	return count
+	return false
 end
 
-function RaceService.toLobby()
-	race = nil
-	cup = nil
-	phase = "lobby"
-	firstReadyAt = nil
-	ItemService.clear()
-	kartsFolder:ClearAllChildren()
-	local track = Workspace:FindFirstChild("Track")
-	if track then
-		track:Destroy()
+-- What lobby spectators see: track name and live standings.
+function RaceService.spectatorInfo()
+	local r = race
+	if not r then
+		return nil
 	end
-	for player, c in choices do
-		c.ready = false
-		if player.Character == nil then
-			player:LoadCharacter()
-		end
+	local ranked = {}
+	for _, racer in r.racers do
+		table.insert(ranked, racer)
 	end
-	broadcastLobby()
+	table.sort(ranked, function(a, b)
+		return a.place < b.place
+	end)
+	return {
+		trackName = r.track.def.name,
+		theme = r.track.def.theme,
+		rows = rowsOf(ranked),
+		goTime = r.goTime,
+	}
 end
 
-local function startCup()
-	local entrants: { Entrant } = {}
-	for player, c in choices do
-		if c.ready then
-			table.insert(entrants, {
-				id = `u{player.UserId}`,
-				name = player.DisplayName,
-				isCpu = false,
-				player = player,
-				kartId = c.kart,
-				look = c.look,
-				points = 0,
-				lastPlace = 0,
-				profile = { lane = 0, skill = 1 },
-			})
+function RaceService.abort()
+	if race then
+		finishRace(race)
+	end
+end
+
+local function findRacer(player: Player): Racer?
+	if race then
+		for _, racer in race.racers do
+			if racer.entrant.player == player then
+				return racer
+			end
 		end
 	end
-	local cpuIndex = 0
-	while #entrants < RaceRules.MaxRacers do
-		cpuIndex += 1
-		local driver = Karts.CpuDrivers[cpuIndex]
-		table.insert(entrants, {
-			id = `cpu{cpuIndex}`,
-			name = driver.name,
-			isCpu = true,
-			kartId = driver.kart,
-			look = KartBodies.cpuLook(cpuIndex),
-			points = 0,
-			lastPlace = 0,
-			profile = { lane = ((cpuIndex % 3) - 1) * 0.6, skill = 0.45 + (cpuIndex % 4) * 0.15 },
-		})
+	return nil
+end
+
+function RaceService.useItem(player: Player, aimBack: boolean?)
+	local racer = findRacer(player)
+	if racer and race and now() >= race.goTime and not racer.finishTime then
+		ItemService.use(race.track, race.racers, racer, Effects, aimBack == true)
 	end
-	cup = { trackIndex = 1, entrants = entrants }
-	firstReadyAt = nil
-	startRace(1)
+end
+
+-- Manual recovery: puts a stuck kart back on the road (with a short cooldown).
+function RaceService.requestRespawn(player: Player)
+	local racer = findRacer(player)
+	if racer and race and now() >= race.goTime and now() - racer.lastRespawn > RESPAWN_COOLDOWN and not racer.finishTime then
+		respawn(race, racer)
+	end
+end
+
+function RaceService.removePlayer(player: Player)
+	local racer = findRacer(player)
+	if racer and race then
+		racer.model:Destroy()
+		table.remove(race.racers, table.find(race.racers, racer) :: number)
+	end
 end
 
 ---------------------------------------------------------------------------
@@ -548,17 +546,22 @@ local function tickRace(r: Race)
 		if not root then
 			continue
 		end
+		local player = racer.entrant.player
 		local pos = vec(root.Position)
 		local proj = Track.project(track, pos, racer.progress.index)
 		local roadY = Track.spot(track, proj.distance, 0).y
 		if proj.gap > track.def.width + Track.ShoulderWidth * 2 or root.Position.Y < roadY - FALL_DEPTH then
 			respawn(r, racer)
 		elseif Track.updateProgress(track, racer.progress, proj) then
-			local player = racer.entrant.player
 			if racer.progress.lap > track.def.laps and not racer.finishTime then
 				racer.finishTime = t - r.goTime
 				if player then
 					Net.Notify:FireClient(player, "FINISH!")
+					autopilot(racer)
+					-- Once any player finishes, the rest have a limited time left.
+					if not r.endAt then
+						r.endAt = t + FINISH_TIMEOUT
+					end
 				end
 			elseif player and racer.progress.lap == track.def.laps then
 				Net.Notify:FireClient(player, "FINAL LAP!")
@@ -568,7 +571,6 @@ local function tickRace(r: Race)
 		end
 		racer.score = Track.score(track, racer.progress)
 
-		local player = racer.entrant.player
 		if player then
 			if not player.Parent then
 				continue
@@ -581,6 +583,9 @@ local function tickRace(r: Race)
 	end
 
 	local ranked = standings(r)
+	for _, racer in ranked do
+		racer.worstPlace = math.max(racer.worstPlace, racer.place)
+	end
 
 	-- CPU pace: catch up when far behind, ease off when running away from players.
 	local leaderScore = ranked[1] and ranked[1].score or 0
@@ -610,113 +615,23 @@ local function tickRace(r: Race)
 	end
 
 	if humansLeft == 0 then
-		task.spawn(RaceService.toLobby)
+		finishRace(r)
 		return
 	end
-	if humansRacing == 0 and not r.endAt then
-		r.endAt = t + END_GRACE
+	if humansRacing == 0 then
+		r.endAt = math.min(r.endAt or math.huge, t + END_GRACE)
 	end
 	if (r.endAt and t >= r.endAt) or t - r.goTime > r.timeLimit then
-		task.spawn(endRace, r)
+		finishRace(r)
 	end
-end
-
----------------------------------------------------------------------------
--- Remotes
----------------------------------------------------------------------------
-local function findRacer(player: Player): Racer?
-	if race then
-		for _, racer in race.racers do
-			if racer.entrant.player == player then
-				return racer
-			end
-		end
-	end
-	return nil
 end
 
 function RaceService.start()
-	buildLobby()
-
-	Players.PlayerAdded:Connect(function(player)
-		choices[player] = newChoice()
-		task.delay(1, broadcastLobby)
-	end)
-	for _, player in Players:GetPlayers() do
-		choices[player] = newChoice()
-	end
-	Players.PlayerRemoving:Connect(function(player)
-		choices[player] = nil
-		local racer = findRacer(player)
-		if racer then
-			racer.model:Destroy()
-			table.remove(race.racers, table.find(race.racers, racer) :: number)
-		end
-		broadcastLobby()
-	end)
-
-	Net.ChooseKart.OnServerEvent:Connect(function(player, kartId)
-		local c = choices[player]
-		if c and phase == "lobby" then
-			c.kart = Karts.get(tostring(kartId)).id
-			broadcastLobby()
-		end
-	end)
-	Net.ChooseLook.OnServerEvent:Connect(function(player, look)
-		local c = choices[player]
-		if c and phase == "lobby" then
-			c.look = KartBodies.sanitize(look)
-			broadcastLobby()
-		end
-	end)
-	Net.Ready.OnServerEvent:Connect(function(player, isReady)
-		local c = choices[player]
-		if c and phase == "lobby" then
-			c.ready = isReady == true
-			if c.ready and not firstReadyAt then
-				firstReadyAt = now()
-			end
-			broadcastLobby()
-		end
-	end)
-	Net.UseItem.OnServerEvent:Connect(function(player)
-		local racer = findRacer(player)
-		if racer and race and now() >= race.goTime then
-			ItemService.use(race.track, race.racers, racer, Effects)
-		end
-	end)
-
-	-- Lobby: start when everyone is ready, or LOBBY_WAIT after the first ready.
-	task.spawn(function()
-		while true do
-			task.wait(1)
-			if phase == "lobby" then
-				local total, ready = 0, 0
-				for _, c in choices do
-					total += 1
-					if c.ready then
-						ready += 1
-					end
-				end
-				if ready == 0 then
-					firstReadyAt = nil
-				elseif ready == total or (firstReadyAt and now() >= firstReadyAt + LOBBY_WAIT) then
-					local ok, err = pcall(startCup)
-					if not ok then
-						warn("[RaceService] could not start the cup:", err)
-						RaceService.toLobby()
-					end
-				end
-				broadcastLobby()
-			end
-		end
-	end)
-
 	task.spawn(function()
 		while true do
 			task.wait(TICK)
 			local r = race
-			if r then
+			if r and not r.ended then
 				local ok, err = pcall(tickRace, r)
 				if not ok then
 					warn("[RaceService] race tick failed:", err)
@@ -737,6 +652,7 @@ function RaceService.start()
 			task.defer(refreshRayFilter)
 		end)
 	end)
+	Players.PlayerRemoving:Connect(RaceService.removePlayer)
 end
 
 return RaceService

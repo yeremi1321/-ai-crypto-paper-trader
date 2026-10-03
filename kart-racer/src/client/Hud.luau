@@ -1,309 +1,65 @@
--- All screens, built in code: lobby (pick a kart, ready up), race HUD (place,
--- lap, item slot with roulette, standings, countdown, wrong-way warning),
--- race results, cup results and touch buttons.
+-- In-race screens: place, lap, item slot with roulette, standings, countdown,
+-- warnings, speed, touch buttons, and the results screen after each race.
 
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Items = require(Shared:WaitForChild("Items"))
-local KartBodies = require(Shared:WaitForChild("KartBodies"))
-local Karts = require(Shared:WaitForChild("Karts"))
+
+local UI = require(script.Parent.UI)
 
 local Hud = {}
 
-local player = Players.LocalPlayer
-local gui = Instance.new("ScreenGui")
-gui.Name = "KartHud"
-gui.ResetOnSpawn = false
-gui.Parent = player:WaitForChild("PlayerGui")
+local PLACE_COLORS = { Color3.fromRGB(255, 210, 60), Color3.fromRGB(210, 220, 235), Color3.fromRGB(240, 150, 80) }
 
-local YELLOW = Color3.fromRGB(255, 210, 50)
-local PLACE_COLORS = { Color3.fromRGB(255, 210, 50), Color3.fromRGB(200, 210, 225), Color3.fromRGB(230, 140, 70) }
-
-local function frame(parent: Instance, props: { [string]: any }): Frame
-	local f = Instance.new("Frame")
-	f.BackgroundColor3 = Color3.fromRGB(16, 16, 24)
-	f.BackgroundTransparency = 0.2
-	f.BorderSizePixel = 0
-	for k, v in props do
-		(f :: any)[k] = v
-	end
-	local c = Instance.new("UICorner")
-	c.CornerRadius = UDim.new(0, 10)
-	c.Parent = f
-	f.Parent = parent
-	return f
-end
-
-local function text(parent: Instance, props: { [string]: any }): TextLabel
-	local l = Instance.new("TextLabel")
-	l.BackgroundTransparency = 1
-	l.Font = Enum.Font.GothamBlack
-	l.TextColor3 = Color3.new(1, 1, 1)
-	l.TextScaled = true
-	l.TextStrokeTransparency = 0.5
-	for k, v in props do
-		(l :: any)[k] = v
-	end
-	l.Parent = parent
-	return l
-end
-
-local function button(parent: Instance, label: string, props: { [string]: any }, onClick: () -> ()): TextButton
-	local b = Instance.new("TextButton")
-	b.Font = Enum.Font.GothamBlack
-	b.TextScaled = true
-	b.TextColor3 = Color3.new(1, 1, 1)
-	b.BorderSizePixel = 0
-	b.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-	b.Text = label
-	for k, v in props do
-		(b :: any)[k] = v
-	end
-	local c = Instance.new("UICorner")
-	c.CornerRadius = UDim.new(0, 10)
-	c.Parent = b
-	b.Parent = parent
-	b.Activated:Connect(onClick)
-	return b
-end
-
-local function ordinal(n: number): string
-	local suffix = "th"
-	if n % 100 < 11 or n % 100 > 13 then
-		suffix = ({ "st", "nd", "rd" })[n % 10] or "th"
-	end
-	return `{n}{suffix}`
-end
-
-local function fmtTime(t: number?): string
-	if not t then
-		return "--"
-	end
-	local m = math.floor(t / 60)
-	return string.format("%d:%05.2f", m, t - m * 60)
-end
-
----------------------------------------------------------------------------
--- Lobby
----------------------------------------------------------------------------
-local lobby = frame(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 620, 0, 560) })
-text(lobby, { Position = UDim2.new(0, 20, 0, 14), Size = UDim2.new(1, -40, 0, 44), Text = "KART RACER" , TextColor3 = YELLOW })
-local lobbySub = text(lobby, { Position = UDim2.new(0, 20, 0, 60), Size = UDim2.new(1, -40, 0, 22), Font = Enum.Font.GothamMedium, Text = "" })
-local cards = Instance.new("Frame")
-cards.BackgroundTransparency = 1
-cards.Position = UDim2.new(0, 20, 0, 96)
-cards.Size = UDim2.new(1, -40, 0, 170)
-cards.Parent = lobby
-local cardLayout = Instance.new("UIListLayout")
-cardLayout.FillDirection = Enum.FillDirection.Horizontal
-cardLayout.Padding = UDim.new(0, 10)
-cardLayout.Parent = cards
-local playersLabel = text(lobby, { Position = UDim2.new(0, 20, 0, 420), Size = UDim2.new(1, -40, 0, 60), Font = Enum.Font.GothamMedium, TextScaled = false, TextSize = 15, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Text = "" })
-
-local chosenKart = Karts.Default
-local look = { body = KartBodies.Default, main = 1, accent = 10 }
-Hud.onLook = nil :: ((any) -> ())?
-local isReady = false
-local cardButtons: { [string]: TextButton } = {}
-Hud.onChooseKart = nil :: ((string) -> ())?
-Hud.onReady = nil :: ((boolean) -> ())?
-
-local function statBar(n: number, lo: number, hi: number): string
-	local filled = math.clamp(math.floor((n - lo) / (hi - lo) * 5 + 0.5), 1, 5)
-	return string.rep("■", filled) .. string.rep("□", 5 - filled)
-end
-
-for _, def in Karts.List do
-	local c = Color3.fromRGB(def.color[1], def.color[2], def.color[3])
-	local card = button(cards, "", { Size = UDim2.new(1 / 3, -7, 1, 0), BackgroundColor3 = c:Lerp(Color3.new(0, 0, 0), 0.55) }, function()
-		chosenKart = def.id
-		if Hud.onChooseKart then
-			Hud.onChooseKart(def.id)
-		end
-		Hud.refreshCards()
-	end)
-	text(card, { Position = UDim2.new(0, 10, 0, 8), Size = UDim2.new(1, -20, 0, 30), Text = def.name, TextColor3 = c })
-	text(card, {
-		Position = UDim2.new(0, 10, 0, 42),
-		Size = UDim2.new(1, -20, 0, 120),
-		Font = Enum.Font.GothamMedium,
-		TextScaled = false,
-		TextSize = 14,
-		TextWrapped = true,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		TextYAlignment = Enum.TextYAlignment.Top,
-		Text = `{def.blurb}\n\nSpeed  {statBar(def.stats.topSpeed, 88, 108)}\nAccel  {statBar(def.stats.accel, 44, 72)}\nTurn    {statBar(def.stats.handling, 1.9, 2.4)}\nWeight {statBar(def.stats.weight, 1, 5)}`,
-	})
-	cardButtons[def.id] = card
-end
-
--- Body design and paint pickers ---------------------------------------------
-local function pickerRow(y: number, title: string): Frame
-	text(lobby, { Position = UDim2.new(0, 20, 0, y), Size = UDim2.new(0, 70, 0, 30), Font = Enum.Font.GothamBold, TextScaled = false, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left, Text = title })
-	local row = Instance.new("Frame")
-	row.BackgroundTransparency = 1
-	row.Position = UDim2.new(0, 92, 0, y)
-	row.Size = UDim2.new(1, -112, 0, 30)
-	row.Parent = lobby
-	local layout = Instance.new("UIListLayout")
-	layout.FillDirection = Enum.FillDirection.Horizontal
-	layout.Padding = UDim.new(0, 6)
-	layout.Parent = row
-	return row
-end
-
-local bodyButtons: { [string]: TextButton } = {}
-local mainSwatches: { TextButton } = {}
-local accentSwatches: { TextButton } = {}
-
-local function sendLook()
-	if Hud.onLook then
-		Hud.onLook(look)
-	end
-	Hud.refreshPickers()
-end
-
-local bodyRow = pickerRow(278, "Body")
-for _, body in KartBodies.List do
-	bodyButtons[body.id] = button(bodyRow, body.name, { Size = UDim2.new(0, 78, 1, 0), TextScaled = true, Font = Enum.Font.GothamBold }, function()
-		look.body = body.id
-		sendLook()
-	end)
-end
-
-local function swatchRow(y: number, title: string, list: { TextButton }, key: string)
-	local row = pickerRow(y, title)
-	for i, c in KartBodies.Palette do
-		list[i] = button(row, "", { Size = UDim2.new(0, 30, 1, 0), BackgroundColor3 = Color3.fromRGB(c[1], c[2], c[3]) }, function()
-			look[key] = i
-			sendLook()
-		end)
-	end
-end
-swatchRow(318, "Paint", mainSwatches, "main")
-swatchRow(358, "Trim", accentSwatches, "accent")
-
-local function outline(b: GuiObject, on: boolean)
-	local stroke = b:FindFirstChildOfClass("UIStroke") or Instance.new("UIStroke")
-	stroke.Thickness = if on then 3 else 0
-	stroke.Color = YELLOW
-	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	stroke.Parent = b
-end
-
-function Hud.refreshPickers()
-	for id, b in bodyButtons do
-		outline(b, id == look.body)
-		b.BackgroundColor3 = if id == look.body then Color3.fromRGB(90, 90, 120) else Color3.fromRGB(60, 60, 80)
-	end
-	for i, b in mainSwatches do
-		outline(b, i == look.main)
-	end
-	for i, b in accentSwatches do
-		outline(b, i == look.accent)
-	end
-end
-Hud.refreshPickers()
-
-function Hud.refreshCards()
-	for id, card in cardButtons do
-		local stroke = card:FindFirstChildOfClass("UIStroke") or Instance.new("UIStroke")
-		stroke.Thickness = if id == chosenKart then 4 else 0
-		stroke.Color = YELLOW
-		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-		stroke.Parent = card
-	end
-end
-Hud.refreshCards()
-
-local readyButton = button(lobby, "READY", { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -16), Size = UDim2.new(0, 240, 0, 52), BackgroundColor3 = Color3.fromRGB(40, 160, 80) }, function()
-	isReady = not isReady
-	if Hud.onReady then
-		Hud.onReady(isReady)
-	end
-end)
-
-local lobbyState: any = nil
-function Hud.setLobby(state: any)
-	lobbyState = state
-	lobby.Visible = state.phase == "lobby"
-	local lines = {}
-	for _, p in state.players do
-		local kart = Karts.get(p.kart).name
-		local body = KartBodies.get(p.body).name
-		table.insert(lines, `{if p.ready then "✔" else "…"} {p.name} ({kart}, {body})`)
-		if p.name == player.DisplayName then
-			isReady = p.ready
-		end
-	end
-	playersLabel.Text = table.concat(lines, "    ")
-	readyButton.Text = if isReady then "NOT READY" else "READY"
-	readyButton.BackgroundColor3 = if isReady then Color3.fromRGB(150, 60, 60) else Color3.fromRGB(40, 160, 80)
-end
-
-function Hud.updateLobby()
-	local s = lobbyState
-	if not s or s.phase ~= "lobby" then
-		if s and s.phase ~= "lobby" then
-			lobbySub.Text = "Race in progress - you'll join the next cup."
-		end
-		return
-	end
-	local t = Workspace:GetServerTimeNow()
-	if s.startsAt then
-		lobbySub.Text = `{s.cupName}: {s.raceCount} races. Starting in {math.max(0, math.ceil(s.startsAt - t))}s (or when everyone is ready)`
-	else
-		lobbySub.Text = `{s.cupName}: {s.raceCount} races. Pick a kart and press READY. CPU drivers fill empty spots.`
-	end
-end
-
----------------------------------------------------------------------------
--- Race HUD
----------------------------------------------------------------------------
 local race = Instance.new("Frame")
+race.Name = "Race"
 race.BackgroundTransparency = 1
 race.Size = UDim2.fromScale(1, 1)
 race.Visible = false
-race.Parent = gui
+race.Parent = UI.Screen
 
-local placeLabel = text(race, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -24, 1, -20), Size = UDim2.new(0, 200, 0, 110), Text = "" })
-local lapLabel = text(race, { Position = UDim2.new(0, 20, 0, 16), Size = UDim2.new(0, 220, 0, 44), Text = "" , TextXAlignment = Enum.TextXAlignment.Left })
-local trackLabel = text(race, { Position = UDim2.new(0, 20, 0, 60), Size = UDim2.new(0, 300, 0, 22), Font = Enum.Font.GothamMedium, Text = "", TextXAlignment = Enum.TextXAlignment.Left })
-local itemSlot = frame(race, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 14), Size = UDim2.new(0, 210, 0, 74) })
-local itemLabel = text(itemSlot, { Position = UDim2.new(0, 10, 0, 6), Size = UDim2.new(1, -20, 0, 40), Text = "" })
-local itemHint = text(itemSlot, { Position = UDim2.new(0, 10, 0, 48), Size = UDim2.new(1, -20, 0, 18), Font = Enum.Font.GothamMedium, Text = "" })
-local standings = frame(race, { Position = UDim2.new(0, 20, 0, 96), Size = UDim2.new(0, 190, 0, 8 * 24 + 12) })
+local placeLabel = UI.label(race, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -24, 1, -20), Size = UDim2.new(0, 210, 0, 110), Text = "" })
+local lapPanel = UI.panel(race, { Position = UDim2.new(0, 16, 0, 14), Size = UDim2.new(0, 220, 0, 74) })
+local lapLabel = UI.label(lapPanel, { Position = UDim2.new(0, 12, 0, 6), Size = UDim2.new(1, -24, 0, 40), Text = "", TextXAlignment = Enum.TextXAlignment.Left })
+local trackLabel = UI.label(lapPanel, { Position = UDim2.new(0, 12, 0, 46), Size = UDim2.new(1, -24, 0, 20), Text = "", TextColor3 = UI.Colors.muted, TextXAlignment = Enum.TextXAlignment.Left })
+
+local itemSlot = UI.panel(race, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 12), Size = UDim2.new(0, 230, 0, 92) })
+local itemIcon = UI.label(itemSlot, { Position = UDim2.new(0, 10, 0, 8), Size = UDim2.new(0, 64, 0, 64), Text = "" })
+local itemLabel = UI.label(itemSlot, { Position = UDim2.new(0, 80, 0, 10), Size = UDim2.new(1, -90, 0, 36), Text = "", TextXAlignment = Enum.TextXAlignment.Left })
+local itemHint = UI.label(itemSlot, { Position = UDim2.new(0, 80, 0, 50), Size = UDim2.new(1, -90, 0, 30), Text = "", TextColor3 = UI.Colors.muted, TextXAlignment = Enum.TextXAlignment.Left })
+
+local standings = UI.panel(race, { Position = UDim2.new(0, 16, 0, 98), Size = UDim2.new(0, 200, 0, 8 * 24 + 16) })
 local standingRows: { TextLabel } = {}
 for i = 1, 8 do
-	standingRows[i] = text(standings, {
-		Position = UDim2.new(0, 10, 0, 6 + (i - 1) * 24),
-		Size = UDim2.new(1, -20, 0, 22),
-		Font = Enum.Font.GothamBold,
+	standingRows[i] = UI.label(standings, {
+		Position = UDim2.new(0, 12, 0, 8 + (i - 1) * 24),
+		Size = UDim2.new(1, -24, 0, 22),
 		TextScaled = false,
-		TextSize = 16,
+		TextSize = 17,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Text = "",
 	})
 end
-local bigText = text(race, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.38), Size = UDim2.new(0, 500, 0, 120), Text = "", TextColor3 = YELLOW })
-local speedLabel = text(race, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -24, 1, -132), Size = UDim2.new(0, 200, 0, 30), Font = Enum.Font.GothamBold, Text = "" })
-local warnLabel = text(race, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 100), Size = UDim2.new(0, 360, 0, 40), Text = "", TextColor3 = Color3.fromRGB(255, 80, 80) })
+local bigText = UI.label(race, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.36), Size = UDim2.new(0, 520, 0, 130), Text = "", TextColor3 = UI.Colors.yellow, TextStrokeTransparency = 0.2 })
+local speedLabel = UI.label(race, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -24, 1, -132), Size = UDim2.new(0, 210, 0, 32), Text = "" })
+local warnLabel = UI.label(race, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 112), Size = UDim2.new(0, 420, 0, 42), Text = "", TextColor3 = UI.Colors.red, TextStrokeTransparency = 0.3 })
+local timeoutLabel = UI.label(race, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -24), Size = UDim2.new(0, 420, 0, 30), Text = "", TextColor3 = UI.Colors.yellow })
 
 local raceInfo: any = nil
-local item: { id: string?, uses: number, readyAt: number } = { id = nil, uses = 0, readyAt = 0 }
-local flashUntil = 0
-local flashText = ""
 local raceState: any = nil
+local item: { id: string?, uses: number, readyAt: number } = { id = nil, uses = 0, readyAt = 0 }
+local flashUntil, flashText = 0, ""
+local warnUntil, warnText = 0, ""
 
 function Hud.raceStarted(info: any)
 	raceInfo = info
 	raceState = nil
+	item = { id = nil, uses = 0, readyAt = 0 }
 	race.Visible = true
-	lobby.Visible = false
-	trackLabel.Text = `{info.trackName}  -  Race {info.raceNumber}/{info.raceCount}`
+	trackLabel.Text = info.trackName or ""
+	lapLabel.Text = `LAP 1/{info.laps or 3}`
 end
 
 function Hud.raceEnded()
@@ -311,19 +67,19 @@ function Hud.raceEnded()
 	raceInfo = nil
 end
 
+function Hud.isRacing(): boolean
+	return raceInfo ~= nil
+end
+
 function Hud.setRaceState(s: any)
 	raceState = s
-	if s.finishTime then
-		lapLabel.Text = fmtTime(s.finishTime)
-	else
-		lapLabel.Text = `LAP {s.lap}/{s.laps}`
-	end
-	placeLabel.Text = ordinal(s.place)
-	placeLabel.TextColor3 = PLACE_COLORS[s.place] or Color3.new(1, 1, 1)
+	lapLabel.Text = if s.finishTime then `🏁 {UI.time(s.finishTime)}` else `LAP {s.lap}/{s.laps}`
+	placeLabel.Text = UI.ordinal(s.place)
+	placeLabel.TextColor3 = PLACE_COLORS[s.place] or UI.Colors.text
 	for i, row in standingRows do
 		local r = s.rows[i]
-		row.Text = if r then `{i}. {r.name}{if r.finished then "  ✓" else ""}` else ""
-		row.TextColor3 = if r and not r.isCpu then YELLOW else Color3.new(1, 1, 1)
+		row.Text = if r then `{i}. {r.name}{if r.finished then "  🏁" else ""}` else ""
+		row.TextColor3 = if r and not r.isCpu then UI.Colors.yellow else UI.Colors.text
 	end
 end
 
@@ -336,6 +92,11 @@ function Hud.flash(message: string, seconds: number?)
 	flashUntil = os.clock() + (seconds or 1.5)
 end
 
+function Hud.warn(message: string, seconds: number?)
+	warnText = message
+	warnUntil = os.clock() + (seconds or 1.5)
+end
+
 function Hud.setKart(info: any)
 	if info.countdown and info.countdown > 0 then
 		local n = math.ceil(info.countdown)
@@ -346,10 +107,15 @@ function Hud.setKart(info: any)
 		bigText.Text = ""
 	end
 	speedLabel.Text = `{math.floor(math.abs(info.speed or 0) * 0.6 + 0.5)} km/h`
-	warnLabel.Text = if info.wrongWay then "WRONG WAY!" else ""
+	if os.clock() < warnUntil then
+		warnLabel.Text = warnText
+	else
+		warnLabel.Text = if info.wrongWay then "WRONG WAY!" elseif info.drafting then "💨 SLIPSTREAM" else ""
+		warnLabel.TextColor3 = if info.wrongWay then UI.Colors.red else UI.Colors.blue
+	end
 end
 
-function Hud.updateRace()
+function Hud.update()
 	if not raceInfo then
 		return
 	end
@@ -357,19 +123,28 @@ function Hud.updateRace()
 	if raceInfo.goTime and t >= raceInfo.goTime and t < raceInfo.goTime + 1 and os.clock() >= flashUntil then
 		bigText.Text = "GO!"
 	end
+	if raceState and raceState.endAt and not raceState.finishTime then
+		timeoutLabel.Text = `⏱ Race ends in {math.max(0, math.ceil(raceState.endAt - t))}s`
+	else
+		timeoutLabel.Text = ""
+	end
 	if item.id then
 		local def = Items.Defs[item.id]
 		if t < item.readyAt then
 			-- Roulette: flick through items until it lands.
 			local i = math.floor(t * 14) % #Items.Order + 1
-			itemLabel.Text = Items.Defs[Items.Order[i]].name
+			local spin = Items.Defs[Items.Order[i]]
+			itemIcon.Text = spin.icon or "?"
+			itemLabel.Text = spin.name
 			itemHint.Text = ""
 		else
+			itemIcon.Text = def.icon or "?"
 			itemLabel.Text = if item.uses > 1 then `{def.name} x{item.uses}` else def.name
-			itemHint.Text = "Press E (X / ITEM) to use"
+			itemHint.Text = "E / X / ITEM · hold S to aim back"
 		end
 	else
-		itemLabel.Text = ""
+		itemIcon.Text = "❔"
+		itemLabel.Text = "No item"
 		itemHint.Text = "Drive through a ? box"
 	end
 end
@@ -377,40 +152,38 @@ end
 ---------------------------------------------------------------------------
 -- Results
 ---------------------------------------------------------------------------
-local results = frame(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 460, 0, 400), Visible = false })
-local resultsTitle = text(results, { Position = UDim2.new(0, 20, 0, 12), Size = UDim2.new(1, -40, 0, 38), TextColor3 = YELLOW, Text = "" })
-local resultsBody = text(results, {
-	Position = UDim2.new(0, 24, 0, 60),
-	Size = UDim2.new(1, -48, 1, -76),
-	Font = Enum.Font.GothamBold,
+local results = UI.panel(UI.Screen, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0, 480, 0, 430), Visible = false })
+local resultsTitle = UI.label(results, { Position = UDim2.new(0, 20, 0, 12), Size = UDim2.new(1, -40, 0, 40), TextColor3 = UI.Colors.yellow, Text = "" })
+local resultsBody = UI.label(results, {
+	Position = UDim2.new(0, 24, 0, 62),
+	Size = UDim2.new(1, -48, 1, -130),
 	TextScaled = false,
-	TextSize = 18,
+	TextSize = 19,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	TextYAlignment = Enum.TextYAlignment.Top,
 	RichText = true,
 	Text = "",
 })
+UI.button(results, "OK", UI.Colors.green, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -14), Size = UDim2.new(0, 160, 0, 50) }, function()
+	results.Visible = false
+end)
 
 function Hud.showResults(info: any)
 	Hud.raceEnded()
+	resultsTitle.Text = `🏁 {info.trackName}`
 	local lines = {}
-	if info.kind == "race" then
-		resultsTitle.Text = `{info.trackName} results`
-		for _, r in info.rows do
-			local name = if r.isCpu then r.name else `<font color="#FFD232">{r.name}</font>`
-			table.insert(lines, `{ordinal(r.place)}  {name}   {fmtTime(r.time)}   +{r.gained}  ({r.total})`)
-		end
-		table.insert(lines, "")
-		table.insert(lines, if info.lastRace then "Final standings next..." else "Next race coming up...")
-	else
-		resultsTitle.Text = `{info.cupName} final standings`
-		for _, r in info.rows do
-			table.insert(lines, `{ordinal(r.place)}  {r.name}   {r.total} pts`)
-		end
+	for _, r in info.rows do
+		local name = if r.isCpu then r.name else `<font color="#FFD23C">{r.name}</font>`
+		local medal = ({ "🥇", "🥈", "🥉" })[r.place] or `{r.place}.`
+		table.insert(lines, `{medal}  {name}   {if r.finished then UI.time(r.time) else "DNF"}`)
+	end
+	for _, line in info.extra or {} do
+		table.insert(lines, line)
 	end
 	resultsBody.Text = table.concat(lines, "\n")
 	results.Visible = true
-	task.delay(if info.kind == "cup" then 13 else 8.5, function()
+	UI.pop(results)
+	task.delay(10, function()
 		results.Visible = false
 	end)
 end
@@ -418,8 +191,20 @@ end
 ---------------------------------------------------------------------------
 -- Touch buttons
 ---------------------------------------------------------------------------
-function Hud.addTouchButtons(onDrift: (boolean) -> (), onItem: () -> ())
-	local drift = button(race, "DRIFT", { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -24, 1, -170), Size = UDim2.new(0, 110, 0, 80), BackgroundColor3 = Color3.fromRGB(170, 70, 40) }, function() end)
+-- Touch controls live in their own layer so they also work on the practice loop.
+local touch = Instance.new("Frame")
+touch.Name = "Touch"
+touch.BackgroundTransparency = 1
+touch.Size = UDim2.fromScale(1, 1)
+touch.Visible = false
+touch.Parent = UI.Screen
+
+function Hud.setDriving(on: boolean)
+	touch.Visible = on
+end
+
+function Hud.addTouchButtons(onDrift: (boolean) -> (), onItem: () -> (), onReset: () -> ())
+	local drift = UI.button(touch, "DRIFT", UI.Colors.pink, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -24, 1, -176), Size = UDim2.new(0, 120, 0, 90) })
 	drift.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.Touch then
 			onDrift(true)
@@ -430,7 +215,8 @@ function Hud.addTouchButtons(onDrift: (boolean) -> (), onItem: () -> ())
 			onDrift(false)
 		end
 	end)
-	button(race, "ITEM", { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -144, 1, -170), Size = UDim2.new(0, 90, 0, 80), BackgroundColor3 = Color3.fromRGB(50, 110, 210) }, onItem)
+	UI.button(touch, "ITEM", UI.Colors.blue, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -154, 1, -176), Size = UDim2.new(0, 100, 0, 90) }, onItem)
+	UI.button(touch, "↺", UI.Colors.panelLight, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -264, 1, -196), Size = UDim2.new(0, 60, 0, 60) }, onReset)
 end
 
 return Hud

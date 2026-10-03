@@ -16,6 +16,7 @@ export type State = {
 	boost: number, -- seconds of boost left
 	spin: number, -- seconds left spinning out after a hit
 	invincible: number, -- seconds of Overdrive left
+	slow: number, -- seconds left stuck in something sticky (jelly, syrup)
 }
 
 export type Input = {
@@ -34,12 +35,13 @@ KartPhysics.ReverseFactor = 0.35
 KartPhysics.BoostPadTime = 1.0
 KartPhysics.ChargeLevels = { 0.9, 1.8, 2.9 } -- charge needed for each mini-turbo
 KartPhysics.TurboTimes = { 0.6, 1.1, 1.7 } -- boost seconds each level gives
+KartPhysics.SlowFactor = 0.5
 KartPhysics.SpinTime = 1.2
 KartPhysics.SpinSpeedKeep = 0.3
 KartPhysics.DriftSlide = 0.35 -- radians the body swings out while drifting (visual)
 
 function KartPhysics.newState(yaw: number): State
-	return { speed = 0, yaw = yaw, drift = 0, charge = 0, boost = 0, spin = 0, invincible = 0 }
+	return { speed = 0, yaw = yaw, drift = 0, charge = 0, boost = 0, spin = 0, invincible = 0, slow = 0 }
 end
 
 function KartPhysics.chargeLevel(charge: number): number
@@ -63,6 +65,9 @@ function KartPhysics.targetTop(stats: Karts.KartStats, s: State, surface: string
 		top *= KartPhysics.BoostFactor
 	elseif surface == "offroad" then
 		top *= KartPhysics.OffroadFactor
+	end
+	if s.slow > 0 then
+		top *= KartPhysics.SlowFactor
 	end
 	return top
 end
@@ -91,6 +96,15 @@ function KartPhysics.hit(s: State): boolean
 	return true
 end
 
+-- Sticky traps: half speed for a while, no spin.
+function KartPhysics.slow(s: State, seconds: number)
+	if s.invincible > 0 then
+		return
+	end
+	s.slow = math.max(s.slow, seconds)
+	s.boost = 0
+end
+
 function KartPhysics.giveBoost(s: State, seconds: number)
 	s.boost = math.max(s.boost, seconds)
 end
@@ -114,6 +128,7 @@ function KartPhysics.step(stats: Karts.KartStats, s: State, input: Input, dt: nu
 	local released = 0
 	s.boost = math.max(0, s.boost - dt)
 	s.invincible = math.max(0, s.invincible - dt)
+	s.slow = math.max(0, s.slow - dt)
 
 	if input.surface == "boost" then
 		KartPhysics.giveBoost(s, KartPhysics.BoostPadTime)

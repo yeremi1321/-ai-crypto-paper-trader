@@ -1,8 +1,8 @@
 -- Builds a track's parts from its centerline: road, curbs and lane lines,
 -- grass shoulders, walls, bridge pillars, boost pads, the start line, the
--- ground, scenery (see Scenery.luau / Props.luau) and the theme's lighting.
+-- ground and scenery (see Scenery.luau / Props.luau). Lighting is applied on
+-- each client (common/Atmos), so lobby players keep the lobby's look.
 
-local Lighting = game:GetService("Lighting")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
@@ -47,69 +47,31 @@ local function decal(parent: Instance, size: Vector3, cf: CFrame, color: Color3,
 	return p
 end
 
--- Sky, sun and colour grading for a theme. Replaces the previous track's.
-local function applyLighting(theme: any)
-	for _, name in { "KartAtmosphere", "KartBloom", "KartGrade", "KartSunRays" } do
-		local old = Lighting:FindFirstChild(name)
-		if old then
-			old:Destroy()
-		end
-	end
-	Lighting.ClockTime = theme.clock
-	Lighting.Brightness = theme.brightness
-	Lighting.Ambient = rgb(theme.ambient)
-	Lighting.OutdoorAmbient = rgb(theme.ambient)
-	Lighting.GlobalShadows = true
-	Lighting.EnvironmentDiffuseScale = 0.5
-	Lighting.EnvironmentSpecularScale = 0.5
-
-	local a = theme.atmosphere
-	local atmosphere = Instance.new("Atmosphere")
-	atmosphere.Name = "KartAtmosphere"
-	atmosphere.Density = a.density
-	atmosphere.Haze = a.haze
-	atmosphere.Glare = a.glare
-	atmosphere.Color = rgb(a.color)
-	atmosphere.Decay = rgb(a.decay)
-	atmosphere.Parent = Lighting
-
-	local bloom = Instance.new("BloomEffect")
-	bloom.Name = "KartBloom"
-	bloom.Intensity = theme.bloom
-	bloom.Size = 24
-	bloom.Threshold = 0.9
-	bloom.Parent = Lighting
-
-	local grade = Instance.new("ColorCorrectionEffect")
-	grade.Name = "KartGrade"
-	grade.TintColor = rgb(theme.tint)
-	grade.Saturation = theme.saturation
-	grade.Contrast = 0.08
-	grade.Parent = Lighting
-
-	local rays = Instance.new("SunRaysEffect")
-	rays.Name = "KartSunRays"
-	rays.Intensity = if theme.clock > 6 and theme.clock < 19 then 0.08 else 0
-	rays.Spread = 0.6
-	rays.Parent = Lighting
-end
-
 local function flatAngle(a: Vector3, b: Vector3): number
 	return math.atan2(b.X - a.X, b.Z - a.Z)
 end
 
-function TrackBuilder.build(trackId: string): (Folder, Track.Built)
+export type Options = {
+	folderName: string?, -- default "Track"; the lobby practice loop uses its own folder
+	ground: boolean?, -- build ground under the track (default true)
+	scenery: boolean?, -- place scenery props (default true)
+}
+
+function TrackBuilder.build(trackId: string, options: Options?): (Folder, Track.Built)
+	local opts = options or {}
 	local def = Tracks.get(trackId)
 	local track = Track.build(def)
 	local theme = Tracks.Themes[def.theme]
 	local roadColor, shoulderColor, wallColor = rgb(theme.road), rgb(theme.shoulder), rgb(theme.wall)
+	local walled = def.walls ~= false
 
-	local old = Workspace:FindFirstChild("Track")
+	local folderName = opts.folderName or "Track"
+	local old = Workspace:FindFirstChild(folderName)
 	if old then
 		old:Destroy()
 	end
 	local folder = Instance.new("Folder")
-	folder.Name = "Track"
+	folder.Name = folderName
 	folder:SetAttribute("TrackId", trackId)
 
 	local half = def.width / 2
@@ -133,16 +95,16 @@ function TrackBuilder.build(trackId: string): (Folder, Track.Built)
 		local cf = CFrame.lookAt((a + b) / 2, b)
 		local segLen = length + extra
 
-		local road = part(folder, "Road", Vector3.new(def.width, 1, segLen), cf * CFrame.new(0, -0.5, 0), roadColor, Enum.Material.Asphalt)
+		local road = part(folder, "Road", Vector3.new(def.width, 1, segLen), cf * CFrame.new(0, -0.5, 0), roadColor, Enum.Material.SmoothPlastic)
 		road:SetAttribute("Surface", "road")
-		for _, side in { -1, 1 } do
-			local shoulder = part(folder, "Shoulder", Vector3.new(sw, 1, segLen), cf * CFrame.new(side * (half + sw / 2), -0.52, 0), shoulderColor, Enum.Material.Grass)
+		for _, side in (if walled then { -1, 1 } else {}) :: { number } do
+			local shoulder = part(folder, "Shoulder", Vector3.new(sw, 1, segLen), cf * CFrame.new(side * (half + sw / 2), -0.52, 0), shoulderColor, Enum.Material.SmoothPlastic)
 			shoulder:SetAttribute("Surface", "offroad")
 			part(folder, "Wall", Vector3.new(1, 4, segLen), cf * CFrame.new(side * (half + sw + 0.5), 1.5, 0), wallColor, if def.theme == "neon" then Enum.Material.Neon else Enum.Material.SmoothPlastic)
 		end
 
 		-- Red-and-white curbs through corners, lane lines on the straights.
-		if turn > 0.02 then
+		if turn > 0.02 and walled then
 			for _, side in { -1, 1 } do
 				decal(markings, Vector3.new(3, 0.1, length + 0.6), cf * CFrame.new(side * (half - 1.5), 0.05, 0), curbColors[i % 2 + 1], neon)
 			end
@@ -174,19 +136,21 @@ function TrackBuilder.build(trackId: string): (Folder, Track.Built)
 			end
 			if not blocked then
 				local h = p.y - minY
-				part(folder, "Pillar", Vector3.new(6, h, 6), CFrame.new(p.x, minY + h / 2 - 1, p.z), wallColor, Enum.Material.Concrete)
+				part(folder, "Pillar", Vector3.new(6, h, 6), CFrame.new(p.x, minY + h / 2 - 1, p.z), wallColor, Enum.Material.SmoothPlastic)
 			end
 		end
 	end
 
 	-- Ground under everything.
-	local margin = 300
-	local sizeX, sizeZ = maxX - minX + margin * 2, maxZ - minZ + margin * 2
-	local tile = 1000
-	for x = minX - margin, minX - margin + sizeX, tile do
-		for z = minZ - margin, minZ - margin + sizeZ, tile do
-			local g = part(folder, "Ground", Vector3.new(tile, 2, tile), CFrame.new(x + tile / 2, minY - 1.6, z + tile / 2), rgb(theme.ground), Enum.Material.Grass)
-			g:SetAttribute("Surface", "offroad")
+	if opts.ground ~= false then
+		local margin = 300
+		local sizeX, sizeZ = maxX - minX + margin * 2, maxZ - minZ + margin * 2
+		local tile = 1000
+		for x = minX - margin, minX - margin + sizeX, tile do
+			for z = minZ - margin, minZ - margin + sizeZ, tile do
+				local g = part(folder, "Ground", Vector3.new(tile, 2, tile), CFrame.new(x + tile / 2, minY - 1.6, z + tile / 2), rgb(theme.ground), Enum.Material.SmoothPlastic)
+				g:SetAttribute("Surface", "offroad")
+			end
 		end
 	end
 
@@ -218,19 +182,43 @@ function TrackBuilder.build(trackId: string): (Folder, Track.Built)
 	end
 	-- Banner over the line.
 	for _, side in { -1, 1 } do
-		part(folder, "BannerPost", Vector3.new(1.5, 18, 1.5), lineCf * CFrame.new(side * (half + 4), 9, 0), wallColor, Enum.Material.Metal)
+		part(folder, "BannerPost", Vector3.new(1.5, 18, 1.5), lineCf * CFrame.new(side * (half + 4), 9, 0), wallColor, Enum.Material.SmoothPlastic)
 	end
 	part(folder, "Banner", Vector3.new(def.width + 10, 3, 1), lineCf * CFrame.new(0, 17, 0), rgb(theme.accent), Enum.Material.Neon)
 
-	-- Scenery around the track.
-	local scenery = Instance.new("Folder")
-	scenery.Name = "Scenery"
-	scenery.Parent = folder
-	for _, prop in Scenery.place(track) do
-		Props.build(prop, theme, scenery)
+	-- Jump ramps. The low edge faces oncoming karts; the tall back edge launches them.
+	for _, ramp in def.ramps or {} do
+		local d = ramp.t * track.length
+		local pos = v3(Track.spot(track, d, ramp.offset * (half - ramp.width / 2)))
+		local _, rampTan = Track.at(track, d)
+		local cf = CFrame.lookAt(pos, pos - v3(rampTan))
+		local wedge = Instance.new("WedgePart")
+		wedge.Name = "Ramp"
+		wedge.Anchored = true
+		wedge.Size = Vector3.new(ramp.width, 5, 18)
+		wedge.CFrame = cf * CFrame.new(0, 2.5, 0)
+		wedge.Color = rgb(theme.accent)
+		wedge.Material = Enum.Material.SmoothPlastic
+		wedge.TopSurface = Enum.SurfaceType.Smooth
+		wedge:SetAttribute("Surface", "ramp")
+		wedge.Parent = folder
+		for k = -1, 1, 2 do
+			local stripe = part(folder, "RampStripe", Vector3.new(1.2, 0.2, 18.6), cf * CFrame.new(k * (ramp.width / 2 - 1.5), 2.6, 0) * CFrame.Angles(math.atan2(5, 18), 0, 0), Color3.new(1, 1, 1), Enum.Material.Neon)
+			stripe.CanCollide = false
+			stripe.CanQuery = false
+		end
 	end
 
-	applyLighting(theme)
+	-- Scenery around the track.
+	if opts.scenery ~= false then
+		local scenery = Instance.new("Folder")
+		scenery.Name = "Scenery"
+		scenery.Parent = folder
+		for _, prop in Scenery.place(track) do
+			Props.build(prop, theme, scenery)
+		end
+	end
+
 	folder.Parent = Workspace
 	return folder, track
 end

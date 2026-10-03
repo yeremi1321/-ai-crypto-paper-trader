@@ -41,28 +41,28 @@ local builders: { [string]: (any, any, Instance) -> () } = {}
 builders.tree = function(prop, _theme, parent)
 	local s = prop.size
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
-	part(parent, Vector3.new(2, 14 * s, 2) , base * CFrame.new(0, 7 * s, 0), Color3.fromRGB(110, 75, 45), Enum.Material.Wood)
+	part(parent, Vector3.new(2, 14 * s, 2) , base * CFrame.new(0, 7 * s, 0), Color3.fromRGB(110, 75, 45), Enum.Material.SmoothPlastic)
 	local leaf = vary(Color3.fromRGB(70, 150, 60), 0.25, prop.x + prop.z)
-	part(parent, Vector3.one * 12 * s, base * CFrame.new(0, 16 * s, 0), leaf, Enum.Material.Grass, Enum.PartType.Ball)
-	part(parent, Vector3.one * 8 * s, base * CFrame.new(3 * s, 13 * s, 1 * s), leaf, Enum.Material.Grass, Enum.PartType.Ball)
+	part(parent, Vector3.one * 12 * s, base * CFrame.new(0, 16 * s, 0), leaf, Enum.Material.SmoothPlastic, Enum.PartType.Ball)
+	part(parent, Vector3.one * 8 * s, base * CFrame.new(3 * s, 13 * s, 1 * s), leaf, Enum.Material.SmoothPlastic, Enum.PartType.Ball)
 end
 
 builders.bush = function(prop, _theme, parent)
 	local s = prop.size
-	part(parent, Vector3.new(7, 5, 7) * s, CFrame.new(prop.x, prop.y + 1.5 * s, prop.z), vary(Color3.fromRGB(80, 160, 70), 0.2, prop.z), Enum.Material.Grass, Enum.PartType.Ball)
+	part(parent, Vector3.new(7, 5, 7) * s, CFrame.new(prop.x, prop.y + 1.5 * s, prop.z), vary(Color3.fromRGB(80, 160, 70), 0.2, prop.z), Enum.Material.SmoothPlastic, Enum.PartType.Ball)
 end
 
 builders.flag = function(prop, theme, parent)
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
-	part(parent, Vector3.new(0.4, 12, 0.4), base * CFrame.new(0, 6, 0), Color3.fromRGB(230, 230, 235), Enum.Material.Metal)
+	part(parent, Vector3.new(0.4, 12, 0.4), base * CFrame.new(0, 6, 0), Color3.fromRGB(230, 230, 235), Enum.Material.SmoothPlastic)
 	local colors = { rgb(theme.accent), rgb(theme.curb[1]), rgb(theme.curb[2]) }
-	part(parent, Vector3.new(0.1, 3, 5), base * CFrame.new(0, 10.5, 2.5), colors[(math.floor(prop.x) % 3) + 1], Enum.Material.Fabric)
+	part(parent, Vector3.new(0.1, 3, 5), base * CFrame.new(0, 10.5, 2.5), colors[(math.floor(prop.x) % 3) + 1], Enum.Material.SmoothPlastic)
 end
 
 builders.billboard = function(prop, theme, parent)
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
 	for _, side in { -9, 9 } do
-		part(parent, Vector3.new(1, 14, 1), base * CFrame.new(side, 7, 0), Color3.fromRGB(80, 80, 90), Enum.Material.Metal)
+		part(parent, Vector3.new(1, 14, 1), base * CFrame.new(side, 7, 0), Color3.fromRGB(80, 80, 90), Enum.Material.SmoothPlastic)
 	end
 	local board = part(parent, Vector3.new(24, 9, 0.6), base * CFrame.new(0, 16, 0), Color3.fromRGB(20, 20, 30), Enum.Material.SmoothPlastic)
 	local glow = theme.clock < 6 or theme.clock > 19
@@ -91,7 +91,7 @@ builders.grandstand = function(prop, theme, parent)
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
 	local steps = 5
 	for i = 0, steps - 1 do
-		local step = part(parent, Vector3.new(60, 2.5, 5), base * CFrame.new(0, 1.25 + i * 2.5, i * 4.5), Color3.fromRGB(150, 150, 160), Enum.Material.Concrete)
+		local step = part(parent, Vector3.new(60, 2.5, 5), base * CFrame.new(0, 1.25 + i * 2.5, i * 4.5), Color3.fromRGB(150, 150, 160), Enum.Material.SmoothPlastic)
 		step.CanCollide = true
 		-- Crowd: little coloured blocks.
 		for c = -27, 27, 3 do
@@ -100,10 +100,10 @@ builders.grandstand = function(prop, theme, parent)
 			part(parent, Vector3.new(1.4, 2, 1.2), base * CFrame.new(c, 3.5 + i * 2.5, i * 4.5 - 0.5), Color3.fromHSV(h, 0.6, 0.9), Enum.Material.SmoothPlastic)
 		end
 	end
-	local roof = part(parent, Vector3.new(64, 1, 26), base * CFrame.new(0, 20, 9) * CFrame.Angles(math.rad(-8), 0, 0), rgb(theme.accent), Enum.Material.Metal)
+	local roof = part(parent, Vector3.new(64, 1, 26), base * CFrame.new(0, 20, 9) * CFrame.Angles(math.rad(-8), 0, 0), rgb(theme.accent), Enum.Material.SmoothPlastic)
 	roof.CanCollide = true
 	for _, x in { -30, 30 } do
-		part(parent, Vector3.new(1.2, 20, 1.2), base * CFrame.new(x, 10, 20), Color3.fromRGB(90, 90, 100), Enum.Material.Metal)
+		part(parent, Vector3.new(1.2, 20, 1.2), base * CFrame.new(x, 10, 20), Color3.fromRGB(90, 90, 100), Enum.Material.SmoothPlastic)
 	end
 end
 
@@ -111,8 +111,8 @@ builders.rock = function(prop, theme, parent)
 	local s = prop.size
 	local color = vary(rgb(theme.wall), 0.2, prop.x)
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
-	part(parent, Vector3.new(10, 7, 8) * s, base * CFrame.new(0, 2.5 * s, 0) * CFrame.Angles(0.2, 0, 0.15), color, Enum.Material.Slate)
-	part(parent, Vector3.new(6, 5, 6) * s, base * CFrame.new(3 * s, 4.5 * s, 1 * s) * CFrame.Angles(-0.3, 0.6, 0.2), color, Enum.Material.Slate)
+	part(parent, Vector3.new(10, 7, 8) * s, base * CFrame.new(0, 2.5 * s, 0) * CFrame.Angles(0.2, 0, 0.15), color, Enum.Material.SmoothPlastic)
+	part(parent, Vector3.new(6, 5, 6) * s, base * CFrame.new(3 * s, 4.5 * s, 1 * s) * CFrame.Angles(-0.3, 0.6, 0.2), color, Enum.Material.SmoothPlastic)
 end
 
 builders.mesa = function(prop, theme, parent)
@@ -122,7 +122,7 @@ builders.mesa = function(prop, theme, parent)
 	local y = 0
 	for i, l in layers do
 		local color = vary(rgb(theme.wall), 0.25, i + prop.x)
-		local p = part(parent, Vector3.new(l[1], l[2], l[3]) * s, base * CFrame.new(0, (y + l[2] / 2) * s, 0), color, Enum.Material.Sandstone)
+		local p = part(parent, Vector3.new(l[1], l[2], l[3]) * s, base * CFrame.new(0, (y + l[2] / 2) * s, 0), color, Enum.Material.SmoothPlastic)
 		p.CanCollide = true
 		y += l[2]
 	end
@@ -132,9 +132,9 @@ builders.cactus = function(prop, _theme, parent)
 	local s = prop.size
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
 	local green = Color3.fromRGB(70, 130, 70)
-	part(parent, Vector3.new(2, 12, 2) * s, base * CFrame.new(0, 6 * s, 0), green, Enum.Material.Grass)
-	part(parent, Vector3.new(3, 1.4, 1.4) * s, base * CFrame.new(1.8 * s, 6 * s, 0), green, Enum.Material.Grass)
-	part(parent, Vector3.new(1.4, 4, 1.4) * s, base * CFrame.new(2.8 * s, 8 * s, 0), green, Enum.Material.Grass)
+	part(parent, Vector3.new(2, 12, 2) * s, base * CFrame.new(0, 6 * s, 0), green, Enum.Material.SmoothPlastic)
+	part(parent, Vector3.new(3, 1.4, 1.4) * s, base * CFrame.new(1.8 * s, 6 * s, 0), green, Enum.Material.SmoothPlastic)
+	part(parent, Vector3.new(1.4, 4, 1.4) * s, base * CFrame.new(2.8 * s, 8 * s, 0), green, Enum.Material.SmoothPlastic)
 end
 
 builders.tower = function(prop, theme, parent)
@@ -155,7 +155,7 @@ end
 
 builders.lamp = function(prop, theme, parent)
 	local base = CFrame.new(prop.x, prop.y, prop.z) * CFrame.Angles(0, prop.yaw, 0)
-	part(parent, Vector3.new(0.8, 16, 0.8), base * CFrame.new(0, 8, 0), Color3.fromRGB(60, 60, 80), Enum.Material.Metal)
+	part(parent, Vector3.new(0.8, 16, 0.8), base * CFrame.new(0, 8, 0), Color3.fromRGB(60, 60, 80), Enum.Material.SmoothPlastic)
 	local head = part(parent, Vector3.new(1.2, 1.2, 6), base * CFrame.new(0, 16, 2.5), rgb(theme.wall), Enum.Material.Neon)
 	local light = Instance.new("PointLight")
 	light.Color = rgb(theme.wall)

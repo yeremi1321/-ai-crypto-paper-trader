@@ -13,12 +13,23 @@
 --           Sound objects named Wind, Water, Birds, Engine, LobbyAmbience.
 --       Sky
 --           A Sky object (a custom skybox) used on every track.
+--       Bodies
+--           Car models (e.g. from Blender). A model named after a body id
+--           (thunder, v12, classic, …) replaces that car's look; any other
+--           name becomes a new car in the garage. See KartRig for how parts
+--           are placed, painted and turned into wheels, and the README for
+--           the attributes (DisplayName, Price, Scale, Yaw, wheel layout).
 --   MaterialService
 --       MaterialVariants named in Assets.Variants (KartAsphalt, KartGrass, …)
 --       replace the built-in look of roads, verges, barriers and props. Each
 --       must use the base material listed beside its name.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local function child(parent: Instance, name: string): Instance
+	return parent:FindFirstChild(name) or parent:WaitForChild(name)
+end
+local KartBodies = require(child(child(ReplicatedStorage, "Shared"), "KartBodies"))
 
 local Assets = {}
 
@@ -92,6 +103,54 @@ function Assets.sound(name: string): Sound?
 		return s:Clone()
 	end
 	return nil
+end
+
+-- The Blender-made model for a body id, if one was added.
+function Assets.bodyModel(id: string): Model?
+	local f = folder("Bodies")
+	local m = f and f:FindFirstChild(id)
+	if m and m:IsA("Model") then
+		return m
+	end
+	return nil
+end
+
+-- Registers every model in KartAssets.Bodies whose name isn't an existing
+-- body as a new car. Server and clients both call this at start, so they
+-- agree on the list. Attributes (all optional): DisplayName, Price,
+-- WheelX, FrontZ, RearZ, WheelRadius, RearWheelRadius, WheelWidth, SeatY,
+-- SeatZ, and Cpu (true = CPU drivers may race it).
+function Assets.registerBodies(): number
+	local f = folder("Bodies")
+	if not f then
+		return 0
+	end
+	local added = 0
+	for _, m in f:GetChildren() do
+		if m:IsA("Model") and KartBodies.get(m.Name).id ~= m.Name then
+			local function num(name: string, default: number): number
+				local v = m:GetAttribute(name)
+				return if type(v) == "number" then v else default
+			end
+			local x, front, rear = num("WheelX", 2.5), num("FrontZ", -2.6), num("RearZ", 2.6)
+			KartBodies.register({
+				id = m.Name,
+				name = (m:GetAttribute("DisplayName") :: string?) or m.Name,
+				icon = "🏎️",
+				price = math.max(0, math.floor(num("Price", 0))),
+				realistic = true,
+				wheelRadius = num("WheelRadius", 0.95),
+				wheelWidth = num("WheelWidth", 1.3),
+				rearWheelRadius = num("RearWheelRadius", num("WheelRadius", 0.95)),
+				wheels = { { -x, front }, { x, front }, { -x, rear }, { x, rear } },
+				seat = { 0, num("SeatY", 0.4), num("SeatZ", 0.6) },
+				exhaust = { 0, 0.4, rear + 1.5 },
+				parts = {},
+			}, m:GetAttribute("Cpu") == true)
+			added += 1
+		end
+	end
+	return added
 end
 
 -- A copy of the custom Sky, or nil.

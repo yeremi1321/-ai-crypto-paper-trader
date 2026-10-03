@@ -561,6 +561,84 @@ check("Hand-made land: regions cover each track, saved land replaces generated",
 	assert(TerrainBuilder.lastSource == "generated", "generated again once forgotten")
 end)
 
+check("Blender cars: a model replaces a body, its wheels spin, new cars join the garage", function()
+	local rs = game:GetService("ReplicatedStorage")
+	local kartAssets = Instance.new("Folder")
+	kartAssets.Name = "KartAssets"
+	local bodies = Instance.new("Folder")
+	bodies.Name = "Bodies"
+	bodies.Parent = kartAssets
+	-- Built the way an import from Blender might arrive: somewhere off at
+	-- (500, 40, -300), 10 studs long, wheels as separate parts.
+	local function car(name: string): any
+		local m = Instance.new("Model")
+		m.Name = name
+		local shell = Instance.new("Part")
+		shell.Name = "PaintShell"
+		shell.Size = roblox.Vector3.new(5, 2, 10)
+		shell.CFrame = roblox.CFrame.new(500, 42, -300)
+		shell.Parent = m
+		local engine = Instance.new("Part")
+		engine.Name = "Blower"
+		engine.Size = roblox.Vector3.new(1.5, 1, 2)
+		engine.CFrame = roblox.CFrame.new(500, 43.5, -302)
+		engine:SetAttribute("Anim", "engine")
+		engine.Parent = m
+		for _, w in { { "WheelFL", -2.6, -3.2 }, { "WheelFR", 2.6, -3.2 }, { "WheelRL", -2.6, 3.2 }, { "WheelRR", 2.6, 3.2 } } do
+			local wheel = Instance.new("Part")
+			wheel.Name = w[1]
+			wheel.Size = roblox.Vector3.new(1.2, 2, 2)
+			wheel.CFrame = roblox.CFrame.new(500 + w[2], 41, -300 + w[3])
+			wheel.Parent = m
+		end
+		m.Parent = bodies
+		return m
+	end
+	car("thunder")
+	local mine = car("MyRacer")
+	mine:SetAttribute("DisplayName", "My Racer")
+	mine:SetAttribute("Price", 250)
+	kartAssets.Parent = rs
+
+	local Assets = load(common.Assets)
+	local KartBodies = load(shared.KartBodies)
+	local KartRig = load(common.KartRig)
+	assert(Assets.registerBodies() == 1, "one new car")
+	local added = KartBodies.get("MyRacer")
+	assert(added.id == "MyRacer" and added.name == "My Racer" and added.price == 250, "new car in the garage")
+
+	local road = roblox.CFrame.new(0, 10, 0)
+	local kart = KartRig.build("classic", "Tester", road, game:GetService("Workspace"), { body = "thunder", main = 1, accent = 2 })
+	assert(not kart:FindFirstChild("Body1"), "built-in shape replaced")
+	local paint = kart:FindFirstChild("PaintShell")
+	local red = KartBodies.color(1)
+	assert(paint and paint.Color == roblox.Color3.fromRGB(red[1], red[2], red[3]), "paint takes the player's colour")
+	local rumbles = 0
+	for _, m in kart.BodyRoot:GetChildren() do
+		if m.Name == "Anim" and m:GetAttribute("AnimKind") == "engine" then
+			rumbles += 1
+		end
+	end
+	assert(rumbles == 1, "engine part rumbles")
+	local joints = 0
+	for _, joint in kart.Root:GetChildren() do
+		if joint.Name == "WheelJoint" then
+			joints += 1
+			local wheel = joint.Part1
+			assert(string.sub(wheel.Name, 1, 5) == "Wheel", "modelled wheel used")
+			-- The joint reproduces where the wheel sits (so spinning keeps it in place)...
+			local placed = kart.Root.CFrame * joint.C0 * joint.C1:Inverse()
+			assert((placed.Position - wheel.CFrame.Position).Magnitude < 1e-3, "wheel joint offset")
+			-- ...and the wheels stand on the road like the built-in ones (0.2 up).
+			local bottom = wheel.CFrame.Position.Y - wheel.Size.Y / 2
+			assert(math.abs(bottom - (road.Position.Y + 0.2)) < 1e-3, `wheel bottom {bottom}`)
+		end
+	end
+	assert(joints == 4, `{joints} wheel joints`)
+	kart:Destroy()
+	kartAssets:Destroy()
+end)
+
 print(if failures == 0 then "smoke ok" else `{failures} smoke failure(s)`)
 if failures > 0 then
 	process.exit(1)

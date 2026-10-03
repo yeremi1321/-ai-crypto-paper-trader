@@ -200,3 +200,8 @@ crypto bot and the separate `open-world-racer/` game, so don't touch them.
 - Grass decoration is on again (`TerrainBuilder.GrassBlades`, plus
   `Workspace.Terrain.Decoration` in the project file); the 3.5-stud terrain
   drop is what keeps blades under the road.
+- Blender cars: `KartAssets.Bodies.<id>` models replace a body's parts
+  (`KartRig.meshBody`); parts named WheelFL/FR/RL/RR become the wheel
+  joints (C0 = wheel centre, C1 keeps the mesh's own orientation); other
+  names register as new garage bodies via `Assets.registerBodies()`, which
+  both Main scripts call at start so server and clients agree.

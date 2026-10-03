@@ -717,6 +717,20 @@ if starter then
  end
 end
 
+-- Adds a body at runtime (a car modelled in Blender and dropped into
+-- KartAssets.Bodies; see common/Assets). Ignored if the id is taken.
+function KartBodies.register(body: Body, cpu: boolean?)
+	for _, b in KartBodies.List do
+		if b.id == body.id then
+			return
+		end
+	end
+	table.insert(KartBodies.List, body)
+	if cpu then
+		table.insert(KartBodies.CpuBodies, body.id)
+	end
+end
+
 export type Look = { body: string, main: number, accent: number }
 
 function KartBodies.get(id: string?): Body

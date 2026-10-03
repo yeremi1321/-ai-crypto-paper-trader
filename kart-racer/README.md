@@ -234,6 +234,38 @@ Every tree, pine, rock and bush on the tracks then uses one of your models.
 Each copy is scaled, turned, leaned and shaded a little differently, stands
 on the ground, and never collides with karts.
 
+### 1b. Cars from Blender
+
+Put car Models in `KartAssets` → `Bodies`:
+
+- **Named after an existing car** (`thunder`, `v12`, `blowerrod`,
+  `dragster`, `dunehauler`, `classic`, …): your model replaces that car's
+  look.
+- **Any other name:** a new car in the garage. Optional attributes:
+  `DisplayName`, `Price` (coins), `Cpu` (true = CPU drivers may race it),
+  `SeatY`/`SeatZ` (driver position), and, only if you don't model wheels,
+  `WheelX`, `FrontZ`, `RearZ`, `WheelRadius`, `RearWheelRadius`, `WheelWidth`.
+
+How to model it:
+
+- About 9–10 studs long and 5 wide. Nose toward -Z (if it comes in turned or
+  the wrong size, add `Yaw` in degrees or `Scale` instead of re-exporting).
+  The game stands the model's lowest point on the road.
+- **Wheels** as four separate parts named `WheelFL`, `WheelFR`, `WheelRL`,
+  `WheelRR`: they spin, the front pair steers, and the rear pair throws
+  drift sparks. Leave them out to get the game's own wheels.
+- **Paint:** parts named `Paint…` (or attribute `Role` = `main`) take the
+  player's main colour; `Accent…` (or `Role` = `accent`) the accent colour.
+- **Engine:** attribute `Anim` = `engine` on a part (blower, intake stacks)
+  makes it rumble.
+- Leave a gap for the driver; the seat is at the body's centre unless you
+  set `SeatY`/`SeatZ`.
+- Keep it light: under ~10,000 triangles for the whole car, textures
+  1024×1024 at most. Eight cars race at once.
+
+The driving doesn't change: speed and handling come from the engine type
+(Zippy, Classic, Brute), whatever the body looks like.
+
 ### 2. PBR textures
 
 - **Roads, verges and barriers:** in **MaterialService**, add MaterialVariants

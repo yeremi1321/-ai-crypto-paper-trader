@@ -9,6 +9,12 @@ local Workspace = game:GetService("Workspace")
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local Atmos = require(ReplicatedStorage:WaitForChild("Common"):WaitForChild("Atmos"))
 
+-- Same car list as the server: add the Blender-made cars (KartAssets.Bodies).
+if not game:IsLoaded() then
+	game.Loaded:Wait()
+end
+require(ReplicatedStorage.Common.Assets).registerBodies()
+
 local GarageUI = require(script.Parent.GarageUI)
 local Hud = require(script.Parent.Hud)
 local KartVisuals = require(script.Parent.KartVisuals)

@@ -105,6 +105,100 @@ local function roleStyle(role: string, main: Color3, accent: Color3, realistic: 
 	return if realistic then Color3.fromRGB(28, 28, 32) else Color3.fromRGB(35, 35, 40), if realistic then Enum.Material.Plastic else Enum.Material.SmoothPlastic, 0, 0
 end
 
+-- A car body modelled outside Roblox (Blender → Import 3D → put the Model in
+-- ReplicatedStorage.KartAssets.Bodies, named after the body). Its parts are
+-- placed with the model's bottom centre on the road under the kart and its
+-- nose toward -Z; number attributes Scale and Yaw (degrees) fix a model that
+-- comes in at the wrong size or facing. Parts with attribute Role = "main"
+-- or "accent" (or named Paint… / Accent…) take the player's colours; a part
+-- with attribute Anim = "engine" rumbles. Parts named WheelFL, WheelFR,
+-- WheelRL and WheelRR are returned to become the spinning, steering wheels.
+local WHEEL_NAMES = { WheelFL = true, WheelFR = true, WheelRL = true, WheelRR = true }
+local function meshBody(model: Model, bodyRoot: BasePart, source: Model, main: Color3, accent: Color3): { [string]: BasePart }
+	local clone = source:Clone()
+	local parts: { BasePart } = {}
+	local minY, minX, maxX, minZ, maxZ = math.huge, math.huge, -math.huge, math.huge, -math.huge
+	for _, d in clone:GetDescendants() do
+		if d:IsA("BasePart") then
+			table.insert(parts, d)
+			local p, s = d.CFrame.Position, d.Size
+			minY = math.min(minY, p.Y - s.Y / 2)
+			minX, maxX = math.min(minX, p.X - s.X / 2), math.max(maxX, p.X + s.X / 2)
+			minZ, maxZ = math.min(minZ, p.Z - s.Z / 2), math.max(maxZ, p.Z + s.Z / 2)
+		end
+	end
+	local scale = source:GetAttribute("Scale") or 1
+	local yaw = math.rad(source:GetAttribute("Yaw") or 0)
+	local origin = CFrame.new((minX + maxX) / 2, minY, (minZ + maxZ) / 2)
+	-- The road under the kart's centre, in the body's frame.
+	local ground = bodyRoot.CFrame * CFrame.new(0, -(KartRig.BallRadius - BODY_DROP), 0) * CFrame.Angles(0, yaw, 0)
+	local wheels: { [string]: BasePart } = {}
+	for _, p in parts do
+		local rel = origin:ToObjectSpace(p.CFrame)
+		p.CFrame = ground * CFrame.new(rel.Position * scale) * (rel - rel.Position)
+		p.Size = p.Size * scale
+		p.Anchored = false
+		p.CanCollide = false
+		p.CanQuery = false
+		p.CanTouch = false
+		p.Massless = true
+		local mesh = p:FindFirstChildOfClass("SpecialMesh")
+		if mesh then
+			mesh.Offset = mesh.Offset * scale
+			if mesh.MeshType == Enum.MeshType.FileMesh then
+				mesh.Scale = mesh.Scale * scale
+			end
+		end
+		local role = p:GetAttribute("Role")
+		if role == nil then
+			if string.sub(p.Name, 1, 5) == "Paint" then
+				role = "main"
+			elseif string.sub(p.Name, 1, 6) == "Accent" then
+				role = "accent"
+			end
+		end
+		if role == "main" or role == "accent" then
+			p.Color = if role == "main" then main else accent
+			if p.Material == Enum.Material.SmoothPlastic or p.Material == Enum.Material.Plastic then
+				p.Reflectance = math.max(p.Reflectance, 0.12) -- clear-coat gloss
+			end
+		end
+		p.Parent = model
+		if WHEEL_NAMES[p.Name] then
+			wheels[p.Name] = p
+		elseif p:GetAttribute("Anim") then
+			local m = Instance.new("Motor6D")
+			m.Name = "Anim"
+			m.Part0 = bodyRoot
+			m.Part1 = p
+			m.C0 = bodyRoot.CFrame:ToObjectSpace(p.CFrame)
+			m.C1 = CFrame.new()
+			m:SetAttribute("AnimKind", p:GetAttribute("Anim"))
+			m:SetAttribute("Side", if m.C0.Position.X < 0 then -1 else 1)
+			m.Parent = bodyRoot
+		else
+			weld(bodyRoot, p)
+		end
+	end
+	clone:Destroy()
+	return wheels
+end
+
+local function addDriftSparks(wheel: BasePart)
+	local sparks = Instance.new("ParticleEmitter")
+	sparks.Name = "DriftSparks"
+	sparks.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+	sparks.Size = NumberSequence.new(0.5, 0)
+	sparks.Lifetime = NumberRange.new(0.15, 0.3)
+	sparks.Speed = NumberRange.new(8, 14)
+	sparks.SpreadAngle = Vector2.new(40, 40)
+	sparks.EmissionDirection = Enum.NormalId.Back
+	sparks.Rate = 60
+	sparks.LightEmission = 1
+	sparks.Enabled = false
+	sparks.Parent = wheel
+end
+
 -- `cf` is where the kart should sit on the road (position on the surface).
 -- `look` picks the body design and paint (see KartBodies); stats come from `kartId`.
 function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: Instance, look: KartBodies.Look?): Model
@@ -165,7 +259,14 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	bodyRoot.Parent = model
 	motor("BodyJoint", root, bodyRoot, drop)
 
-	for i, part in body.parts do
+	-- A model made in Blender (KartAssets.Bodies) replaces the built-in shape.
+	local meshModel = Assets.bodyModel(body.id)
+	local meshWheels: { [string]: BasePart } = {}
+	if meshModel then
+		meshWheels = meshBody(model, bodyRoot, meshModel, main, accent)
+	end
+	local builtParts = if meshModel then {} else body.parts
+	for i, part in builtParts do
 		local color, material, transparency, reflectance = roleStyle(part.role, main, accent, body.realistic)
 		if part.color then
 			color = Color3.fromRGB(part.color[1], part.color[2], part.color[3])
@@ -264,7 +365,32 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 	for _, w in body.wheels do
 		rearZ = math.max(rearZ, w[2])
 	end
-	for i, w in body.wheels do
+	-- Wheels modelled with the body: they keep their own look and still
+	-- spin and steer (each turns about its own centre).
+	if next(meshWheels) then
+		local function radiusOf(part: BasePart): number
+			return math.max(part.Size.X, part.Size.Y, part.Size.Z) / 2
+		end
+		for name, part in meshWheels do
+			if string.sub(name, 6, 6) == "F" then
+				wheelRadius = radiusOf(part)
+			end
+		end
+		for name, part in meshWheels do
+			local rear = string.sub(name, 6, 6) == "R"
+			local relCf = root.CFrame:ToObjectSpace(part.CFrame)
+			local center = CFrame.new(relCf.Position)
+			local joint = motor("WheelJoint", root, part, center)
+			joint.C1 = relCf:Inverse() * center
+			joint:SetAttribute("Front", not rear)
+			joint:SetAttribute("SpinScale", wheelRadius / radiusOf(part))
+			if rear then
+				addDriftSparks(part)
+			end
+		end
+	end
+	local builtWheels = if next(meshWheels) then {} else body.wheels
+	for i, w in builtWheels do
 		local rear = w[2] >= rearZ
 		-- Rear wheels can be bigger (hot rods, dragsters); each sits on the road.
 		local radius = (if rear then body.rearWheelRadius or body.wheelRadius else body.wheelRadius) * wheelStyle.radius
@@ -302,18 +428,7 @@ function KartRig.build(kartId: string, driverName: string, cf: CFrame, parent: I
 			visual(model, root, `{name}Spoke`, Vector3.new(width + 0.08, d * 0.5, d * 0.14), wheelCf, Color3.fromRGB(240, 240, 245), Enum.Material.SmoothPlastic, nil, wheel)
 		end
 		if rear then
-			local sparks = Instance.new("ParticleEmitter")
-			sparks.Name = "DriftSparks"
-			sparks.Texture = "rbxasset://textures/particles/sparkles_main.dds"
-			sparks.Size = NumberSequence.new(0.5, 0)
-			sparks.Lifetime = NumberRange.new(0.15, 0.3)
-			sparks.Speed = NumberRange.new(8, 14)
-			sparks.SpreadAngle = Vector2.new(40, 40)
-			sparks.EmissionDirection = Enum.NormalId.Back
-			sparks.Rate = 60
-			sparks.LightEmission = 1
-			sparks.Enabled = false
-			sparks.Parent = wheel
+			addDriftSparks(wheel)
 		end
 	end
 

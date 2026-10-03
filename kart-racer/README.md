@@ -101,7 +101,7 @@ stand on the land. Sunny Loop and Canyon Climb are 25% bigger than before
 and Pinewater Pass 19%; behind the first ring of mountains there's a second,
 hazier range, and a cheap distant forest fills the middle distance. Terrain
 always stays 3.5 studs under the 4-stud road and verge slabs, and grass
-decoration is off, so grass can't poke through the road. Lighting adds soft shadows, sky reflections (PBR) and
+decoration is enabled; verify grass clearance in Studio and disable it if needed. Lighting adds soft shadows, sky reflections (PBR) and
 volumetric clouds. The toy room, kitchen and neon city stay stylised on
 purpose.
 
@@ -359,3 +359,13 @@ uploads. These will look much better as custom meshes or sounds:
   track previews generated from track data; uploaded artwork is optional.
 
 Keep everything original: no Nintendo names, characters, items or tracks.
+
+## Original Blender asset pack (awaiting Studio import)
+
+See `art/README.md` for the reproducible headless Blender generator, model
+previews, triangle manifest, FBX exports and post-import attribute helper.
+`default.project.json` includes the empty KartAssets folders and preserves
+manual children during live Rojo sync. A fresh build still has no imported
+meshes: save Roblox asset models into the source project after review.
+No Studio runtime, render, physics, avatar-fit or asset-audio checks have
+been completed here. Original source renders must be reviewed before import.

@@ -205,3 +205,13 @@ crypto bot and the separate `open-world-racer/` game, so don't touch them.
   joints (C0 = wheel centre, C1 keeps the mesh's own orientation); other
   names register as new garage bodies via `Assets.registerBodies()`, which
   both Main scripts call at start so server and clients agree.
+
+## Original Blender asset pack (awaiting Studio import)
+
+See `art/README.md` for the reproducible headless Blender generator, model
+previews, triangle manifest, FBX exports and post-import attribute helper.
+`default.project.json` includes the empty KartAssets folders and preserves
+manual children during live Rojo sync. A fresh build still has no imported
+meshes: save Roblox asset models into the source project after review.
+No Studio runtime, render, physics, avatar-fit or asset-audio checks have
+been completed here. Original source renders must be reviewed before import.

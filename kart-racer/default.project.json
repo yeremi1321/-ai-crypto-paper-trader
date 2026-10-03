@@ -8,6 +8,38 @@
       },
       "Common": {
         "$path": "src/common"
+      },
+      "KartAssets": {
+        "$className": "Folder",
+        "$ignoreUnknownInstances": true,
+        "Trees": {
+          "$className": "Folder",
+          "$ignoreUnknownInstances": true
+        },
+        "Pines": {
+          "$className": "Folder",
+          "$ignoreUnknownInstances": true
+        },
+        "Rocks": {
+          "$className": "Folder",
+          "$ignoreUnknownInstances": true
+        },
+        "Bushes": {
+          "$className": "Folder",
+          "$ignoreUnknownInstances": true
+        },
+        "FarTrees": {
+          "$className": "Folder",
+          "$ignoreUnknownInstances": true
+        },
+        "Sounds": {
+          "$className": "Folder",
+          "$ignoreUnknownInstances": true
+        },
+        "Bodies": {
+          "$className": "Folder",
+          "$ignoreUnknownInstances": true
+        }
       }
     },
     "ServerScriptService": {

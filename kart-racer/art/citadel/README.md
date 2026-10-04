@@ -4,6 +4,12 @@ The Blender scene follows the existing Emberstone lap exported from the game's
 Track/RoadGeometry modules. It includes a continuous preview road, four curved
 stone gates, eight battlement towers, lava canals, a central lava basin,
 volcanic cliffs and an elevated suspension bridge following the road's bends.
+The enclosed jungle revision adds a continuous volcanic cliff amphitheatre,
+a central 190-stud volcano with a lava crater and falls,
+two roofed cave galleries, temple islands, cliff lookouts, palms, broadleaf trees,
+ferns, hanging vines, overhead lantern gantries, banners, braziers, crates,
+barrels and rubble. The galleries cover two sections; the rest is an open-roof
+jungle valley enclosed by cliffs. This is an original tropical-volcano design.
 Original 512px tileable stone, basalt and lava colour textures are included.
 No external models, textures, names or franchise assets are used.
 
@@ -15,18 +21,20 @@ From `kart-racer/`:
 lune run art/citadel/export_track
 blender --background --python art/citadel/build_map.py
 blender --background --python art/citadel/verify_map.py
+# Rerender selected camera views without rebuilding geometry:
+blender --background --python art/citadel/render_previews.py -- starting_gate
 ```
 
-`EmberstoneCitadel.blend` contains the entire scene geometry, including the
+`EmberstoneCitadel.blend` contains packed textures and the entire scene geometry, including the
 preview road. `exports/` contains only scenery: the game keeps its existing
 code-generated road collision, checkpoints, items, boosts and ramps. Each
 exported scenery mesh is capped at 9,000 triangles. `manifest.json` lists
 names, triangle counts, dimensions and expected Roblox-space positions.
-The three previews are actual 1920×1080 Blender renders of the scene geometry.
+The four previews are actual 1920×1080 Blender renders of the scene geometry.
 
 ## Review before importing
 
-Review `previews/starting_gate.jpg`, `overview.jpg` and `bridge.jpg` first.
+Review `previews/starting_gate.jpg`, `overview.jpg` `bridge.jpg` and `jungle_gallery.jpg` first.
 Then, in Studio Edit mode:
 
 1. Import only FBXs listed in `manifest.json`. Keep the adjacent textures

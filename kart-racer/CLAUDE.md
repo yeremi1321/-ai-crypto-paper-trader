@@ -232,3 +232,8 @@ The road is derived from the existing playable track. A Model named
 FortressBuilder scenery; native roads, checkpoints and race mechanics stay
 active. See `art/citadel/README.md` before import. Blender renders do not
 verify Roblox lighting, material loading, terrain overlap or performance.
+
+The enclosed Citadel art revision adds a continuous volcanic cliff perimeter,
+roofed cave galleries and dense original jungle/temple/supply scenery. It still awaits
+Studio import; verify chase-camera clearance inside the galleries and terrain
+overlap around temple islands. The playable road layout is unchanged.

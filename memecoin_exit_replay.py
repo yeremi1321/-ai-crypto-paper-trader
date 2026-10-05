@@ -57,13 +57,51 @@ FORWARD_TESTS = [
                    "gaps no exit can catch.",
      "statement": "On the first 150 paper trades opened after registration, a -5% stop (target unchanged) gives a "
                   "higher average net return than the live -10% stop on the same sampled price paths.",
-     "rule": "tp20_sl5", "decide_at_trades": 150},
+     "rule": "tp20_sl5", "decide_at_trades": 150,
+     # Frozen once decided, so later snapshot retention cannot change it.
+     "recorded_verdict": "REJECTED: the rule does not beat the live exit (decided 2026-10-03: -5% stop -2.76%/trade vs "
+                         "live -2.15% over 150 trades; beat live in 28.2% of bootstrap samples)"},
+    {"name": "delayed_entry_120s_hold3_fixed_150",
+     "kind": "delayed_entry",
+     "registered_at": "2026-10-05T06:00:00+00:00",
+     "motivation": "2026-10-05: three tokens rugged -98% within 2-4 minutes of entry and five more fell 40-53% as fast "
+                   "(-$883 in 12 hours). Skipping losers did not work by predicted risk, so test waiting instead.",
+     "statement": "Waiting 120 seconds after the bot's entry signal and buying only if the price is no more than 3% "
+                  "below the original entry (otherwise skipping, counted as 0) gives a higher average net return per "
+                  "opportunity than entering immediately, both with the live exit rule on the same sampled prices.",
+     "delay_s": 120, "max_wait_s": 60, "max_drop_pct": 3.0, "decide_at_trades": 150},
 ]
 
 
-def forward_tests(paths, results, seed=13):
+def delayed_outcome(tr, quotes, h):
+    """Net return of waiting h['delay_s'] then entering only if the price held, or None while data is incomplete.
+
+    quotes: [(seconds after the original entry, market price)] for the trade's token."""
+    window = [(t, p) for t, p in quotes if h["delay_s"] <= t <= h["delay_s"] + h["max_wait_s"]]
+    if not window:
+        return None
+    t0, p0 = window[0]
+    entry_mkt = tr["entry_price"] / (1 + SLIP)
+    if _pct(entry_mkt, p0) < -h["max_drop_pct"]:
+        return 0.0  # price did not hold: skipped, no trade
+    entry = p0 * (1 + SLIP)
+    sub = [(t - t0, p) for t, p in quotes if t > t0 and t - t0 <= HORIZON_S + END_TOLERANCE_S]
+    sim = simulate(entry, sub, RULES[0])
+    return None if sim is None else net_return_pct(entry, sim[1])
+
+
+def forward_tests(paths, results, seed=13, snaps=()):
     out = []
+    by_tok = {}
+    for tok, at, price, _liq in snaps:
+        by_tok.setdefault(tok, []).append((at, float(price)))
     for h in FORWARD_TESTS:
+        if h.get("recorded_verdict"):
+            out.append({**h, "verdict": h["recorded_verdict"]})
+            continue
+        if h.get("kind") == "delayed_entry":
+            out.append(_delayed_entry_test(h, paths, results, by_tok, seed))
+            continue
         trades = sorted((tr for tr in paths if tr["opened_at"] >= h["registered_at"] and tr["id"] in results),
                         key=lambda tr: (tr["opened_at"], tr["id"]))
         n = h["decide_at_trades"]
@@ -90,6 +128,40 @@ def forward_tests(paths, results, seed=13):
         out.append({**h, "rule_result": _stats(rule), "live_result": _stats(live), "bootstrap_pct_beats_live": pct,
                     "bootstrap_pct_rule_positive": _r(100 * positive / BOOTSTRAP_SAMPLES, 1), "verdict": verdict})
     return out
+
+
+def _delayed_entry_test(h, paths, results, by_tok, seed):
+    rows = []
+    for tr in sorted((t for t in paths if t["opened_at"] >= h["registered_at"] and t["id"] in results),
+                     key=lambda t: (t["opened_at"], t["id"])):
+        o = datetime.fromisoformat(tr["opened_at"])
+        quotes = [((datetime.fromisoformat(at) - o).total_seconds(), p) for at, p in by_tok.get(tr["token_address"], ())
+                  if at > tr["opened_at"]]
+        d = delayed_outcome(tr, quotes, h)
+        if d is not None:
+            rows.append((d, results[tr["id"]][BASELINE][1]))
+    n = h["decide_at_trades"]
+    if len(rows) < n:
+        return {**h, "trades_so_far": len(rows),
+                "verdict": f"blind: decided once at {n} trades (have {len(rows)}); interim results hidden"}
+    rows = rows[:n]
+    rule, live = [r[0] for r in rows], [r[1] for r in rows]
+    rng = random.Random(seed)
+    beats = positive = 0
+    for _ in range(BOOTSTRAP_SAMPLES):
+        idx = [rng.randrange(n) for _ in range(n)]
+        beats += sum(rule[i] for i in idx) > sum(live[i] for i in idx)
+        positive += sum(rule[i] for i in idx) > 0
+    pct = _r(100 * beats / BOOTSTRAP_SAMPLES, 1)
+    if mean(rule) <= mean(live):
+        verdict = "REJECTED: waiting does not beat entering immediately"
+    elif pct >= 90:
+        verdict = "SUPPORTED: beats immediate entry in >=90% of bootstrap samples -> eligible for a paper trial (needs owner OK)"
+    else:
+        verdict = "NOT SUPPORTED: ahead but not reliably"
+    return {**h, "rule_result": _stats(rule), "live_result": _stats(live), "skipped": sum(r == 0.0 for r in rule),
+            "bootstrap_pct_beats_live": pct, "bootstrap_pct_rule_positive": _r(100 * positive / BOOTSTRAP_SAMPLES, 1),
+            "verdict": verdict}
 
 
 def _pct(a, b):
@@ -316,7 +388,7 @@ def run(conn, as_of):
             "median_seconds_between_prices": _r(median(gaps), 1) if gaps else None,
             "harness_validation_live_rule": validate(paths, results),
             "stop_gap_diagnostic": stop_gaps(paths),
-            "forward_tests": forward_tests(paths, results),
+            "forward_tests": forward_tests(paths, results, snaps=snaps),
             "rules": [r["name"] for r in RULES],
             "all_trades_token_split": evaluate(paths, results, "all trades, token-disjoint split"),
             "first_trade_per_token": evaluate(first, results, "first trade per token (independent)"),

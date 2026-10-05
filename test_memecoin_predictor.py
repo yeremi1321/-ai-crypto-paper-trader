@@ -155,6 +155,12 @@ def test_v1_history_is_upgraded_without_look_ahead():
     assert mp.load_model(c).severe.n == 80  # upgrade runs once
 
 
+def _unfreeze(monkeypatch):
+    """The real registered tests are frozen once decided; exercise their deciding logic on unfrozen copies."""
+    monkeypatch.setattr(mp, "HYPOTHESES", [{k: v for k, v in h.items() if k != "recorded_verdict"}
+                                           for h in mp.HYPOTHESES])
+
+
 def _paper(c, cid, opened, net):
     c.execute("INSERT INTO meme_paper_trades(candidate_id,opened_at,status,net_return_pct) VALUES(?,?,?,?)",
               (cid, opened, "CLOSED", net))
@@ -165,7 +171,8 @@ def _pred(c, cid, at, p_sev):
               (cid, at, .3, p_sev, "RESOLVED"))
 
 
-def test_forward_test_only_uses_trades_after_registration_and_judges_them():
+def test_forward_test_only_uses_trades_after_registration_and_judges_them(monkeypatch):
+    _unfreeze(monkeypatch)
     import memecoin_paper
     c = db(); mp.init(c); memecoin_paper.migrate(c)
     reg = datetime.fromisoformat(mp.HYPOTHESES[0]["registered_at"])
@@ -186,7 +193,8 @@ def test_forward_test_only_uses_trades_after_registration_and_judges_them():
     assert mp.preregistered(c2)[0]["verdict"].startswith("collecting")
 
 
-def test_fixed_horizon_test_is_blind_until_decided_then_uses_exactly_n_trades():
+def test_fixed_horizon_test_is_blind_until_decided_then_uses_exactly_n_trades(monkeypatch):
+    _unfreeze(monkeypatch)
     import memecoin_paper
     h = next(x for x in mp.HYPOTHESES if x.get("decide_at_trades"))
     n, reg = h["decide_at_trades"], datetime.fromisoformat(h["registered_at"])
@@ -246,7 +254,8 @@ def test_every_new_forward_test_has_a_fixed_decision_point():
             assert h.get("decide_at_trades"), h["name"]
 
 
-def test_picks_vs_bot_is_blind_then_decides_on_the_same_measuring_stick():
+def test_picks_vs_bot_is_blind_then_decides_on_the_same_measuring_stick(monkeypatch):
+    _unfreeze(monkeypatch)
     h = next(x for x in mp.HYPOTHESES if x.get("kind") == "picks_vs_bot")
     reg = datetime.fromisoformat(h["registered_at"])
     c = db(); mp.init(c)
@@ -266,7 +275,8 @@ def test_picks_vs_bot_is_blind_then_decides_on_the_same_measuring_stick():
     assert r["verdict"].startswith("SUPPORTED") and r["kept"]["trades"] == 150 and r["every_entry"]["trades"] == 51
 
 
-def test_bot_window_version_decides_and_the_stuck_one_is_void():
+def test_bot_window_version_decides_and_the_stuck_one_is_void(monkeypatch):
+    _unfreeze(monkeypatch)
     h = next(x for x in mp.HYPOTHESES if x.get("window") == "bot")
     old = next(x for x in mp.HYPOTHESES if x["name"] == "predictor_low_risk_picks_beat_bot_fixed_150")
     reg = datetime.fromisoformat(h["registered_at"])
@@ -282,3 +292,12 @@ def test_bot_window_version_decides_and_the_stuck_one_is_void():
     r = res[h["name"]]
     assert r["every_entry"]["trades"] == 150 and r["verdict"].startswith("SUPPORTED"), r
     assert res[old["name"]]["verdict"].startswith("VOID")
+
+
+def test_decided_tests_stay_frozen_whatever_the_data():
+    c = db(); mp.init(c)
+    decided = {h["name"]: h["recorded_verdict"] for h in mp.HYPOTHESES if h.get("recorded_verdict")}
+    assert len(decided) == 3
+    out = {r["name"]: r["verdict"] for r in mp.preregistered(c)}  # empty database
+    for name, verdict in decided.items():
+        assert out[name] == verdict

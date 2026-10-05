@@ -72,7 +72,10 @@ HYPOTHESES = [
                   "registration.",
      "skip_if": {"field": "p_severe_loss", "at_least": 0.31},
      # Results stay hidden until all 150 trades have closed; the verdict at that point is final.
-     "decide_at_trades": 150},
+     "decide_at_trades": 150,
+     "recorded_verdict": "REJECTED: skipping does not improve on taking every bot entry (decided 2026-10-01: kept "
+                         "+1.23%/trade vs every entry +2.16% over 150 trades; kept beat every entry in 22.6% of "
+                         "bootstrap samples)"},
     {"name": "predictor_low_risk_picks_beat_bot_fixed_150",
      "registered_at": "2026-09-30T11:00:00+00:00",
      "kind": "picks_vs_bot",
@@ -85,7 +88,9 @@ HYPOTHESES = [
                   "with the same simulated exit rule.",
      "pick_if": {"would_trade": 1, "p_severe_loss_below": 0.31},
      # Blind; decided once when 150 picks resolved after registration (and at least 40 bot entries).
-     "decide_at_trades": 150, "min_bot_entries": 40},
+     "decide_at_trades": 150, "min_bot_entries": 40,
+     "recorded_verdict": "VOID: its window closed with 30 bot entries, fewer than the 40 required; superseded by "
+                         "predictor_low_risk_picks_beat_bot_window_150_bot"},
     {"name": "predictor_low_risk_picks_beat_bot_window_150_bot",
      "registered_at": "2026-10-02T07:00:00+00:00",
      "kind": "picks_vs_bot", "window": "bot",
@@ -98,7 +103,9 @@ HYPOTHESES = [
                   "with the same simulated exit rule.",
      "pick_if": {"would_trade": 1, "p_severe_loss_below": 0.31},
      # Blind; decided once when 150 bot entries resolved after registration, against every pick in that window.
-     "decide_at_trades": 150},
+     "decide_at_trades": 150,
+     "recorded_verdict": "REJECTED: predictor picks do not beat the bot's entries (decided 2026-10-04: 321 picks "
+                         "-2.51%/trade vs 150 bot entries -2.48%; picks beat the bot in 50.3% of bootstrap samples)"},
 ]
 
 
@@ -714,6 +721,9 @@ def preregistered(c, seed=31):
         trades = []
     out = []
     for h in HYPOTHESES:
+        if h.get("recorded_verdict"):  # decided: frozen so later data pruning or a new database cannot change it
+            out.append({**h, "verdict": h["recorded_verdict"]})
+            continue
         if h.get("kind") == "picks_vs_bot":
             out.append(_picks_vs_bot(c, h, seed))
             continue

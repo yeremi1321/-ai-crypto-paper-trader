@@ -150,8 +150,9 @@ def test_confirmed_stop_ignores_one_bad_quote():
     assert er.simulate(e, [(30, .5), (40, 1.0), (1200, 1.0)], RULE[er.BASELINE])[0] == "STOP"
 
 
-def test_exit_forward_test_is_blind_then_decides_on_exactly_n_trades():
-    h = er.FORWARD_TESTS[0]
+def test_exit_forward_test_is_blind_then_decides_on_exactly_n_trades(monkeypatch):
+    h = {k: v for k, v in er.FORWARD_TESTS[0].items() if k != "recorded_verdict"}  # exercise the logic unfrozen
+    monkeypatch.setattr(er, "FORWARD_TESTS", [h])
     reg = datetime.fromisoformat(h["registered_at"])
     def trade(i, dip):
         opened = (reg + timedelta(minutes=i)).isoformat()
@@ -167,3 +168,38 @@ def test_exit_forward_test_is_blind_then_decides_on_exactly_n_trades():
     results, _ = er.replay(paths)
     r = er.forward_tests(paths, results)[0]
     assert r["rule_result"]["n"] == h["decide_at_trades"] and r["verdict"].startswith("SUPPORTED"), r
+
+
+def test_decided_exit_test_stays_frozen():
+    out = {r["name"]: r["verdict"] for r in er.forward_tests([], {})}
+    assert out["tighter_stop_sl5_fixed_150"].startswith("REJECTED")
+
+
+def test_delayed_entry_skips_early_rugs_and_enters_tokens_that_hold():
+    h = next(x for x in er.FORWARD_TESTS if x.get("kind") == "delayed_entry")
+    tr = {"entry_price": 1.01}  # market entry 1.00 plus 1% slippage
+    assert er.delayed_outcome(tr, [(60, .03), (130, .02), (1500, .02)], h) == 0.0          # rugged: skipped
+    held = er.delayed_outcome(tr, [(60, 1.05), (130, 1.0), (400, 1.25)], h)               # held, then +25%
+    assert held > 15
+    assert er.delayed_outcome(tr, [(60, 1.0), (300, 1.0)], h) is None                     # no quote in 120-180s
+    assert er.delayed_outcome(tr, [(130, .985), (200, 1.3)], h) > 15                      # -1.5% is still holding
+
+
+def test_delayed_entry_test_is_blind_then_scores_per_opportunity():
+    h = next(x for x in er.FORWARD_TESTS if x.get("kind") == "delayed_entry")
+    reg = datetime.fromisoformat(h["registered_at"])
+    paths, snaps = [], []
+    for i in range(h["decide_at_trades"]):
+        o = reg + timedelta(minutes=10 * i)
+        rug = i % 3 == 0
+        prices = [(30, .5 if rug else 1.0), (130, .02 if rug else 1.0), (1200, .02 if rug else 1.02),
+                  (1350, .02 if rug else 1.02)]
+        paths.append({"id": i, "token": f"t{i}", "token_address": f"a{i}", "opened_at": o.isoformat(),
+                      "entry_price": 1.01, "actual_reason": None, "actual_net_return_pct": None,
+                      "path": [(t, p) for t, p in prices if t <= er.HORIZON_S + er.END_TOLERANCE_S]})
+        snaps += [(f"a{i}", (o + timedelta(seconds=t)).isoformat(), p, None) for t, p in prices]
+    results, _ = er.replay(paths)
+    r = next(x for x in er.forward_tests(paths[:-1], results, snaps=snaps) if x["name"] == h["name"])
+    assert r["verdict"].startswith("blind")
+    r = next(x for x in er.forward_tests(paths, results, snaps=snaps) if x["name"] == h["name"])
+    assert r["skipped"] == 50 and r["verdict"].startswith("SUPPORTED"), r

@@ -18,7 +18,8 @@ SNAPSHOT_DAYS = 4
 TRADED_SNAPSHOT_DAYS = 30
 PAYLOAD_DAYS = 2
 SOFT_LIMIT_BYTES = 700 * 1024 * 1024
-TIGHT = {"snapshot_days": 1, "traded_snapshot_days": 7, "payload_days": 0.5}
+# Traded tokens keep their prices for the full 30 days even in tight mode (small): forward tests replay them.
+TIGHT = {"snapshot_days": 1, "traded_snapshot_days": 30, "payload_days": 0.5}
 INTERVAL_SECONDS = 3600
 
 

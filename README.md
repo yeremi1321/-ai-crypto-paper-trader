@@ -95,3 +95,30 @@ a rule eligible for a paper trial with the owner's OK; nothing changes live trad
   2. Delete the old free database (Render allows only one), create a new free Postgres in the same region.
   3. Paste its Internal Database URL into the service's `DATABASE_URL` and deploy the latest commit.
   4. On startup the bot sees an empty database and restores the backup automatically (logged as `restored from`).
+
+## FOMO memecoin paper bot (MEME_FOMO_V1)
+`memecoin_fomo.py` is a separate, paper-only cohort that chases short, fresh pumps on new
+Solana tokens. It has its own tables (`meme_fomo_signals`, `meme_fomo_trades`), so its
+results never mix with the paused `MEME_PAPER_V1` ledger. No wallet, keys or real orders.
+
+- **Where it looks:** DEX Screener's newest boosted, top boosted and newly profiled Solana tokens.
+- **Entry:** pair 5 min–24 h old; 5-min price +4–40 %, 1-h price +15–300 %; 5-min volume at least
+  2.5× the 1-h pace; 25+ buys in 5 min with buys/sells ≥ 1.3; all shared rug gates pass
+  (liquidity, holder/dev concentration, mint/freeze authority, sellability, LP control) and
+  security data must be available. Confirmed on a second look 25–150 s later at an equal or
+  higher price. Caps on the 5-min and 1-h move skip blow-off tops.
+- **Exits (every 10 s):** −12 % stop; sell half at +25 % and move the stop to cost; another
+  quarter at +60 %; the rest trails 15 % under the peak. Out at 12 min if +25 % never came,
+  when buyers fade below entry, on a 50 % liquidity pull, or at 45 min. A pair that vanishes
+  counts the remainder as worthless. Gaps fill at the observed price, not the stop level.
+- **Costs and caps:** 1 % slippage + 0.6 % fee on every buy and sell; $100 per trade, 3 open,
+  one trade per token, no new entries for the UTC day after −$40 realized.
+- **Runs** inside `memecoin_fast_collector.py` on Render. `GET /fomo-summary` reports win rate,
+  net P/L, expectancy, drawdown, results by exit reason, open positions and signal counts.
+  `MEME_FOMO_ENABLED=0` stops new entries; open positions still exit.
+- **Local:** `python memecoin_fomo.py --once` (one live pass) or `--report`; tests in
+  `test_memecoin_fomo.py`.
+
+Judge it only after a meaningful sample (aim for 50+ closed trades across different days).
+Paper fills are optimistic for thin memecoin pools, so a small positive paper result is not
+evidence that real trading would profit.

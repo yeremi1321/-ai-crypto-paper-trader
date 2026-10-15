@@ -22,6 +22,7 @@ import memecoin_predictor
 import memecoin_retention
 import memecoin_backup
 import research_worker
+import memecoin_fomo
 
 DISCOVERY_SECONDS=float(os.getenv("MEME_DISCOVERY_SECONDS","30"))
 REFRESH_SECONDS=float(os.getenv("MEME_REFRESH_SECONDS","30"))
@@ -30,7 +31,9 @@ PORT=int(os.getenv("PORT","10000"))
 STATE={"started_at":datetime.now(timezone.utc).isoformat(),"cycles":0,"last_discovery":None,"last_refresh":None,"last_error":None,
        "last_open_refresh":None,"open_refresh_cycles":0,"last_open_error":None,
        "last_prediction":None,"last_prediction_error":None,
-       "last_retention":None,"last_retention_result":None,"last_retention_error":None}
+       "last_retention":None,"last_retention_result":None,"last_retention_error":None,
+       "last_fomo_scan":None,"last_fomo_manage":None,"last_fomo_error":None}
+FOMO_SCAN_SECONDS=max(30.0,float(os.getenv("MEME_FOMO_SCAN_SECONDS","30")))
 ANALYSIS_CACHE_SECONDS=120.0
 _ANALYSIS={"at":0.0,"summary":None,"trades":None}
 _ANALYSIS_LOCK=threading.Lock()
@@ -213,6 +216,33 @@ def open_position_watcher(stop=None,interval=None):
                 print(f"::warning::open-position refresh failed: {e}",flush=True)
         time.sleep(max(0.0,min(1.0,next_run-time.monotonic())))
 
+def fomo_loop(stop=None):
+    """FOMO paper cohort (MEME_FOMO_V1): discovery every 30 s, exits every 10 s. Paper only."""
+    try:
+        c=init_db()
+        try: memecoin_fomo.init(c)
+        finally: c.close()
+    except Exception as e:
+        STATE["last_fomo_error"]=repr(e); print(f"::warning::fomo init failed: {e}",flush=True)
+    next_scan=0.0
+    while not (stop and stop.is_set()):
+        start=time.monotonic()
+        try:
+            c=init_db()
+            try:
+                for x in memecoin_fomo.manage(c): print({"fomo_close":x},flush=True)
+                STATE["last_fomo_manage"]=datetime.now(timezone.utc).isoformat()
+                if time.monotonic()>=next_scan:
+                    next_scan=time.monotonic()+FOMO_SCAN_SECONDS
+                    for t in memecoin_fomo.scan(c): print({"fomo_open":t},flush=True)
+                    STATE["last_fomo_scan"]=datetime.now(timezone.utc).isoformat()
+            finally:
+                c.close()
+            STATE["last_fomo_error"]=None
+        except Exception as e:
+            STATE["last_fomo_error"]=repr(e); print(f"::warning::fomo cycle failed: {e}",flush=True)
+        time.sleep(max(0.0,OPEN_REFRESH_SECONDS-(time.monotonic()-start)))
+
 STALE_DISCOVERY_SECONDS=10*60
 
 def healthz():
@@ -270,6 +300,15 @@ class Health(BaseHTTPRequestHandler):
             except Exception as e:
                 payload={"status":"unavailable","error":type(e).__name__}
                 code=503
+        elif path=="/fomo-summary":
+            try:
+                c=init_db()
+                try:
+                    memecoin_fomo.init(c); payload=memecoin_fomo.summary(c); code=200
+                finally:
+                    c.close()
+            except Exception as e:
+                payload={"status":"unavailable","error":type(e).__name__}; code=503
         elif path=="/paper-summary":
             try:
                 payload=paper_summary()
@@ -308,5 +347,6 @@ if __name__=="__main__":
         print(f"::warning::paper history analysis failed: {e}",flush=True)
     threading.Thread(target=run_paper_watcher,daemon=True,name="paper-two-second-watcher").start()
     research_worker.start()
+    threading.Thread(target=fomo_loop,daemon=True,name="meme-fomo").start()
     print(f"fast memecoin collector: discovery={DISCOVERY_SECONDS}s refresh={REFRESH_SECONDS}s open_refresh={OPEN_REFRESH_SECONDS}s",flush=True)
     HTTPServer(("0.0.0.0",PORT),Health).serve_forever()

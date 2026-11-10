@@ -29,6 +29,9 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - name: Collect research-only news context
+        run: python news_context.py
+
       - name: Run paper research scan
         run: python scanner.py
 
